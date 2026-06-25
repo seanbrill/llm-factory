@@ -34,6 +34,18 @@ if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: factory image build failed." -Fore
 # Remove any previous instance (guarded so we never `docker rm` a missing container).
 if (docker ps -aq -f "name=^$name$") { docker rm -f $name | Out-Null }
 
+# Optional Podman engine: mount a host Podman machine socket when present so the
+# factory's "Podman" engine option works. Primarily the macOS GPU path; on Windows
+# this is best-effort (Podman GPU is a macOS feature — use Docker+CUDA on Windows).
+$podmanArgs = @()
+if (Get-Command podman -ErrorAction SilentlyContinue) {
+    $psock = (podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>$null | Select-Object -First 1)
+    if ($psock) {
+        $podmanArgs = @("-v", "$($psock):/run/podman/podman.sock", "-e", "CONTAINER_HOST=unix:///run/podman/podman.sock")
+        Write-Host "Podman machine detected - enabling the Podman engine (socket: $psock)" -ForegroundColor Cyan
+    }
+}
+
 Write-Host "Starting factory container..." -ForegroundColor Cyan
 docker run -d --name $name `
     -p "$($Port):8799" `
@@ -43,6 +55,7 @@ docker run -d --name $name `
     -v "$($PWD.Path)\images:/app/images" `
     -v "$($PWD.Path)\config:/app/config" `
     --add-host host.docker.internal:host-gateway `
+    $podmanArgs `
     $name
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: failed to start factory container." -ForegroundColor Red; exit 1 }
 

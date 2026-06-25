@@ -83,12 +83,34 @@ function updateHint() {
 
 // ---- Resources & deploy helpers -------------------------------------------
 
-function ctxDefaultFor(compute) { return compute === "cuda" ? 8192 : 4096; }
+function ctxDefaultFor(compute) { return (compute === "cuda" || compute === "vulkan") ? 8192 : 4096; }
+
+// Human labels for the compute target and engine, shown in the images/containers
+// tables. Keep in sync with the build-form <option> values.
+const COMPUTE_BADGE = { cpu: "CPU", cuda: "GPU (CUDA)", vulkan: "GPU (Vulkan)" };
+function computeBadge(c) { return COMPUTE_BADGE[c] || "CPU"; }
+function engineBadge(e) { return e === "podman" ? "Podman" : "Docker"; }
 
 // Prefill the context default for the selected compute, unless the user edited it.
 function applyComputeDefaults() {
   const ci = $("ctxSize");
   if (!ci.dataset.touched) ci.value = ctxDefaultFor($("compute").value);
+  updateEngineHint();
+}
+
+// Guidance for the engine/compute combo. Vulkan/Metal GPU only works under
+// Podman + a libkrun machine (macOS) or a Linux GPU — surface that inline.
+function updateEngineHint() {
+  const engine = $("engine").value, compute = $("compute").value;
+  let msg = "";
+  if (compute === "vulkan" && engine !== "podman") {
+    msg = "⚠ Vulkan/Metal GPU needs Podman. On macOS, switch Engine to Podman and run a libkrun machine (see README).";
+  } else if (compute === "vulkan") {
+    msg = "GPU via Vulkan→Metal: requires a Podman libkrun/krunkit machine on macOS (or a Linux Vulkan GPU). See README.";
+  } else if (compute === "cuda") {
+    msg = "NVIDIA only: needs the NVIDIA Container Toolkit on the host (WSL2 on Windows).";
+  }
+  $("engineHint").textContent = msg;
 }
 
 // Normalize the URL alias the same way the server does (for the live hint).
@@ -113,7 +135,7 @@ function setIndeterminate(on) { progressEl().classList.toggle("indeterminate", o
 // UI-side default whole-build estimates (seconds), used until the server reports
 // a real measured duration for that compute. Tweak here — UI only, no backend
 // restart needed (and these hot-reload from disk in dev mode).
-const DEFAULT_ETA = { cpu: 300, cuda: 1200 };
+const DEFAULT_ETA = { cpu: 300, cuda: 1200, vulkan: 1200 };
 
 let downloadingPhase = false;
 let currentPhase = "Preparing…";
@@ -233,6 +255,7 @@ async function build() {
     model_id: m.id,
     image_name: $("imageName").value.trim(),
     tag: $("tag").value.trim() || "latest",
+    engine: $("engine").value,
     compute: $("compute").value,
     system_prompt: $("systemPrompt").value,
     inject_mode: $("injectMode").value,
@@ -280,6 +303,7 @@ async function attachToBuild() {
   // config you set (model, compute, image name, init prompt) — not the defaults.
   const c = st.config || {};
   if (c.model_id && CATALOG.some((m) => m.id === c.model_id)) $("model").value = c.model_id;
+  if (c.engine) $("engine").value = c.engine;
   if (c.compute) $("compute").value = c.compute;
   $("injectMode").value = c.inject_mode || "missing";
   $("systemPrompt").value = c.system_prompt || "";
@@ -288,6 +312,7 @@ async function attachToBuild() {
   $("tag").value = c.tag || "latest";
   applyDeployConfig(c);
   updateHint();
+  updateEngineHint();
 
   resetProgress();
   $("buildBtn").disabled = true;
@@ -347,7 +372,7 @@ async function loadImages() {
   const tbody = $("imagesTable").querySelector("tbody");
   tbody.innerHTML = "";
   let imgs = [], conts = [], bstate = null;
-  try { imgs = await api("/api/images"); } catch (e) { renderEmpty(tbody, 7, e.message); return; }
+  try { imgs = await api("/api/images"); } catch (e) { renderEmpty(tbody, 8, e.message); return; }
   try { conts = await api("/api/containers"); } catch { conts = []; }
   try { bstate = await api("/api/build/state?offset=0"); } catch {}
 
@@ -355,11 +380,10 @@ async function loadImages() {
   // yet). Clicking it jumps to the live progress/config in the build form above.
   if (bstate && bstate.active) {
     const c = bstate.config || {};
-    const compute = c.compute === "cuda" ? "GPU (CUDA)" : "CPU";
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td><a href="#" class="link bip">${c.image_name || "(building)"}</a></td>
-      <td>${c.tag || "latest"}</td><td>${compute}</td><td>—</td>
+      <td>${c.tag || "latest"}</td><td>${engineBadge(c.engine)}</td><td>${computeBadge(c.compute)}</td><td>—</td>
       <td><span class="starting">◐ building…</span></td>
       <td>—</td>
       <td class="actions"><button class="small bip">View progress</button></td>`;
@@ -368,7 +392,7 @@ async function loadImages() {
   }
 
   if (!imgs.length) {
-    if (!(bstate && bstate.active)) renderEmpty(tbody, 7, "No images built yet.");
+    if (!(bstate && bstate.active)) renderEmpty(tbody, 8, "No images built yet.");
     return;
   }
 
@@ -387,8 +411,7 @@ async function loadImages() {
     const ref = repo ? `${repo}:${im.Tag}` : shortId;
     const displayName = repo || "<untagged>";
     const displayTag = tagged || shortId;
-    const compute = im.Compute === "cuda" ? "cuda" : "cpu";
-    const badge = compute === "cuda" ? "GPU (CUDA)" : "CPU";
+    const engine = im.Engine || "docker";
 
     const cs = byRef[ref] || [];
     const up = cs.find(isRunning);
@@ -397,7 +420,7 @@ async function loadImages() {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td><a href="#" class="link tpl" title="Use as a template for a new build">${displayName}</a></td>
-      <td>${displayTag}</td><td>${badge}</td><td>${im.Size || ""}</td>
+      <td>${displayTag}</td><td>${engineBadge(engine)}</td><td>${computeBadge(im.Compute)}</td><td>${im.Size || ""}</td>
       <td>${status}</td>
       <td><input type="number" value="${up ? containerPort(up) : port++}" /></td>
       <td class="actions">
@@ -405,27 +428,31 @@ async function loadImages() {
         <button class="small" data-act="dl">Download</button>
         <button class="small danger" data-act="del">Delete</button>
       </td>`;
-    tr.querySelector(".tpl").onclick = (e) => { e.preventDefault(); useAsTemplate(ref); };
+    tr.querySelector(".tpl").onclick = (e) => { e.preventDefault(); useAsTemplate(ref, engine); };
     const runBtn = tr.querySelector('[data-act="run"]');
-    runBtn.onclick = () => runImage(ref, parseInt(tr.querySelector("input").value, 10), runBtn);
-    tr.querySelector('[data-act="dl"]').onclick = () => downloadImage(ref);
-    tr.querySelector('[data-act="del"]').onclick = () => deleteImage(ref);
+    runBtn.onclick = () => runImage(ref, parseInt(tr.querySelector("input").value, 10), runBtn, engine);
+    tr.querySelector('[data-act="dl"]').onclick = () => downloadImage(ref, engine);
+    tr.querySelector('[data-act="del"]').onclick = () => deleteImage(ref, engine);
     tbody.appendChild(tr);
   }
 }
 
-function downloadImage(ref) {
-  // Browser handles the save dialog; streams `docker save` from the server.
-  window.location.href = "/api/image/download?ref=" + encodeURIComponent(ref);
+function downloadImage(ref, engine) {
+  // Browser handles the save dialog; streams `<engine> save` from the server.
+  window.location.href = "/api/image/download?ref=" + encodeURIComponent(ref) +
+    "&engine=" + encodeURIComponent(engine || "docker");
 }
 
 // Load a built image's baked config into the build form to clone it as a template.
-async function useAsTemplate(ref) {
+async function useAsTemplate(ref, engine) {
   let cfg;
-  try { cfg = await api("/api/image/config?ref=" + encodeURIComponent(ref)); }
-  catch (e) { alert("Couldn't load template: " + e.message); return; }
+  try {
+    cfg = await api("/api/image/config?ref=" + encodeURIComponent(ref) +
+      "&engine=" + encodeURIComponent(engine || "docker"));
+  } catch (e) { alert("Couldn't load template: " + e.message); return; }
 
   if (cfg.model_id && CATALOG.some((m) => m.id === cfg.model_id)) $("model").value = cfg.model_id;
+  if (cfg.engine) $("engine").value = cfg.engine;
   if (cfg.compute) $("compute").value = cfg.compute;
   $("injectMode").value = cfg.inject_mode || "missing";
   $("systemPrompt").value = cfg.system_prompt || "";
@@ -435,6 +462,7 @@ async function useAsTemplate(ref) {
   $("tag").value = cfg.tag || "latest";
   applyDeployConfig(cfg);
   updateHint();
+  updateEngineHint();
 
   document.querySelector("main .card").scrollIntoView({ behavior: "smooth", block: "start" });
   $("imageName").focus();
@@ -470,7 +498,7 @@ function scheduleHealthRefresh() {
   }, 3000);
 }
 
-async function runImage(ref, port, btn) {
+async function runImage(ref, port, btn, engine) {
   // Safety: warn before starting a second instance of an already-running image.
   let conts = [];
   try { conts = await api("/api/containers"); } catch {}
@@ -484,11 +512,12 @@ async function runImage(ref, port, btn) {
 
   if (btn) { btn.disabled = true; btn.textContent = "Starting…"; }
   try {
-    // Server decides CPU/GPU authoritatively from the image label.
+    // Server decides CPU/GPU and the engine authoritatively from the image label;
+    // we pass the engine the row was listed under as the lookup hint.
     await api("/api/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref, port }),
+      body: JSON.stringify({ ref, port, engine: engine || "docker" }),
     });
     $("chatPort").value = port;
     loadImages();             // refresh the running indicator (row re-renders)
@@ -500,12 +529,12 @@ async function runImage(ref, port, btn) {
   }
 }
 
-async function deleteImage(ref) {
+async function deleteImage(ref, engine) {
   if (!confirm(`Delete image ${ref} and its exported .tar?`)) return;
   try {
     await api("/api/image/delete", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref }),
+      body: JSON.stringify({ ref, engine: engine || "docker" }),
     });
     loadImages();
   } catch (e) { alert("Delete failed: " + e.message); }
@@ -517,13 +546,13 @@ async function loadContainers() {
   const tbody = $("containersTable").querySelector("tbody");
   tbody.innerHTML = "";
   let cs = [];
-  try { cs = await api("/api/containers"); } catch (e) { renderEmpty(tbody, 5, e.message); return; }
-  if (!cs.length) { renderEmpty(tbody, 5, "No containers."); return; }
+  try { cs = await api("/api/containers"); } catch (e) { renderEmpty(tbody, 6, e.message); return; }
+  if (!cs.length) { renderEmpty(tbody, 6, "No containers."); return; }
 
   for (const c of cs) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${c.Names || ""}</td><td>${c.Image || ""}</td>
+      <td>${c.Names || ""}</td><td>${c.Image || ""}</td><td>${engineBadge(c.Engine)}</td>
       <td>${c.Status || c.State || ""}</td><td>${c.Ports || ""}</td>
       <td class="actions"><button class="small danger">Stop &amp; remove</button></td>`;
     tr.querySelector("button").onclick = async () => {
@@ -531,7 +560,7 @@ async function loadContainers() {
       try {
         await api("/api/stop", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: c.ID || c.Names }),
+          body: JSON.stringify({ id: c.ID || c.Names, engine: c.Engine || "docker" }),
         });
         loadContainers();
         loadImages();   // refresh the running indicator
@@ -604,6 +633,7 @@ function renderEmpty(tbody, cols, msg) {
 
 $("model").addEventListener("change", updateHint);
 $("compute").addEventListener("change", applyComputeDefaults);
+$("engine").addEventListener("change", updateEngineHint);
 $("ctxSize").addEventListener("input", () => { $("ctxSize").dataset.touched = "1"; });
 $("route").addEventListener("input", updateRouteHint);
 $("imageName").addEventListener("input", () => { $("imageName").dataset.touched = "1"; });

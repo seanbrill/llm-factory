@@ -29,6 +29,16 @@ if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: dev image build failed." -Foregrou
 
 if (docker ps -aq -f "name=^$name$") { docker rm -f $name | Out-Null }
 
+# Optional Podman engine (parity with start.ps1); best-effort on Windows.
+$podmanArgs = @()
+if (Get-Command podman -ErrorAction SilentlyContinue) {
+    $psock = (podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>$null | Select-Object -First 1)
+    if ($psock) {
+        $podmanArgs = @("-v", "$($psock):/run/podman/podman.sock", "-e", "CONTAINER_HOST=unix:///run/podman/podman.sock")
+        Write-Host "Podman machine detected - enabling the Podman engine (socket: $psock)" -ForegroundColor Cyan
+    }
+}
+
 Write-Host "Starting dev container (hot-reload)..." -ForegroundColor Cyan
 docker run -d --name $name `
     -p "$($Port):8799" `
@@ -37,6 +47,7 @@ docker run -d --name $name `
     -v "$($PWD.Path):/app" `
     -v local-llm-gocache:/root/.cache/go-build `
     --add-host host.docker.internal:host-gateway `
+    $podmanArgs `
     $name
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: failed to start dev container." -ForegroundColor Red; exit 1 }
 

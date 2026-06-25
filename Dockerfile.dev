@@ -15,6 +15,11 @@ FROM golang:1.24-bookworm
 # docker CLI (talks to the mounted host daemon) — copied from the official image.
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 
+# podman remote client so the factory's "Podman" engine option works in dev too
+# (the macOS GPU/Vulkan path). Acts as a remote client via CONTAINER_HOST.
+RUN apt-get update && apt-get install -y --no-install-recommends podman \
+    && rm -rf /var/lib/apt/lists/*
+
 # wgo: a tiny live-reload runner. We restrict it to .go files so UI edits never
 # restart the backend (that's the "separate" part).
 RUN go install github.com/bokwoon95/wgo@latest

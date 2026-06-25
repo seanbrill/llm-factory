@@ -1,10 +1,13 @@
 // Package builder drives the local build/run lifecycle: download a GGUF into
-// ./models, build a model-baked Docker image (CPU or CUDA), export it as a
-// .tar into ./images, and run/stop/list containers via the docker CLI.
+// ./models, build a model-baked image (CPU, CUDA, or Vulkan), export it as a
+// .tar into ./images, and run/stop/list containers via a container-engine CLI.
 //
-// It shells out to `docker` rather than using the Docker SDK to keep the
-// dependency surface at zero (stdlib only) and to mirror exactly what a user
-// would type by hand.
+// It shells out to the engine CLI (`docker` or `podman`) rather than using an
+// SDK to keep the dependency surface at zero (stdlib only) and to mirror exactly
+// what a user would type by hand. The engine is chosen per operation (the UI has
+// an explicit Docker/Podman selector); "" defaults to docker so the original
+// behaviour is unchanged. Podman is what unlocks GPU on macOS, where a
+// libkrun/krunkit machine paravirtualizes the Metal GPU into a Vulkan container.
 package builder
 
 import (
@@ -72,6 +75,54 @@ func New(baseDir string) (*Builder, error) {
 	return b, nil
 }
 
+// ----------------------------------------------------------------------------
+// Container engine (docker | podman)
+//
+// Every shell-out goes through these helpers so the engine is a single, explicit
+// knob. The UI picks it per build/run; "" resolves to docker, preserving the
+// original behaviour exactly. Podman is required for the macOS GPU path (a
+// libkrun machine), but is otherwise a drop-in: its CLI is docker-compatible for
+// build/run/save/ps/images/inspect/rm.
+// ----------------------------------------------------------------------------
+
+const (
+	engineDocker = "docker"
+	enginePodman = "podman"
+)
+
+// resolveEngine normalizes an engine name, defaulting to docker.
+func resolveEngine(engine string) string {
+	if engine == enginePodman {
+		return enginePodman
+	}
+	return engineDocker
+}
+
+// engineCmd builds an *exec.Cmd for the chosen engine.
+func engineCmd(ctx context.Context, engine string, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, resolveEngine(engine), args...)
+}
+
+// candidateEngines returns the installed engines (docker first), used when a
+// listing should span both. Falls back to docker so callers always try something.
+func candidateEngines() []string {
+	var out []string
+	for _, e := range []string{engineDocker, enginePodman} {
+		if _, err := exec.LookPath(e); err == nil {
+			out = append(out, e)
+		}
+	}
+	if len(out) == 0 {
+		out = []string{engineDocker}
+	}
+	return out
+}
+
+// proxyEngine is the engine used to run the managed Caddy proxy: the first
+// available (docker preferred). The proxy reaches model containers via their
+// published host ports, so it works even if models run on the other engine.
+func proxyEngine() string { return candidateEngines()[0] }
+
 // ModelPath is where a catalog model's weights live (or will live) on disk.
 func (b *Builder) ModelPath(m catalog.Model) string {
 	return filepath.Join(b.ModelsDir, m.File)
@@ -127,8 +178,9 @@ type BuildOptions struct {
 	Model        catalog.Model
 	ImageName    string // e.g. "myorg/qwen-analyzer"
 	Tag          string // defaults to "latest"
-	Compute      string // "cpu" | "cuda"
-	ExportTar    bool   // also `docker save` into ./images
+	Engine       string // "docker" (default) | "podman"
+	Compute      string // "cpu" | "cuda" | "vulkan"
+	ExportTar    bool   // also `<engine> save` into ./images
 	SystemPrompt string // optional baked-in initialization prompt
 	InjectMode   string // "missing" (default) | "always"
 	// Deploy defaults baked as labels so Run can apply them and the UI can clone:
@@ -157,9 +209,10 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	if compute == "" {
 		compute = "cpu"
 	}
-	if compute != "cpu" && compute != "cuda" {
-		return fmt.Errorf("unknown compute %q (want cpu or cuda)", compute)
+	if compute != "cpu" && compute != "cuda" && compute != "vulkan" {
+		return fmt.Errorf("unknown compute %q (want cpu, cuda, or vulkan)", compute)
 	}
+	engine := resolveEngine(o.Engine)
 
 	dockerfileSrc := filepath.Join(b.BaseDir, "docker", "Dockerfile."+compute)
 	dfData, err := os.ReadFile(dockerfileSrc)
@@ -216,13 +269,16 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	}
 
 	ref := o.Ref()
-	log(fmt.Sprintf("Building %s [%s] from %s ...", ref, compute, o.Model.Name))
+	log(fmt.Sprintf("Building %s [%s/%s] from %s ...", ref, engine, compute, o.Model.Name))
 	buildArgs := []string{
 		"build", "-t", ref,
 		"--build-arg", "INJECT_MODE=" + injectMode(o.InjectMode),
 		"--label", "local-llm.tool=builder",
 		"--label", "local-llm.model=" + o.Model.ID,
 		"--label", "local-llm.compute=" + compute,
+		// Engine the image was built with — Run reads this so a podman-built image
+		// is launched with podman (and vice versa) without the UI having to track it.
+		"--label", "local-llm.engine=" + engine,
 		// Capture the full creation config so the UI can clone an image as a
 		// template (system prompt may be multiline — exec passes it verbatim).
 		"--label", "local-llm.inject_mode=" + injectMode(o.InjectMode),
@@ -237,8 +293,8 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		buildArgs = append(buildArgs, "--build-arg", fmt.Sprintf("CTX_SIZE=%d", o.CtxSize))
 	}
 	buildArgs = append(buildArgs, work)
-	if err := runStreaming(ctx, b.BaseDir, log, buildArgs...); err != nil {
-		return fmt.Errorf("docker build failed: %w", err)
+	if err := runStreaming(ctx, b.BaseDir, engine, log, buildArgs...); err != nil {
+		return fmt.Errorf("%s build failed: %w", engine, err)
 	}
 	log("Built image: " + ref)
 
@@ -246,8 +302,8 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		safe := strings.NewReplacer("/", "_", ":", "_").Replace(ref)
 		out := filepath.Join(b.ImagesDir, safe+".tar")
 		log("Exporting to images/" + filepath.Base(out) + " ...")
-		if err := runStreaming(ctx, b.BaseDir, log, "save", "-o", out, ref); err != nil {
-			return fmt.Errorf("docker save failed: %w", err)
+		if err := runStreaming(ctx, b.BaseDir, engine, log, "save", "-o", out, ref); err != nil {
+			return fmt.Errorf("%s save failed: %w", engine, err)
 		}
 		if fi, err := os.Stat(out); err == nil {
 			log(fmt.Sprintf("Exported %.2f GB: images/%s", float64(fi.Size())/1e9, filepath.Base(out)))
@@ -260,7 +316,8 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 type RunOptions struct {
 	Ref       string
 	HostPort  int
-	Compute   string  // "cuda" adds --gpus all
+	Engine    string  // "docker" (default) | "podman"
+	Compute   string  // "cuda" adds --gpus all; "vulkan" exposes the paravirt GPU
 	MemoryGB  float64 // >0 sets --memory
 	Route     string  // local URL alias (stored as a label for the proxy)
 	Autostart bool    // adds --restart unless-stopped (starts with Docker Desktop)
@@ -271,9 +328,10 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 	if o.HostPort == 0 {
 		o.HostPort = 8080
 	}
+	engine := resolveEngine(o.Engine)
 	name := fmt.Sprintf("localllm-%d", o.HostPort)
 	// Best-effort removal of a stale container occupying the same name/port.
-	_ = exec.Command("docker", "rm", "-f", name).Run()
+	_ = engineCmd(ctx, engine, "rm", "-f", name).Run()
 
 	args := []string{
 		"run", "-d", "--name", name,
@@ -281,12 +339,19 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 		"--label", "local-llm.tool=runtime",
 		"--label", "local-llm.ref=" + o.Ref,
 		"--label", "local-llm.route=" + o.Route,
+		"--label", "local-llm.engine=" + engine,
 	}
-	if o.Compute == "cuda" {
+	switch o.Compute {
+	case "cuda":
 		args = append(args, "--gpus", "all")
+	case "vulkan":
+		// Paravirtualized GPU: a libkrun/krunkit Podman machine (macOS) or a host
+		// GPU on Linux exposes the DRI render node. llama.cpp's Vulkan backend then
+		// finds the (virtio) device. Requires Podman+libkrun on macOS — see README.
+		args = append(args, "--device", "/dev/dri")
 	}
 	if o.MemoryGB > 0 {
-		// MB so fractional GB (e.g. 4.5) is accepted by docker.
+		// MB so fractional GB (e.g. 4.5) is accepted by the engine.
 		args = append(args, "--memory", fmt.Sprintf("%dm", int(o.MemoryGB*1024)))
 	}
 	if o.Autostart {
@@ -294,16 +359,16 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 	}
 	args = append(args, o.Ref)
 
-	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	out, err := engineCmd(ctx, engine, args...).CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("docker run: %v: %s", err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("%s run: %v: %s", engine, err, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Stop force-removes a container by id or name.
-func (b *Builder) Stop(ctx context.Context, id string) error {
-	out, err := exec.CommandContext(ctx, "docker", "rm", "-f", id).CombinedOutput()
+// Stop force-removes a container by id or name on the given engine.
+func (b *Builder) Stop(ctx context.Context, engine, id string) error {
+	out, err := engineCmd(ctx, engine, "rm", "-f", id).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -370,19 +435,20 @@ func (b *Builder) RegenProxy(ctx context.Context) error {
 		return err
 	}
 
+	engine := proxyEngine()
 	if len(routes) == 0 {
-		_ = exec.Command("docker", "rm", "-f", proxyContainer).Run() // free the port
+		_ = engineCmd(ctx, engine, "rm", "-f", proxyContainer).Run() // free the port
 		return nil
 	}
-	return b.ensureProxy(ctx)
+	return b.ensureProxy(ctx, engine)
 }
 
-func (b *Builder) ensureProxy(ctx context.Context) error {
-	out, _ := exec.CommandContext(ctx, "docker", "ps", "-q", "-f", "name=^"+proxyContainer+"$").Output()
+func (b *Builder) ensureProxy(ctx context.Context, engine string) error {
+	out, _ := engineCmd(ctx, engine, "ps", "-q", "-f", "name=^"+proxyContainer+"$").Output()
 	if strings.TrimSpace(string(out)) != "" {
 		return nil // already running; --watch picks up the regenerated Caddyfile
 	}
-	_ = exec.Command("docker", "rm", "-f", proxyContainer).Run()
+	_ = engineCmd(ctx, engine, "rm", "-f", proxyContainer).Run()
 
 	caddyfileHost := strings.ReplaceAll(b.HostDir+"/config/Caddyfile", "\\", "/")
 	args := []string{
@@ -395,7 +461,7 @@ func (b *Builder) ensureProxy(ctx context.Context) error {
 		"caddy:2-alpine",
 		"caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile", "--watch",
 	}
-	if cmdOut, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
+	if cmdOut, err := engineCmd(ctx, engine, args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("start proxy: %v: %s", err, strings.TrimSpace(string(cmdOut)))
 	}
 	return nil
@@ -426,41 +492,53 @@ func portFromName(name string) string {
 // NOTE: `docker images --format` does not expose labels, so we resolve the
 // compute type per image via inspect.
 func (b *Builder) Images(ctx context.Context) ([]map[string]any, error) {
-	imgs, err := dockerJSONLines(ctx, "images", "-a", "--filter", "label=local-llm.tool=builder", "--format", "{{json .}}")
-	if err != nil {
-		return nil, err
-	}
-	for _, im := range imgs {
-		if id, _ := im["ID"].(string); id != "" {
-			im["Compute"] = b.ImageCompute(ctx, id)
+	var all []map[string]any
+	var firstErr error
+	for _, engine := range candidateEngines() {
+		imgs, err := dockerJSONLines(ctx, engine, "images", "-a", "--filter", "label=local-llm.tool=builder", "--format", "{{json .}}")
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue // engine present but unusable (e.g. podman machine stopped) — skip it
+		}
+		for _, im := range imgs {
+			im["Engine"] = engine
+			if id, _ := im["ID"].(string); id != "" {
+				im["Compute"] = b.ImageCompute(ctx, engine, id)
+			}
+			all = append(all, im)
 		}
 	}
-	return imgs, nil
+	if all == nil && firstErr != nil {
+		return nil, firstErr
+	}
+	return all, nil
 }
 
-// SaveImage streams `docker save <ref>` (the image tarball) to w. Used to let a
+// SaveImage streams `<engine> save <ref>` (the image tarball) to w. Used to let a
 // browser download a built image to a location of the user's choosing.
-func (b *Builder) SaveImage(ctx context.Context, ref string, w io.Writer) error {
-	cmd := exec.CommandContext(ctx, "docker", "save", ref)
+func (b *Builder) SaveImage(ctx context.Context, engine, ref string, w io.Writer) error {
+	cmd := engineCmd(ctx, engine, "save", ref)
 	cmd.Stdout = w
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker save: %v: %s", err, strings.TrimSpace(errBuf.String()))
+		return fmt.Errorf("%s save: %v: %s", resolveEngine(engine), err, strings.TrimSpace(errBuf.String()))
 	}
 	return nil
 }
 
-// ImageExists reports whether an image ref is present in the daemon.
-func (b *Builder) ImageExists(ctx context.Context, ref string) bool {
-	return exec.CommandContext(ctx, "docker", "image", "inspect", ref).Run() == nil
+// ImageExists reports whether an image ref is present in the given engine.
+func (b *Builder) ImageExists(ctx context.Context, engine, ref string) bool {
+	return engineCmd(ctx, engine, "image", "inspect", ref).Run() == nil
 }
 
 // ImageCompute returns the "local-llm.compute" label baked into an image
-// ("cpu"/"cuda"), or "" if it can't be determined. This is the authoritative
-// source for whether a container must run with --gpus all.
-func (b *Builder) ImageCompute(ctx context.Context, ref string) string {
-	out, err := exec.CommandContext(ctx, "docker", "image", "inspect",
+// ("cpu"/"cuda"/"vulkan"), or "" if it can't be determined. This is the
+// authoritative source for the GPU run flags.
+func (b *Builder) ImageCompute(ctx context.Context, engine, ref string) string {
+	out, err := engineCmd(ctx, engine, "image", "inspect",
 		"--format", `{{index .Config.Labels "local-llm.compute"}}`, ref).Output()
 	if err != nil {
 		return ""
@@ -469,8 +547,10 @@ func (b *Builder) ImageCompute(ctx context.Context, ref string) string {
 }
 
 // ImageLabels returns all labels on an image (used to clone its build config).
-func (b *Builder) ImageLabels(ctx context.Context, ref string) (map[string]string, error) {
-	out, err := exec.CommandContext(ctx, "docker", "image", "inspect",
+// engine "" resolves to docker; for a ref that may live on either engine, pass
+// the engine from the image row (annotated by Images).
+func (b *Builder) ImageLabels(ctx context.Context, engine, ref string) (map[string]string, error) {
+	out, err := engineCmd(ctx, engine, "image", "inspect",
 		"--format", "{{json .Config.Labels}}", ref).Output()
 	if err != nil {
 		return nil, fmt.Errorf("inspect %s: %w", ref, err)
@@ -482,17 +562,37 @@ func (b *Builder) ImageLabels(ctx context.Context, ref string) (map[string]strin
 	return labels, nil
 }
 
-// Containers lists (running + stopped) containers started by this tool.
+// Containers lists (running + stopped) containers started by this tool, across
+// every available engine. Each row is annotated with its Engine so Stop routes
+// to the right one.
 func (b *Builder) Containers(ctx context.Context) ([]map[string]any, error) {
-	return dockerJSONLines(ctx, "ps", "-a", "--filter", "label=local-llm.tool=runtime", "--format", "{{json .}}")
+	var all []map[string]any
+	var firstErr error
+	for _, engine := range candidateEngines() {
+		cs, err := dockerJSONLines(ctx, engine, "ps", "-a", "--filter", "label=local-llm.tool=runtime", "--format", "{{json .}}")
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for _, c := range cs {
+			c["Engine"] = engine
+			all = append(all, c)
+		}
+	}
+	if all == nil && firstErr != nil {
+		return nil, firstErr
+	}
+	return all, nil
 }
 
-// RemoveImage removes a built image (docker rmi -f) and, if alsoTar, its
+// RemoveImage removes a built image (<engine> rmi -f) and, if alsoTar, its
 // exported tarball under ./images.
-func (b *Builder) RemoveImage(ctx context.Context, ref string, alsoTar bool) error {
-	out, err := exec.CommandContext(ctx, "docker", "rmi", "-f", ref).CombinedOutput()
+func (b *Builder) RemoveImage(ctx context.Context, engine, ref string, alsoTar bool) error {
+	out, err := engineCmd(ctx, engine, "rmi", "-f", ref).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("docker rmi: %v: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("%s rmi: %v: %s", resolveEngine(engine), err, strings.TrimSpace(string(out)))
 	}
 	if alsoTar {
 		safe := strings.NewReplacer("/", "_", ":", "_").Replace(ref)
@@ -522,8 +622,8 @@ func (b *Builder) RemoveModel(m catalog.Model) error {
 // helpers
 // ----------------------------------------------------------------------------
 
-func dockerJSONLines(ctx context.Context, args ...string) ([]map[string]any, error) {
-	out, err := exec.CommandContext(ctx, "docker", args...).Output()
+func dockerJSONLines(ctx context.Context, engine string, args ...string) ([]map[string]any, error) {
+	out, err := engineCmd(ctx, engine, args...).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -543,9 +643,9 @@ func dockerJSONLines(ctx context.Context, args ...string) ([]map[string]any, err
 	return res, nil
 }
 
-// runStreaming runs `docker <args...>` and forwards combined output line-by-line.
-func runStreaming(ctx context.Context, dir string, log LogFunc, args ...string) error {
-	cmd := exec.CommandContext(ctx, "docker", args...)
+// runStreaming runs `<engine> <args...>` and forwards combined output line-by-line.
+func runStreaming(ctx context.Context, dir, engine string, log LogFunc, args ...string) error {
+	cmd := engineCmd(ctx, engine, args...)
 	cmd.Dir = dir
 	lw := &lineWriter{log: log}
 	cmd.Stdout = lw

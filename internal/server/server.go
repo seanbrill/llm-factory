@@ -49,6 +49,7 @@ type buildConfig struct {
 	ModelID      string  `json:"model_id"`
 	ImageName    string  `json:"image_name"`
 	Tag          string  `json:"tag"`
+	Engine       string  `json:"engine"`
 	Compute      string  `json:"compute"`
 	SystemPrompt string  `json:"system_prompt"`
 	InjectMode   string  `json:"inject_mode"`
@@ -241,7 +242,8 @@ func (s *Server) handleImageDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Ref string `json:"ref"`
+		Ref    string `json:"ref"`
+		Engine string `json:"engine"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -251,7 +253,7 @@ func (s *Server) handleImageDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref is required"})
 		return
 	}
-	if err := s.b.RemoveImage(r.Context(), req.Ref, true); err != nil {
+	if err := s.b.RemoveImage(r.Context(), normalizeEngine(req.Engine), req.Ref, true); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -288,6 +290,7 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		ModelID      string  `json:"model_id"`
 		ImageName    string  `json:"image_name"`
 		Tag          string  `json:"tag"`
+		Engine       string  `json:"engine"`
 		Compute      string  `json:"compute"`
 		SystemPrompt string  `json:"system_prompt"`
 		InjectMode   string  `json:"inject_mode"`
@@ -306,16 +309,15 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	compute := req.Compute
-	if compute != "cuda" {
-		compute = "cpu"
-	}
+	engine := normalizeEngine(req.Engine)
+	compute := normalizeCompute(req.Compute)
 	route := sanitizeRoute(req.Route)
 
 	opts := builder.BuildOptions{
 		Model:        model,
 		ImageName:    req.ImageName,
 		Tag:          req.Tag,
+		Engine:       engine,
 		Compute:      compute,
 		ExportTar:    true, // per project config: always export a .tar to ./images
 		SystemPrompt: req.SystemPrompt,
@@ -328,7 +330,7 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 
 	cfg := buildConfig{
 		ModelID: req.ModelID, ImageName: req.ImageName, Tag: req.Tag,
-		Compute: compute, SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode,
+		Engine: engine, Compute: compute, SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode,
 		CtxSize: req.CtxSize, MemoryGB: req.MemoryGB, Route: route, Autostart: req.Autostart,
 	}
 	// One build at a time. tryStart resets the buffer and marks running; a second
@@ -405,16 +407,22 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Ref     string `json:"ref"`
 		Port    int    `json:"port"`
+		Engine  string `json:"engine"`
 		Compute string `json:"compute"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	// Read the image's baked deploy settings (compute, memory, route, autostart)
-	// so a CUDA image always runs with --gpus all and the URL/limits/restart are
-	// applied as configured at build time.
-	labels, _ := s.b.ImageLabels(r.Context(), req.Ref)
+	// Inspect on the engine the image row reported (falls back to docker for "").
+	engine := normalizeEngine(req.Engine)
+	// Read the image's baked deploy settings (engine, compute, memory, route,
+	// autostart) so a CUDA image always runs with --gpus all, a podman-built image
+	// runs on podman, and the URL/limits/restart are applied as built.
+	labels, _ := s.b.ImageLabels(r.Context(), engine, req.Ref)
+	if e := labels["local-llm.engine"]; e != "" {
+		engine = normalizeEngine(e)
+	}
 	compute := labels["local-llm.compute"]
 	if compute == "" {
 		compute = req.Compute
@@ -424,7 +432,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	autostart := labels["local-llm.autostart"] == "true"
 
 	id, err := s.b.Run(r.Context(), builder.RunOptions{
-		Ref: req.Ref, HostPort: req.Port, Compute: compute,
+		Ref: req.Ref, HostPort: req.Port, Engine: engine, Compute: compute,
 		MemoryGB: memGB, Route: route, Autostart: autostart,
 	})
 	if err != nil {
@@ -434,7 +442,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if err := s.b.RegenProxy(r.Context()); err != nil {
 		log.Printf("regen proxy after run: %v", err) // non-fatal
 	}
-	resp := map[string]any{"id": id, "port": req.Port, "compute": compute}
+	resp := map[string]any{"id": id, "port": req.Port, "engine": engine, "compute": compute}
 	if route != "" {
 		resp["url"] = "http://" + route + ".localhost" + proxyURLSuffix(s.b.ProxyPort())
 	}
@@ -447,6 +455,26 @@ func proxyURLSuffix(port string) string {
 		return ""
 	}
 	return ":" + port
+}
+
+// normalizeEngine constrains the engine to the two we support, defaulting to
+// docker so an empty/unknown value preserves the original behaviour.
+func normalizeEngine(engine string) string {
+	if engine == "podman" {
+		return "podman"
+	}
+	return "docker"
+}
+
+// normalizeCompute constrains the compute target; anything unrecognized falls
+// back to cpu (the safe, runs-anywhere default).
+func normalizeCompute(compute string) string {
+	switch compute {
+	case "cuda", "vulkan":
+		return compute
+	default:
+		return "cpu"
+	}
 }
 
 // sanitizeRoute normalizes a user-typed URL alias into a hostname label:
@@ -469,13 +497,14 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID string `json:"id"`
+		ID     string `json:"id"`
+		Engine string `json:"engine"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := s.b.Stop(r.Context(), req.ID); err != nil {
+	if err := s.b.Stop(r.Context(), normalizeEngine(req.Engine), req.ID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -493,7 +522,8 @@ func (s *Server) handleImageConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ref query param is required", http.StatusBadRequest)
 		return
 	}
-	labels, err := s.b.ImageLabels(r.Context(), ref)
+	engine := normalizeEngine(r.URL.Query().Get("engine"))
+	labels, err := s.b.ImageLabels(r.Context(), engine, ref)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
@@ -506,10 +536,15 @@ func (s *Server) handleImageConfig(w http.ResponseWriter, r *http.Request) {
 	if injectMode == "" {
 		injectMode = "missing"
 	}
+	buildEngine := labels["local-llm.engine"]
+	if buildEngine == "" {
+		buildEngine = engine
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"repository":    repo,
 		"tag":           tag,
 		"model_id":      labels["local-llm.model"],
+		"engine":        normalizeEngine(buildEngine),
 		"compute":       labels["local-llm.compute"],
 		"inject_mode":   injectMode,
 		"system_prompt": labels["local-llm.system_prompt"],
@@ -529,14 +564,15 @@ func (s *Server) handleImageDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ref query param is required", http.StatusBadRequest)
 		return
 	}
-	if !s.b.ImageExists(r.Context(), ref) {
+	engine := normalizeEngine(r.URL.Query().Get("engine"))
+	if !s.b.ImageExists(r.Context(), engine, ref) {
 		http.Error(w, "no such image: "+ref, http.StatusNotFound)
 		return
 	}
 	filename := strings.NewReplacer("/", "_", ":", "_").Replace(ref) + ".tar"
 	w.Header().Set("Content-Type", "application/x-tar")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
-	if err := s.b.SaveImage(r.Context(), ref, w); err != nil {
+	if err := s.b.SaveImage(r.Context(), engine, ref, w); err != nil {
 		// Headers/body may already be partially sent; log server-side.
 		log.Printf("image download %s failed: %v", ref, err)
 	}

@@ -35,18 +35,48 @@ func TestBuildStatsRoundTrip(t *testing.T) {
 
 func TestSanitizeRoute(t *testing.T) {
 	cases := map[string]string{
-		"ai":        "ai",
-		"/ai":       "ai",
-		"  /AI  ":   "ai",
-		"My Bot!":   "mybot",
-		"oni-7b":    "oni-7b",
-		"a/b/c":     "abc",
-		"":          "",
-		"日本ai":      "ai",
+		"ai":      "ai",
+		"/ai":     "ai",
+		"  /AI  ": "ai",
+		"My Bot!": "mybot",
+		"oni-7b":  "oni-7b",
+		"a/b/c":   "abc",
+		"":        "",
+		"日本ai":    "ai",
 	}
 	for in, want := range cases {
 		if got := sanitizeRoute(in); got != want {
 			t.Errorf("sanitizeRoute(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestNormalizeEngine(t *testing.T) {
+	cases := map[string]string{
+		"":       "docker",
+		"docker": "docker",
+		"podman": "podman",
+		"PODMAN": "docker", // unknown/cased -> docker default
+		"weird":  "docker",
+	}
+	for in, want := range cases {
+		if got := normalizeEngine(in); got != want {
+			t.Errorf("normalizeEngine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestNormalizeCompute(t *testing.T) {
+	cases := map[string]string{
+		"cpu":    "cpu",
+		"cuda":   "cuda",
+		"vulkan": "vulkan",
+		"":       "cpu", // unknown -> safe runs-anywhere default
+		"metal":  "cpu",
+	}
+	for in, want := range cases {
+		if got := normalizeCompute(in); got != want {
+			t.Errorf("normalizeCompute(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

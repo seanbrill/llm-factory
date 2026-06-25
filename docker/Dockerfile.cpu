@@ -1,28 +1,47 @@
 # syntax=docker/dockerfile:1
 #
-# CPU image: compiles llama.cpp with portable x86-64 SIMD (AVX2/FMA/F16C), bakes
-# a single GGUF (provided in the build context as `model.gguf`) into the image,
+# CPU image: compiles llama.cpp with architecture-appropriate SIMD, bakes a
+# single GGUF (provided in the build context as `model.gguf`) into the image,
 # and fronts it with the `llmgate` shim that injects the baked initialization
 # prompt. The Go builder stages model.gguf, system_prompt.txt, and gate/ into a
 # tiny temp build context.
+#
+# Architecture-aware (via BuildKit's automatic TARGETARCH):
+#   amd64  -> portable x86-64 AVX2/FMA/F16C  (Intel/AMD, incl. Intel Macs)
+#   arm64  -> ARMv8.2 NEON + dotprod + fp16  (Apple Silicon M1+, ARM servers)
+# The image is built for the host's architecture by default, so on an Apple
+# Silicon Mac this produces a native arm64 image (NOT x86 under emulation).
 
 # ----------------------------------------------------------------------------
 # Stage 1: compile llama-server (static; no shared-lib sprawl in runtime)
 # ----------------------------------------------------------------------------
 FROM debian:bookworm-slim AS builder
 ARG LLAMA_CPP_REF=master
+# TARGETARCH is auto-populated by BuildKit (Docker Desktop's default builder).
+# If BuildKit is disabled (older Linux Docker), it is empty and we fall back to
+# the amd64 SIMD path — identical to the previous x86-only behaviour.
+ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/llama.cpp.git
 WORKDIR /src/llama.cpp
-RUN cmake -B build \
+# Pick SIMD flags by target arch. arm64 uses an ARMv8.2 baseline (dotprod+fp16)
+# that every Apple Silicon chip (M1 and up) supports, so the image stays
+# portable across M-series Macs while still getting the NEON dot-product kernels
+# that matter most for llama.cpp throughput.
+RUN set -eux; \
+    case "${TARGETARCH:-amd64}" in \
+      arm64) ARCH_FLAGS="-DCMAKE_C_FLAGS=-march=armv8.2-a+dotprod+fp16 -DCMAKE_CXX_FLAGS=-march=armv8.2-a+dotprod+fp16" ;; \
+      *)     ARCH_FLAGS="-DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON" ;; \
+    esac; \
+    cmake -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
         -DLLAMA_CURL=OFF \
         -DGGML_NATIVE=OFF \
-        -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON \
+        ${ARCH_FLAGS} \
     && cmake --build build --config Release -j "$(nproc)" --target llama-server
 
 # ----------------------------------------------------------------------------

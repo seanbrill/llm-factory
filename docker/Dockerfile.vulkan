@@ -1,0 +1,92 @@
+# syntax=docker/dockerfile:1
+#
+# Vulkan GPU image: compiles llama.cpp with the Vulkan backend, bakes a single
+# GGUF (`model.gguf`) into the image, and fronts it with the `llmgate` shim that
+# injects the baked initialization prompt.
+#
+# Why Vulkan: it is the one GPU backend that works *inside a container* on Apple
+# Silicon. There is no Metal-in-Docker and no GPU passthrough on macOS; instead a
+# Podman machine running on libkrun/krunkit paravirtualizes the Metal GPU and
+# exposes it to the guest as a virtio Vulkan device (Mesa "Venus"). The same
+# image also runs on real Linux Vulkan GPUs (AMD RADV / Intel ANV / NVIDIA).
+#
+# Run it (macOS, Podman + libkrun machine):
+#   podman run --device /dev/dri -p 8080:8080 <image>
+# Run it (Linux GPU):
+#   docker run --device /dev/dri -p 8080:8080 <image>   # or podman
+#
+# NOTE (experimental on macOS): GPU acceleration under krunkit requires a Mesa
+# build that includes the virtio/Venus Vulkan driver. Stock distro Mesa may not
+# enable it; if `vulkaninfo` in the container shows no GPU, swap in a Venus-
+# enabled Mesa (see RamaLama / the Red Hat krunkit articles in the README).
+
+# ----------------------------------------------------------------------------
+# Stage 1: compile llama-server against the Vulkan SDK
+# ----------------------------------------------------------------------------
+FROM ubuntu:24.04 AS builder
+ARG LLAMA_CPP_REF=master
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git ca-certificates wget gnupg \
+    && rm -rf /var/lib/apt/lists/*
+# LunarG Vulkan SDK provides the loader, headers, and glslc (shader compiler)
+# that llama.cpp's Vulkan backend needs at build time.
+RUN wget -qO /etc/apt/trusted.gpg.d/lunarg.asc https://packages.lunarg.com/lunarg-signing-key-pub.asc \
+    && wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list https://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list \
+    && apt-get update && apt-get install -y --no-install-recommends vulkan-sdk \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/llama.cpp.git
+WORKDIR /src/llama.cpp
+RUN cmake -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DLLAMA_CURL=OFF \
+        -DGGML_NATIVE=OFF \
+        -DGGML_VULKAN=ON \
+    && cmake --build build --config Release -j "$(nproc)" --target llama-server
+
+# ----------------------------------------------------------------------------
+# Stage 2: compile the llmgate entrypoint shim (static, stdlib-only)
+# ----------------------------------------------------------------------------
+FROM golang:1.22-bookworm AS gate
+WORKDIR /src
+COPY gate/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /llmgate .
+
+# ----------------------------------------------------------------------------
+# Stage 3: Vulkan runtime (loader + Mesa ICDs) + baked weights + prompt
+# ----------------------------------------------------------------------------
+FROM ubuntu:24.04 AS runtime
+ARG INJECT_MODE=missing
+ARG CTX_SIZE=8192
+# libvulkan1 = loader; mesa-vulkan-drivers = ICDs (RADV/ANV/lavapipe, and the
+# virtio/Venus driver under libkrun where present). vulkan-tools for vulkaninfo.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libvulkan1 mesa-vulkan-drivers vulkan-tools libgomp1 curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 llama \
+    && mkdir -p /etc/llmgate
+
+COPY --from=builder /src/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+COPY --from=gate    /llmgate                              /usr/local/bin/llmgate
+COPY model.gguf         /models/model.gguf
+COPY system_prompt.txt  /etc/llmgate/system_prompt.txt
+
+# NGL = layers offloaded to GPU (99 = all). CTX can go higher on GPU.
+ENV MODEL_PATH=/models/model.gguf \
+    PORT=8080 \
+    UPSTREAM_PORT=8081 \
+    CTX_SIZE=${CTX_SIZE} \
+    THREADS=4 \
+    PARALLEL=1 \
+    NGL=99 \
+    SYSTEM_PROMPT_FILE=/etc/llmgate/system_prompt.txt \
+    INJECT_MODE=${INJECT_MODE}
+
+EXPOSE 8080
+USER llama
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=5 \
+    CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
+
+ENTRYPOINT ["/usr/local/bin/llmgate"]

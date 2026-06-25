@@ -7,8 +7,13 @@
 # (`-v /var/run/docker.sock:/var/run/docker.sock`). Use start.{ps1,sh}.
 #
 # At runtime the factory reads two things from disk (besides the embedded UI):
-#   docker/Dockerfile.{cpu,cuda}   and   cmd/llmgate/main.go
+#   docker/Dockerfile.{cpu,cuda,vulkan}   and   cmd/llmgate/main.go
 # so both are copied into the image.
+#
+# The image also bundles a Podman *remote* client so the factory can drive a host
+# Podman machine in addition to Docker — that's the macOS GPU path (a libkrun
+# machine paravirtualizes Metal into a Vulkan container). start.{sh,ps1} mount the
+# host Podman socket and set CONTAINER_HOST when a machine is present.
 
 # ----------------------------------------------------------------------------
 # Stage 1: compile the factory (static, stdlib-only -> runs on Alpine)
@@ -23,6 +28,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" -o /factory ./c
 # ----------------------------------------------------------------------------
 FROM docker:27-cli
 WORKDIR /app
+
+# Podman remote client (named `podman` on PATH so the factory's engine selector
+# can shell out to it). Prefer the lean podman-remote subpackage; fall back to the
+# full podman package if the remote-only one isn't in the repo.
+RUN (apk add --no-cache podman-remote && ln -sf "$(command -v podman-remote)" /usr/local/bin/podman) \
+    || apk add --no-cache podman
 
 COPY --from=build /factory      /usr/local/bin/factory
 COPY docker/                    /app/docker/

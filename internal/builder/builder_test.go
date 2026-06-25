@@ -17,6 +17,21 @@ func TestLabelValue(t *testing.T) {
 	}
 }
 
+func TestResolveEngine(t *testing.T) {
+	cases := map[string]string{
+		"":        "docker", // default preserves original behaviour
+		"docker":  "docker",
+		"podman":  "podman",
+		"Podman":  "docker", // only exact "podman" switches; anything else => docker
+		"garbage": "docker",
+	}
+	for in, want := range cases {
+		if got := resolveEngine(in); got != want {
+			t.Errorf("resolveEngine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestPortFromName(t *testing.T) {
 	cases := map[string]string{
 		"localllm-8080": "8080",

@@ -20,10 +20,17 @@
         <label>Model
           <select id="model"></select>
         </label>
+        <label>Engine
+          <select id="engine">
+            <option value="docker">Docker</option>
+            <option value="podman">Podman</option>
+          </select>
+        </label>
         <label>Compute
           <select id="compute">
             <option value="cpu">CPU (portable)</option>
             <option value="cuda">NVIDIA GPU (CUDA)</option>
+            <option value="vulkan">GPU — Vulkan / Apple Metal</option>
           </select>
         </label>
         <label>Image name
@@ -34,6 +41,7 @@
         </label>
       </div>
       <p id="modelHint" class="hint"></p>
+      <p id="engineHint" class="hint"></p>
       <label>Initialization prompt (optional) &mdash; baked in to specialize the model's startup behavior
         <textarea id="systemPrompt" rows="3" placeholder="You are FinBot, a terse financial-data analyst. Always answer with strict JSON."></textarea>
       </label>
@@ -82,7 +90,7 @@
       </div>
       <p class="hint">Tip: click an image name to load its settings (model, compute, init prompt) into the build form above as a template.</p>
       <table id="imagesTable">
-        <thead><tr><th>Image</th><th>Tag</th><th>Compute</th><th>Size</th><th>Status</th><th>Run on port</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Image</th><th>Tag</th><th>Engine</th><th>Compute</th><th>Size</th><th>Status</th><th>Run on port</th><th>Actions</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -94,7 +102,7 @@
         <button id="refreshContainers" class="ghost">Refresh</button>
       </div>
       <table id="containersTable">
-        <thead><tr><th>Name</th><th>Image</th><th>Status</th><th>Ports</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Name</th><th>Image</th><th>Engine</th><th>Status</th><th>Ports</th><th>Actions</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>

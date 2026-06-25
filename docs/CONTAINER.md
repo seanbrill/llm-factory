@@ -47,7 +47,8 @@ Every image carries metadata labels (queryable with `docker inspect` /
 ```
 local-llm.tool=builder
 local-llm.model=<catalog id, e.g. qwen2.5-3b>
-local-llm.compute=<cpu|cuda>
+local-llm.compute=<cpu|cuda|vulkan>
+local-llm.engine=<docker|podman>     # engine the image was built with; Run reuses it
 ```
 
 ---
@@ -76,15 +77,24 @@ client ──HTTP :8080──► llmgate ──HTTP 127.0.0.1:8081──► llam
 - `llmgate` is PID 1, so `docker stop` (SIGTERM) triggers a clean shutdown of
   `llama-server`.
 
-### CPU vs CUDA variant
+### CPU vs CUDA vs Vulkan variant
 
-| | CPU image | CUDA image |
-|---|---|---|
-| Base (runtime) | `debian:bookworm-slim` | `nvidia/cuda:12.4.1-runtime-ubuntu22.04` |
-| llama.cpp build | AVX2/FMA/F16C, portable | `GGML_CUDA=ON`, archs 75/80/86/89 |
-| Default `CTX_SIZE` | 4096 | 8192 |
-| Default `NGL` (GPU layers) | 0 | 99 (all) |
-| Run requirement | none | `--gpus all` + NVIDIA Container Toolkit |
+| | CPU image | CUDA image | Vulkan image |
+|---|---|---|---|
+| Base (runtime) | `debian:bookworm-slim` | `nvidia/cuda:12.4.1-runtime-ubuntu22.04` | `ubuntu:24.04` (Mesa ICDs) |
+| llama.cpp build | x86 AVX2/FMA/F16C, or arm64 NEON+dotprod (by `TARGETARCH`) | `GGML_CUDA=ON`, archs 75/80/86/89 | `GGML_VULKAN=ON` |
+| Default `CTX_SIZE` | 4096 | 8192 | 8192 |
+| Default `NGL` (GPU layers) | 0 | 99 (all) | 99 (all) |
+| Run requirement | none | `--gpus all` + NVIDIA Container Toolkit | `--device /dev/dri` (Podman libkrun on macOS, or a Linux Vulkan GPU) |
+
+> **Apple Silicon:** the CPU image builds natively as **arm64** (NEON+dotprod) on
+> an M-series Mac. The **CUDA image is NVIDIA-only**, and neither Docker Desktop
+> nor Apple's `container` tool can reach the Metal GPU (no IOMMU → no passthrough).
+> A Mac GPU is reachable from a container only via the **Vulkan image run under
+> Podman + libkrun (krunkit)** — pick Engine=Podman, Compute=GPU (Vulkan/Metal) in
+> the factory. The simplest alternative is to skip containers and run
+> `llama-server` natively with Metal (`-ngl 99`) against the same GGUF; it serves
+> the identical API on `:8080`.
 
 ---
 

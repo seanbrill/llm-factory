@@ -24,6 +24,20 @@ docker build -t "$NAME" -f Dockerfile.factory .
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 
+# Optional Podman engine: if a host Podman machine (macOS/Windows libkrun/QEMU) or
+# a native rootful Podman socket (Linux) is present, mount it so the factory's
+# "Podman" engine option works — this is the macOS GPU (Vulkan/Metal) path. No-op
+# when Podman isn't installed, so Docker-only users are unaffected.
+PODMAN_ARGS=()
+if command -v podman >/dev/null 2>&1; then
+    PSOCK="$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null | head -n1)"
+    if [ -z "${PSOCK:-}" ] && [ -S /run/podman/podman.sock ]; then PSOCK=/run/podman/podman.sock; fi
+    if [ -n "${PSOCK:-}" ] && [ -S "$PSOCK" ]; then
+        PODMAN_ARGS=(-v "$PSOCK:/run/podman/podman.sock" -e "CONTAINER_HOST=unix:///run/podman/podman.sock")
+        echo "Podman machine detected — enabling the Podman engine (socket: $PSOCK)"
+    fi
+fi
+
 echo "Starting factory container..."
 docker run -d --name "$NAME" \
     -p "$PORT:8799" \
@@ -33,6 +47,7 @@ docker run -d --name "$NAME" \
     -v "$PWD/images:/app/images" \
     -v "$PWD/config:/app/config" \
     --add-host host.docker.internal:host-gateway \
+    "${PODMAN_ARGS[@]}" \
     "$NAME"
 
 echo "local-llm factory is running at http://localhost:$PORT"
