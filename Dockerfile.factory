@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerizes the factory ITSELF so it runs on any machine that has Docker.
+#
+# The factory builds and runs *model* images by talking to the host's Docker
+# daemon (Docker-out-of-Docker): run it with the host docker socket mounted
+# (`-v /var/run/docker.sock:/var/run/docker.sock`). Use start.{ps1,sh}.
+#
+# At runtime the factory reads two things from disk (besides the embedded UI):
+#   docker/Dockerfile.{cpu,cuda}   and   cmd/llmgate/main.go
+# so both are copied into the image.
+
+# ----------------------------------------------------------------------------
+# Stage 1: compile the factory (static, stdlib-only -> runs on Alpine)
+# ----------------------------------------------------------------------------
+FROM golang:1.22-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" -o /factory ./cmd/builder
+
+# ----------------------------------------------------------------------------
+# Stage 2: docker CLI base (talks to the mounted host daemon)
+# ----------------------------------------------------------------------------
+FROM docker:27-cli
+WORKDIR /app
+
+COPY --from=build /factory      /usr/local/bin/factory
+COPY docker/                    /app/docker/
+COPY cmd/llmgate/               /app/cmd/llmgate/
+
+# host.docker.internal lets the in-UI "Test" reach model containers' published
+# ports on the host. (start.{ps1,sh} adds --add-host for Linux hosts.)
+ENV MODEL_HOST=host.docker.internal
+
+EXPOSE 8799
+ENTRYPOINT ["factory", "-dir", "/app", "-addr", "0.0.0.0:8799", "-open=false"]

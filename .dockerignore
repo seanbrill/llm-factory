@@ -1,0 +1,17 @@
+# Keep the factory build context small: the image only needs Go source +
+# docker/ + cmd/llmgate/. Weights, exported tars, and temp contexts are mounted
+# from the host at runtime, not baked into the factory image.
+.git
+.gitignore
+models/
+images/
+config/
+.build/
+*.gguf
+*.tar
+local-llm
+local-llm.exe
+*.log
+README.md
+docs/
+deploy/

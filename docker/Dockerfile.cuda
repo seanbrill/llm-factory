@@ -1,0 +1,76 @@
+# syntax=docker/dockerfile:1
+#
+# CUDA / NVIDIA-GPU image: compiles llama.cpp with the CUDA backend, bakes a
+# single GGUF (`model.gguf`) into the image, and fronts it with the `llmgate`
+# shim that injects the baked initialization prompt.
+#
+# Run it with GPU access:  docker run --gpus all -p 8080:8080 <image>
+# Requires on the host: NVIDIA driver + NVIDIA Container Toolkit (WSL2 on Win).
+#
+# CMAKE_CUDA_ARCHITECTURES covers Turing(75)/Ampere(80,86)/Ada(89). Add your
+# GPU's compute capability if it isn't listed (e.g. Hopper=90).
+
+# ----------------------------------------------------------------------------
+# Stage 1: compile llama-server against CUDA
+# ----------------------------------------------------------------------------
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
+ARG LLAMA_CPP_REF=master
+ARG CUDA_ARCHS=75;80;86;89
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/llama.cpp.git
+WORKDIR /src/llama.cpp
+RUN cmake -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DLLAMA_CURL=OFF \
+        -DGGML_NATIVE=OFF \
+        -DGGML_CUDA=ON \
+        -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" \
+    && cmake --build build --config Release -j "$(nproc)" --target llama-server
+
+# ----------------------------------------------------------------------------
+# Stage 2: compile the llmgate entrypoint shim (static, stdlib-only)
+# ----------------------------------------------------------------------------
+FROM golang:1.22-bookworm AS gate
+WORKDIR /src
+COPY gate/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /llmgate .
+
+# ----------------------------------------------------------------------------
+# Stage 3: CUDA runtime (provides libcudart/libcublas) + baked weights + prompt
+# ----------------------------------------------------------------------------
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS runtime
+ARG INJECT_MODE=missing
+ARG CTX_SIZE=8192
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 llama \
+    && mkdir -p /etc/llmgate
+
+COPY --from=builder /src/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+COPY --from=gate    /llmgate                              /usr/local/bin/llmgate
+COPY model.gguf         /models/model.gguf
+COPY system_prompt.txt  /etc/llmgate/system_prompt.txt
+
+# NGL = layers offloaded to GPU (99 = all). CTX can go higher on GPU.
+ENV MODEL_PATH=/models/model.gguf \
+    PORT=8080 \
+    UPSTREAM_PORT=8081 \
+    CTX_SIZE=${CTX_SIZE} \
+    THREADS=4 \
+    PARALLEL=1 \
+    NGL=99 \
+    SYSTEM_PROMPT_FILE=/etc/llmgate/system_prompt.txt \
+    INJECT_MODE=${INJECT_MODE}
+
+EXPOSE 8080
+USER llama
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=5 \
+    CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
+
+ENTRYPOINT ["/usr/local/bin/llmgate"]

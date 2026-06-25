@@ -1,0 +1,19 @@
+# Downloaded GGUF weights and exported image tarballs — large, regenerable.
+/models/*
+!/models/.gitkeep
+/images/*
+!/images/.gitkeep
+
+# Temp docker build contexts.
+/.build/
+
+# Built tool binary.
+/local-llm
+/local-llm.exe
+
+# User-edited catalog is generated on first run from the embedded default.
+/config/models.json
+# Runtime build-duration stats (used for the build ETA).
+/config/build-stats.json
+# Generated reverse-proxy config.
+/config/Caddyfile

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>local-llm factory</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>local&#8209;llm factory</h1>
+    <p class="sub">Configure a model, build a self&#8209;contained image, export it, run it, and test it.</p>
+  </header>
+
+  <main>
+    <!-- 1. Build -->
+    <section class="card">
+      <h2>1 &middot; Build an image</h2>
+      <div class="grid">
+        <label>Model
+          <select id="model"></select>
+        </label>
+        <label>Compute
+          <select id="compute">
+            <option value="cpu">CPU (portable)</option>
+            <option value="cuda">NVIDIA GPU (CUDA)</option>
+          </select>
+        </label>
+        <label>Image name
+          <input id="imageName" type="text" placeholder="myorg/qwen-analyzer" />
+        </label>
+        <label>Tag
+          <input id="tag" type="text" value="latest" />
+        </label>
+      </div>
+      <p id="modelHint" class="hint"></p>
+      <label>Initialization prompt (optional) &mdash; baked in to specialize the model's startup behavior
+        <textarea id="systemPrompt" rows="3" placeholder="You are FinBot, a terse financial-data analyst. Always answer with strict JSON."></textarea>
+      </label>
+      <label>When to apply it
+        <select id="injectMode">
+          <option value="missing">Default &mdash; use it only if the client sends no system message</option>
+          <option value="always">Always &mdash; enforce it, overriding any client system message</option>
+        </select>
+      </label>
+
+      <h3 class="subhead">Resources &amp; deploy</h3>
+      <div class="grid">
+        <label>Context window (tokens)
+          <input id="ctxSize" type="number" min="512" step="512" placeholder="4096" />
+        </label>
+        <label>Memory limit (GB, 0 = unlimited)
+          <input id="memoryGb" type="number" min="0" step="0.5" value="0" />
+        </label>
+        <label>Local URL (optional)
+          <input id="route" type="text" placeholder="ai" />
+        </label>
+        <label class="check">
+          <input id="autostart" type="checkbox" />
+          <span>Start on desktop start</span>
+        </label>
+      </div>
+      <p id="routeHint" class="hint"></p>
+
+      <button id="buildBtn" class="primary">Build &amp; export .tar</button>
+
+      <div id="buildProgress" class="progress" hidden>
+        <div class="bar"><div id="buildBar" class="fill"></div></div>
+        <div class="row-between">
+          <span id="buildStatus" class="status">Starting&hellip;</span>
+          <button id="logToggle" class="ghost">Show log</button>
+        </div>
+      </div>
+      <pre id="buildLog" class="log" hidden></pre>
+    </section>
+
+    <!-- 2. Images -->
+    <section class="card">
+      <div class="row-between">
+        <h2>2 &middot; Built images</h2>
+        <button id="refreshImages" class="ghost">Refresh</button>
+      </div>
+      <p class="hint">Tip: click an image name to load its settings (model, compute, init prompt) into the build form above as a template.</p>
+      <table id="imagesTable">
+        <thead><tr><th>Image</th><th>Tag</th><th>Compute</th><th>Size</th><th>Status</th><th>Run on port</th><th>Actions</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- 3. Running containers -->
+    <section class="card">
+      <div class="row-between">
+        <h2>3 &middot; Containers</h2>
+        <button id="refreshContainers" class="ghost">Refresh</button>
+      </div>
+      <table id="containersTable">
+        <thead><tr><th>Name</th><th>Image</th><th>Status</th><th>Ports</th><th>Actions</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- 4. Downloaded models -->
+    <section class="card">
+      <div class="row-between">
+        <h2>4 &middot; Downloaded model files</h2>
+        <button id="refreshModels" class="ghost">Refresh</button>
+      </div>
+      <table id="modelsTable">
+        <thead><tr><th>Model</th><th>File</th><th>Size on disk</th><th>Actions</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- 5. Test -->
+    <section class="card">
+      <h2>5 &middot; Test a running model</h2>
+      <div class="grid">
+        <label>Port
+          <input id="chatPort" type="number" value="8080" />
+        </label>
+        <label>System prompt (optional)
+          <input id="chatSystem" type="text" placeholder="You are a helpful assistant." />
+        </label>
+      </div>
+      <label>Prompt
+        <textarea id="chatPrompt" rows="3" placeholder="Summarize: AAPL beat earnings by 12%..."></textarea>
+      </label>
+      <button id="chatBtn" class="primary">Send</button>
+      <pre id="chatOut" class="log" hidden></pre>
+    </section>
+  </main>
+
+  <footer>Local LLM image factory &middot; weights in <code>./models</code> &middot; tarballs in <code>./images</code></footer>
+  <script src="app.js"></script>
+</body>
+</html>

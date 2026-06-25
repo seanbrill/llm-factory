@@ -1,0 +1,61 @@
+{
+  "family": "qwen-llm-cpu",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+
+  "cpu": "2048",
+  "memory": "4096",
+
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/qwenLlmTaskRole",
+
+  "containerDefinitions": [
+    {
+      "name": "qwen-llm",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/qwen-llm-cpu:latest",
+      "essential": true,
+
+      "portMappings": [
+        {
+          "name": "llm-http",
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ],
+
+      "environment": [
+        { "name": "PORT", "value": "8080" },
+        { "name": "CTX_SIZE", "value": "4096" },
+        { "name": "THREADS", "value": "2" },
+        { "name": "PARALLEL", "value": "1" },
+        { "name": "MODEL_PATH", "value": "/models/model.gguf" }
+      ],
+
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 5,
+        "startPeriod": 120
+      },
+
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/qwen-llm-cpu",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "qwen",
+          "awslogs-create-group": "true"
+        }
+      },
+
+      "stopTimeout": 30
+    }
+  ]
+}

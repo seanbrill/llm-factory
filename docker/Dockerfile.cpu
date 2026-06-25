@@ -1,0 +1,71 @@
+# syntax=docker/dockerfile:1
+#
+# CPU image: compiles llama.cpp with portable x86-64 SIMD (AVX2/FMA/F16C), bakes
+# a single GGUF (provided in the build context as `model.gguf`) into the image,
+# and fronts it with the `llmgate` shim that injects the baked initialization
+# prompt. The Go builder stages model.gguf, system_prompt.txt, and gate/ into a
+# tiny temp build context.
+
+# ----------------------------------------------------------------------------
+# Stage 1: compile llama-server (static; no shared-lib sprawl in runtime)
+# ----------------------------------------------------------------------------
+FROM debian:bookworm-slim AS builder
+ARG LLAMA_CPP_REF=master
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/llama.cpp.git
+WORKDIR /src/llama.cpp
+RUN cmake -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DLLAMA_CURL=OFF \
+        -DGGML_NATIVE=OFF \
+        -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON \
+    && cmake --build build --config Release -j "$(nproc)" --target llama-server
+
+# ----------------------------------------------------------------------------
+# Stage 2: compile the llmgate entrypoint shim (static, stdlib-only)
+# ----------------------------------------------------------------------------
+FROM golang:1.22-bookworm AS gate
+WORKDIR /src
+COPY gate/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /llmgate .
+
+# ----------------------------------------------------------------------------
+# Stage 3: slim runtime with weights + prompt baked in
+# ----------------------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
+ARG INJECT_MODE=missing
+ARG CTX_SIZE=4096
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 llama \
+    && mkdir -p /etc/llmgate
+
+COPY --from=builder /src/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+COPY --from=gate    /llmgate                              /usr/local/bin/llmgate
+COPY model.gguf         /models/model.gguf
+COPY system_prompt.txt  /etc/llmgate/system_prompt.txt
+
+# Tunables (override per `docker run -e ...`). THREADS should match host vCPUs.
+# PORT is public (llmgate); UPSTREAM_PORT is llama-server, internal only.
+ENV MODEL_PATH=/models/model.gguf \
+    PORT=8080 \
+    UPSTREAM_PORT=8081 \
+    CTX_SIZE=${CTX_SIZE} \
+    THREADS=4 \
+    PARALLEL=1 \
+    NGL=0 \
+    SYSTEM_PROMPT_FILE=/etc/llmgate/system_prompt.txt \
+    INJECT_MODE=${INJECT_MODE}
+
+EXPOSE 8080
+USER llama
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=5 \
+    CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
+
+ENTRYPOINT ["/usr/local/bin/llmgate"]

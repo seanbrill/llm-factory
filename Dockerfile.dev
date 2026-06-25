@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+#
+# DEV image for the factory with independent hot-reload:
+#   • Backend: `wgo` watches *.go and rebuilds/restarts the server on change.
+#   • UI:      served from the bind-mounted ./internal/server/web via -web,
+#              so editing web/* just needs a browser refresh (no rebuild).
+#
+# The whole repo is bind-mounted at /app (see start-dev.{ps1,sh}), so edits on
+# the host are seen instantly inside the container. Uses Docker-out-of-Docker
+# like the prod image (host docker socket mounted).
+
+# Go 1.24+ required by the wgo live-reload tool (the project itself targets 1.22).
+FROM golang:1.24-bookworm
+
+# docker CLI (talks to the mounted host daemon) — copied from the official image.
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
+
+# wgo: a tiny live-reload runner. We restrict it to .go files so UI edits never
+# restart the backend (that's the "separate" part).
+RUN go install github.com/bokwoon95/wgo@latest
+
+ENV PATH="/go/bin:${PATH}" \
+    MODEL_HOST=host.docker.internal
+
+WORKDIR /app
+EXPOSE 8799
+
+# Watch only *.go (so UI edits don't restart the backend); skip the big/noisy
+# dirs. -poll is REQUIRED here: inotify events don't cross Docker Desktop bind
+# mounts (Windows/macOS), so wgo must stat-poll to see host edits. Generic wgo
+# form: `wgo [flags] <command>` — the command is the whole `go run …` line.
+# Serve the UI from disk (-web); -dir /app keeps models/images/config mounted.
+CMD ["wgo", "-poll=700ms", "-xdir=models|images|\\.build|\\.git|config", "-file=\\.go$", \
+     "go", "run", "./cmd/builder", \
+     "-dir", "/app", "-addr", "0.0.0.0:8799", "-open=false", \
+     "-web", "/app/internal/server/web"]
