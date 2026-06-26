@@ -13,139 +13,341 @@ async function api(path, opts) {
   return data;
 }
 
-// ---- Catalog / build form -------------------------------------------------
-
-async function loadCatalog() {
-  CATALOG = await api("/api/catalog");
-  await loadSysInfo();
-  renderModalityFilter();   // capability filter chips
-  populateModelSelect();    // fills #model (respecting the filter) + updateHint()
-}
-
-function selectedModel() {
-  return CATALOG.find((m) => m.id === $("model").value);
-}
-
-// UI-side model guidance (no backend involvement). `context` is the model's
-// native window; the image actually serves at CTX_SIZE (default 4096 CPU /
-// 8192 GPU). Ratings are rough 1–5 guidance relative to these local models.
-// Edit freely — UI only, hot-reloads in dev mode.
-const MODEL_INFO = {
-  "llama-3.2-1b":   { context: "128K",              ratings: { Coding: 2, Math: 2, Reasoning: 2, Science: 2, Writing: 3, Multilingual: 3 } },
-  "qwen2.5-1.5b":   { context: "32K",               ratings: { Coding: 3, Math: 3, Reasoning: 3, Science: 2, Writing: 3, Multilingual: 4 } },
-  "qwen2.5-3b":     { context: "32K",               ratings: { Coding: 4, Math: 4, Reasoning: 3, Science: 3, Writing: 3, Multilingual: 4 } },
-  "llama-3.2-3b":   { context: "128K",              ratings: { Coding: 3, Math: 3, Reasoning: 3, Science: 3, Writing: 4, Multilingual: 3 } },
-  "phi-3.5-mini":   { context: "128K",              ratings: { Coding: 4, Math: 4, Reasoning: 4, Science: 3, Writing: 3, Multilingual: 3 } },
-  "mistral-7b-v0.3":{ context: "32K",               ratings: { Coding: 3, Math: 3, Reasoning: 4, Science: 4, Writing: 4, Multilingual: 3 } },
-  "qwen2.5-7b":     { context: "32K (128K w/ YaRN)", ratings: { Coding: 4, Math: 5, Reasoning: 4, Science: 4, Writing: 4, Multilingual: 5 } },
-  "llama-3.1-8b":   { context: "128K",              ratings: { Coding: 4, Math: 4, Reasoning: 4, Science: 4, Writing: 4, Multilingual: 4 } },
-  "qwen2.5-14b":    { context: "32K (128K w/ YaRN)", ratings: { Coding: 5, Math: 5, Reasoning: 5, Science: 5, Writing: 4, Multilingual: 5 } },
-};
-
-function stars(n) {
-  n = Math.max(0, Math.min(5, n | 0));
-  return "★".repeat(n) + "☆".repeat(5 - n);
-}
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
-function ratingsHtml(r) {
-  return Object.entries(r)
-    .map(([cat, n]) => `<span class="rate"><span class="cat">${cat}</span><span class="stars">${stars(n)}</span></span>`)
-    .join("");
+
+// ---- Inline SVG icon set (professional line icons, dependency-free) --------
+// 24×24 viewBox, drawn in currentColor. `icon(name)` wraps a path; size/colour
+// come from CSS (.ico). Keep names stable — referenced by MODALITY and CAT_ICON.
+const ICONS = {
+  chevron:   '<polyline points="6 9 12 15 18 9"/>',
+  search:    '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  sliders:   '<path d="M4 21v-6M4 11V3M12 21v-9M12 7V3M20 21v-5M20 11V3M1 15h6M9 7h6M17 15h6"/>',
+  star:      '<polygon points="12 2 15 9 22 9 17 14 19 21 12 17 5 21 7 14 2 9 9 9"/>',
+  cpu:       '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M19 9h3M19 14h3M2 9h3M2 14h3"/>',
+  gpu:       '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="8" cy="12" r="2.4"/><circle cx="15.5" cy="12" r="2.4"/><path d="M5 18v3"/>',
+  // modalities
+  chat:      '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  code:      '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  idea:      '<path d="M9 18h6M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2z"/>',
+  eye:       '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
+  hash:      '<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/>',
+  image:     '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.8"/><path d="m21 15-5-5L5 21"/>',
+  mic:       '<rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 18v4"/>',
+  speaker:   '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14"/>',
+  // capability categories
+  sigma:     '<path d="M18 7V4H6l6 8-6 8h12v-3"/>',
+  book:      '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/>',
+  pen:       '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  list:      '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  globe:     '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20z"/>',
+  scan:      '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/>',
+  zap:       '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
+  gauge:     '<path d="M12 14l4-4"/><path d="M3.5 19a10 10 0 1 1 17 0"/>',
+  target:    '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4"/>',
+  shield:    '<path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6z"/>',
+  shapes:    '<path d="M12 2 2 8l10 6 10-6z"/><path d="M2 16l10 6 10-6"/>',
+  wave:      '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+};
+function icon(name, cls) {
+  const p = ICONS[name];
+  if (!p) return "";
+  return `<svg class="ico${cls ? " " + cls : ""}" viewBox="0 0 24 24" width="16" height="16" fill="none" ` +
+    `stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
 }
 
-function updateHint() {
-  const m = selectedModel();
-  if (!m) return;
-  const info = MODEL_INFO[m.id] || {};
-  const vram = m.min_vram_gb > 0 ? `, ~${m.min_vram_gb} GB VRAM on GPU` : "";
-  const ctx = info.context ? ` · context ${info.context}` : "";
+// ---- Modality + capability-category metadata ------------------------------
+// Keep modality keys in sync with the catalog "modality" field.
+const MODALITY = {
+  text:        { icon: "chat",    label: "Chat" },
+  code:        { icon: "code",    label: "Code" },
+  reasoning:   { icon: "idea",    label: "Reasoning" },
+  vision:      { icon: "eye",     label: "Vision" },
+  embedding:   { icon: "hash",    label: "Embeddings" },
+  image:       { icon: "image",   label: "Image gen" },
+  "audio-stt": { icon: "mic",     label: "Speech→Text" },
+  tts:         { icon: "speaker", label: "Text→Speech" },
+};
+const MOD_ORDER = ["text", "code", "reasoning", "vision", "embedding", "image", "audio-stt", "tts"];
+function modOf(m) { return (m && m.modality) || "text"; }
+function modMeta(k) { return MODALITY[k] || MODALITY.text; }
+function modalityBadge(k) { const x = modMeta(k); return `<span class="badge mod mod-${k}">${icon(x.icon)} ${x.label}</span>`; }
 
-  let html = `<div class="hint-badges">${modalityBadge(modOf(m))} ${fitHint(m)}</div>` +
-             `<span class="hint-spec">${escapeHtml(m.params)} · ~${m.min_ram_gb} GB RAM${vram}${ctx}</span>` +
-             `<br>${escapeHtml(m.description)}`;
-  if (info.ratings) html += `<div class="ratings">${ratingsHtml(info.ratings)}</div>`;
-  html += `<div class="ctxnote">Ratings are rough guidance. Native context shown; the image serves at CTX_SIZE ` +
-          `(default 4096 CPU / 8192 GPU — raise via env to use more of the window).</div>`;
+// The capability dimensions shown as progress bars, per modality (mirrors the
+// rating workflow). LLM-like modalities share one set so they're comparable.
+const DIMS = {
+  llm:         ["Reasoning", "Coding", "Math", "Knowledge", "Writing", "Instruction", "Multilingual"],
+  vision:      ["Reasoning", "Vision", "OCR", "Knowledge", "Writing", "Multilingual"],
+  embedding:   ["Retrieval", "Multilingual", "Efficiency"],
+  image:       ["Image quality", "Prompt adherence", "Speed", "Versatility"],
+  "audio-stt": ["Accuracy", "Multilingual", "Speed", "Robustness"],
+  tts:         ["Voice quality", "Naturalness", "Speed", "Languages"],
+};
+const DIM_SET = { text: "llm", code: "llm", reasoning: "llm", vision: "vision", embedding: "embedding", image: "image", "audio-stt": "audio-stt", tts: "tts" };
+function dimsFor(mod) { return DIMS[DIM_SET[mod] || "llm"]; }
+const CAT_ICON = {
+  Reasoning: "idea", Coding: "code", Math: "sigma", Knowledge: "book", Writing: "pen",
+  Instruction: "list", Multilingual: "globe", Vision: "eye", OCR: "scan",
+  Retrieval: "search", Efficiency: "zap",
+  "Image quality": "image", "Prompt adherence": "target", Speed: "gauge", Versatility: "shapes",
+  Accuracy: "target", Robustness: "shield", "Voice quality": "speaker", Naturalness: "wave", Languages: "globe",
+};
 
-  $("modelHint").innerHTML = html;
-  const imgInput = $("imageName");
-  if (!imgInput.dataset.touched) imgInput.value = "local-llm/" + m.id;
-}
+// Native context window per family (prefix match, longest first). Display-only;
+// the image actually serves at CTX_SIZE (default 4096 CPU / 8192 GPU).
+const CONTEXT = [
+  ["qwen3-coder", "256K"], ["qwen3-embedding", "32K"], ["qwen3", "32K–128K"],
+  ["qwen2.5-coder", "32K–128K"], ["qwen2.5-vl", "32K–128K"], ["qwen2.5", "32K–128K"],
+  ["gemma-3", "128K"], ["llama-3.2", "128K"], ["llama-3.1", "128K"],
+  ["mistral-small", "128K"], ["mistral-7b", "32K"], ["phi-3.5", "128K"],
+  ["deepseek-r1", "128K"], ["qwq", "32K–128K"], ["nomic-embed", "8K"], ["bge-large", "512"],
+];
+function contextFor(id) { const f = CONTEXT.find(([p]) => id.startsWith(p)); return f ? f[1] : ""; }
 
-// ---- Resources & deploy helpers -------------------------------------------
-
-function ctxDefaultFor(compute) { return (compute === "cuda" || compute === "vulkan") ? 8192 : 4096; }
-
-// Human labels for the compute target and engine, shown in the images/containers
-// tables. Keep in sync with the build-form <option> values.
+// Human labels for the compute target and engine, shown in the images table.
 const COMPUTE_BADGE = { cpu: "CPU", cuda: "GPU (CUDA)", vulkan: "GPU (Vulkan)" };
 function computeBadge(c) { return COMPUTE_BADGE[c] || "CPU"; }
 function engineBadge(e) { return e === "podman" ? "Podman" : "Docker"; }
+function ctxDefaultFor(compute) { return (compute === "cuda" || compute === "vulkan") ? 8192 : 4096; }
 
-// Modality → icon + label. Emoji keeps capability badges dependency-free; keep
-// keys in sync with the catalog "modality" values.
-const MODALITY = {
-  text:        { icon: "💬", label: "Chat" },
-  code:        { icon: "💻", label: "Code" },
-  reasoning:   { icon: "🧠", label: "Reasoning" },
-  vision:      { icon: "👁", label: "Vision" },
-  embedding:   { icon: "🔢", label: "Embeddings" },
-  image:       { icon: "🎨", label: "Image gen" },
-  "audio-stt": { icon: "🎙", label: "Speech→Text" },
-  tts:         { icon: "🔊", label: "Text→Speech" },
-};
-function modOf(m) { return (m && m.modality) || "text"; }
-function modMeta(k) { return MODALITY[k] || MODALITY.text; }
-function modalityBadge(k) { const x = modMeta(k); return `<span class="badge mod mod-${k}">${x.icon} ${x.label}</span>`; }
+// ---- Per-model capability data (from model-meta.js) -----------------------
+let META = {};          // id -> { strengths, summary, weakness, ratings }
+let TAG_LIST = [];       // controlled strength vocabulary actually used
+function loadMeta() {
+  const d = window.MODEL_META;
+  if (!d || !d.models) return;
+  for (const x of d.models) META[x.id] = x;
+  TAG_LIST = d.tagList || [];
+}
 
-// System resources of the engine machine the model will actually run in, for the
-// "fits your system" hints. Fetched once; failure is non-fatal (hints just hide).
+// ---- System info + hardware performance estimator -------------------------
+// SYSINFO = the engine machine the model actually runs in (RAM/CPU/GPU). Used
+// to rate, per model, how well THIS machine would run it on CPU vs GPU.
 let SYSINFO = null;
 async function loadSysInfo() { try { SYSINFO = await api("/api/sysinfo"); } catch { SYSINFO = null; } }
-function fitHint(m) {
-  if (!SYSINFO || !SYSINFO.mem_gb) return "";
-  const need = m.min_ram_gb || 0, have = SYSINFO.mem_gb;
-  let cls, txt;
-  if (need <= have - 2)  { cls = "ok";   txt = `✓ fits your ${have.toFixed(0)} GB`; }
-  else if (need <= have) { cls = "warn"; txt = `△ tight on ${have.toFixed(0)} GB`; }
-  else                   { cls = "bad";  txt = `✕ needs ~${need} GB (you have ${have.toFixed(0)})`; }
-  let gpu = "";
-  if (modOf(m) === "image" || m.min_vram_gb > 0)
-    gpu = SYSINFO.gpu ? ` · GPU-ready (${SYSINFO.gpu})` : " · CPU only (no GPU)";
-  return `<span class="fit fit-${cls}">${txt}${gpu}</span>`;
+function sysSummary() {
+  if (!SYSINFO || !SYSINFO.mem_gb) return "current";
+  return `${SYSINFO.mem_gb.toFixed(0)} GB${SYSINFO.gpu ? " · " + SYSINFO.gpu + " GPU" : " · no GPU"}`;
 }
 
-// Capability filter for the model picker.
-let MODALITY_FILTER = "all";
-function renderModalityFilter() {
-  const order = ["all", "text", "code", "reasoning", "vision", "embedding", "image", "audio-stt", "tts"];
-  const present = ["all", ...new Set(CATALOG.map(modOf))].sort((a, b) => order.indexOf(a) - order.indexOf(b));
-  const el = $("modalityFilter");
-  el.innerHTML = present.map((k) => {
-    const label = k === "all" ? "All" : `${modMeta(k).icon} ${modMeta(k).label}`;
-    const n = k === "all" ? CATALOG.length : CATALOG.filter((m) => modOf(m) === k).length;
-    return `<button type="button" class="chip${k === MODALITY_FILTER ? " active" : ""}" data-mod="${k}">${label} <span class="chip-n">${n}</span></button>`;
+// Six performance levels (+ N/A), worst → best. The estimator returns one of
+// these keys for CPU and for GPU; CSS maps each to a colour.
+const PERF = {
+  excellent:  { label: "Excellent" },
+  good:       { label: "Good" },
+  fair:       { label: "Fair" },
+  warning:    { label: "Warning" },
+  poor:       { label: "Poor" },
+  impossible: { label: "Won't run" },
+  na:         { label: "N/A" },
+};
+const RANKS = ["impossible", "poor", "warning", "fair", "good", "excellent"];
+const lvl = (rank) => RANKS[Math.max(0, Math.min(5, rank))];
+const worse = (a, b) => (RANKS.indexOf(a) <= RANKS.indexOf(b) ? a : b);
+
+// Cap a base level by whether the model fits `capacity` GB, with a headroom
+// penalty so a barely-fitting model never reads "excellent".
+function capByFit(level, need, capacity) {
+  if (!capacity || !need) return level;
+  if (need > capacity + 0.01) return "impossible";
+  const head = capacity - need;
+  if (head < 1.5) return worse(level, "warning");
+  if (head < 3)   return worse(level, "fair");
+  return level;
+}
+
+// Estimate CPU and GPU performance for this model on this machine. Heuristic:
+// modality + size set a base "speed" tier; RAM/VRAM fit then caps it (and marks
+// it impossible if it can't load). Unified-memory Macs use system RAM as the
+// GPU pool, so we cap GPU by total RAM too.
+function hwPerf(m) {
+  const mod = modOf(m), gb = m.size_gb || 0;
+  const cap = (SYSINFO && SYSINFO.mem_gb) || 0;
+  const hasGPU = !!(SYSINFO && SYSINFO.gpu);
+
+  let cpu;
+  if (mod === "tts" || mod === "embedding") cpu = "excellent";          // tiny, CPU-native
+  else if (mod === "audio-stt") cpu = gb > 1 ? "good" : "excellent";    // whisper is CPU-friendly
+  else if (mod === "image") cpu = gb > 3 ? "poor" : "warning";          // diffusion on CPU is very slow
+  else {                                                                // llm / code / reasoning / vision
+    cpu = gb <= 1.5 ? "excellent" : gb <= 3 ? "good" : gb <= 6 ? "fair" : gb <= 10 ? "warning" : "poor";
+    if (mod === "reasoning") cpu = lvl(Math.max(1, RANKS.indexOf(cpu) - 1)); // verbose CoT → slower
+    if (mod === "vision")    cpu = lvl(Math.max(1, RANKS.indexOf(cpu) - 1)); // image encode adds cost
+  }
+  cpu = capByFit(cpu, m.min_ram_gb || gb, cap);
+
+  let gpu;
+  if (mod === "tts") gpu = "na";                                        // Piper has no GPU path
+  else if (!hasGPU) gpu = "na";                                         // no GPU configured here
+  else {
+    gpu = mod === "image" ? (gb > 6 ? "good" : "excellent") : "excellent"; // ggml on GPU is fast
+    gpu = capByFit(gpu, m.min_vram_gb || gb, cap);
+  }
+  return { cpu, gpu };
+}
+function perfChip(kind, level) {
+  const lab = (PERF[level] || PERF.na).label;
+  const name = kind === "gpu" ? "GPU" : "CPU";
+  return `<span class="perf perf-${level}" title="${name} performance on your system: ${lab}">` +
+    `${icon(kind)} <span class="perf-name">${name}</span> ${lab}</span>`;
+}
+function perfMini(m) {
+  const h = hwPerf(m);
+  return `<span class="perf-mini perf-${h.cpu}" title="CPU: ${(PERF[h.cpu] || PERF.na).label}">${icon("cpu")}</span>` +
+    `<span class="perf-mini perf-${h.gpu}" title="GPU: ${(PERF[h.gpu] || PERF.na).label}">${icon("gpu")}</span>`;
+}
+
+// ---- Catalog load + custom model picker (combobox) ------------------------
+
+async function loadCatalog() {
+  CATALOG = await api("/api/catalog");
+  loadMeta();
+  await loadSysInfo();
+  $("modelSearch").placeholder = `Search ${CATALOG.length} models…`;
+  buildFilters();
+  renderList();
+  selectDefault();
+}
+function selectedModel() { return SELECTED; }
+
+let SELECTED = null;
+let FILTER = { q: "", mods: new Set(), strengths: new Set(), maxSize: Infinity };
+
+// Build the filter controls inside the picker panel (modality checkboxes,
+// key-strength chips, size slider). Re-run on each toggle to refresh "on" state.
+function buildFilters() {
+  const mods = [...new Set(CATALOG.map(modOf))].sort((a, b) => MOD_ORDER.indexOf(a) - MOD_ORDER.indexOf(b));
+  $("filterModalities").innerHTML = mods.map((k) => {
+    const n = CATALOG.filter((m) => modOf(m) === k).length;
+    const on = FILTER.mods.has(k);
+    return `<button type="button" class="fchip${on ? " on" : ""}" data-mod="${k}">${icon(modMeta(k).icon)} ${modMeta(k).label} <span class="fn">${n}</span></button>`;
   }).join("");
-  el.querySelectorAll(".chip").forEach((c) => c.onclick = () => {
-    MODALITY_FILTER = c.dataset.mod; renderModalityFilter(); populateModelSelect();
+  $("filterModalities").querySelectorAll(".fchip").forEach((b) => b.onclick = () => {
+    const k = b.dataset.mod; FILTER.mods.has(k) ? FILTER.mods.delete(k) : FILTER.mods.add(k);
+    buildFilters(); renderList();
+  });
+
+  const grp = $("filterStrengths").closest(".filter-group");
+  if (!TAG_LIST.length) { if (grp) grp.hidden = true; }
+  else {
+    if (grp) grp.hidden = false;
+    $("filterStrengths").innerHTML = TAG_LIST.map((t) => {
+      const on = FILTER.strengths.has(t);
+      return `<button type="button" class="fchip sm${on ? " on" : ""}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`;
+    }).join("");
+    $("filterStrengths").querySelectorAll(".fchip").forEach((b) => b.onclick = () => {
+      const t = b.dataset.tag; FILTER.strengths.has(t) ? FILTER.strengths.delete(t) : FILTER.strengths.add(t);
+      buildFilters(); renderList();
+    });
+  }
+  $("sizeVal").textContent = FILTER.maxSize === Infinity ? "any" : `≤ ${FILTER.maxSize} GB`;
+}
+
+// Apply the active filters. Modality = OR within selected; strengths = OR;
+// size = max; search = substring over name/id/description/strengths.
+function filteredModels() {
+  const q = FILTER.q.toLowerCase().trim();
+  return CATALOG.filter((m) => {
+    if (FILTER.mods.size && !FILTER.mods.has(modOf(m))) return false;
+    if (FILTER.maxSize !== Infinity && (m.size_gb || 0) > FILTER.maxSize) return false;
+    const tags = (META[m.id] && META[m.id].strengths) || [];
+    if (FILTER.strengths.size && !tags.some((t) => FILTER.strengths.has(t))) return false;
+    if (q) {
+      const hay = `${m.name} ${m.id} ${m.description || ""} ${tags.join(" ")}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
   });
 }
-function populateModelSelect() {
-  const sel = $("model"), prev = sel.value;
-  sel.innerHTML = "";
-  const list = CATALOG.filter((m) => MODALITY_FILTER === "all" || modOf(m) === MODALITY_FILTER);
-  for (const m of list) {
-    const opt = document.createElement("option");
-    opt.value = m.id;
-    opt.textContent = `${modMeta(modOf(m)).icon} ${m.name} — ${m.size_gb} GB · ${modMeta(modOf(m)).label}${m.recommended ? "  ★" : ""}`;
-    sel.appendChild(opt);
-  }
-  if (list.some((m) => m.id === prev)) sel.value = prev;
-  else { const r = list.find((m) => m.recommended) || list[0]; if (r) sel.value = r.id; }
-  updateHint();
+function renderList() {
+  const list = filteredModels();
+  $("modelCount").textContent = `${list.length} of ${CATALOG.length}`;
+  if (!list.length) { $("modelList").innerHTML = `<li class="combo-empty">No models match these filters.</li>`; return; }
+  $("modelList").innerHTML = list.map((m) => {
+    const sel = SELECTED && SELECTED.id === m.id;
+    const tags = (((META[m.id] && META[m.id].strengths) || []).slice(0, 3))
+      .map((t) => `<span class="tag xs">${escapeHtml(t)}</span>`).join("");
+    return `<li class="combo-opt${sel ? " sel" : ""}" role="option" aria-selected="${sel}" data-id="${m.id}">
+      <span class="opt-ic mod-${modOf(m)}">${icon(modMeta(modOf(m)).icon)}</span>
+      <span class="opt-main">
+        <span class="opt-name">${escapeHtml(m.name)}${m.recommended ? ` ${icon("star", "star-rec")}` : ""}</span>
+        <span class="opt-tags">${tags}</span>
+      </span>
+      <span class="opt-size">${m.size_gb} GB</span>
+      <span class="opt-perf">${perfMini(m)}</span>
+    </li>`;
+  }).join("");
+  $("modelList").querySelectorAll(".combo-opt").forEach((li) =>
+    li.onclick = () => { setModel(li.dataset.id); closePanel(); });
 }
+function openPanel() { $("modelPanel").hidden = false; $("modelPicker").classList.add("open"); $("modelTrigger").setAttribute("aria-expanded", "true"); $("modelSearch").focus(); }
+function closePanel() { $("modelPanel").hidden = true; $("modelPicker").classList.remove("open"); $("modelTrigger").setAttribute("aria-expanded", "false"); }
+function togglePanel() { $("modelPanel").hidden ? openPanel() : closePanel(); }
+
+function triggerHtml(m) {
+  return `<span class="trig-ic mod-${modOf(m)}">${icon(modMeta(modOf(m)).icon)}</span>` +
+    `<span class="trig-main"><span class="trig-name">${escapeHtml(m.name)}</span>` +
+    `<span class="trig-sub">${escapeHtml(m.params)} · ${m.size_gb} GB · ${modMeta(modOf(m)).label}</span></span>` +
+    `<span class="trig-perf">${perfMini(m)}</span>${icon("chevron", "caret")}`;
+}
+function setModel(id) {
+  const m = CATALOG.find((x) => x.id === id);
+  if (!m) return;
+  SELECTED = m;
+  $("model").value = id;                         // hidden input keeps build()/template flows working
+  $("modelTrigger").innerHTML = triggerHtml(m);
+  renderDetail(m);
+  $("modelList").querySelectorAll(".combo-opt").forEach((li) => {
+    const on = li.dataset.id === id;
+    li.classList.toggle("sel", on); li.setAttribute("aria-selected", on);
+  });
+}
+function selectDefault() {
+  if (SELECTED && CATALOG.some((m) => m.id === SELECTED.id)) { setModel(SELECTED.id); return; }
+  const r = CATALOG.find((m) => m.recommended) || CATALOG[0];
+  if (r) setModel(r.id);
+}
+
+// One capability progress bar (0–100), coloured by tier, with its category icon.
+function capBar(label, val) {
+  const v = Math.max(0, Math.min(100, val || 0));
+  const tier = v >= 80 ? "b-hi" : v >= 55 ? "b-mid" : v >= 35 ? "b-lo" : "b-min";
+  const ic = CAT_ICON[label] ? icon(CAT_ICON[label]) : "";
+  return `<div class="cap-row"><span class="cap-label">${ic}<span>${escapeHtml(label)}</span></span>` +
+    `<span class="cap-track"><span class="cap-fill ${tier}" style="width:${v}%"></span></span>` +
+    `<span class="cap-val">${v}</span></div>`;
+}
+
+// The rich detail card shown under the picker for the selected model.
+function renderDetail(m) {
+  if (!m) { $("modelHint").innerHTML = ""; return; }
+  const mod = modOf(m), meta = META[m.id] || {};
+  const vram = m.min_vram_gb > 0 ? ` · ~${m.min_vram_gb} GB VRAM` : "";
+  const ctx = contextFor(m.id);
+  const bars = meta.ratings
+    ? dimsFor(mod).filter((d) => d in meta.ratings).map((d) => capBar(d, meta.ratings[d])).join("")
+    : `<div class="cap-empty">Capability ratings unavailable for this model.</div>`;
+  const tags = (meta.strengths || []).map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join("");
+  const rec = m.recommended ? `<span class="badge rec">${icon("star")} Recommended</span>` : "";
+
+  $("modelHint").innerHTML =
+    `<div class="md-head">${modalityBadge(mod)} ${rec}` +
+      `<span class="md-perf">${perfChip("cpu", hwPerf(m).cpu)} ${perfChip("gpu", hwPerf(m).gpu)}</span></div>` +
+    `<div class="md-spec">${escapeHtml(m.params)} · ${m.size_gb} GB · ~${m.min_ram_gb} GB RAM${vram}${ctx ? " · context " + ctx : ""}</div>` +
+    (m.description ? `<div class="md-desc">${escapeHtml(m.description)}</div>` : "") +
+    (meta.summary ? `<div class="md-sum"><b>Best at</b> ${escapeHtml(meta.summary)}</div>` : "") +
+    (meta.weakness ? `<div class="md-weak"><b>Watch-outs</b> ${escapeHtml(meta.weakness)}</div>` : "") +
+    (tags ? `<div class="md-tags">${tags}</div>` : "") +
+    `<div class="caps">${bars}</div>` +
+    `<div class="ctxnote">Performance levels are estimates for your ${sysSummary()} system. ` +
+      `Capability scores (0–100) are rough guidance, calibrated within local open models.</div>`;
+
+  const imgInput = $("imageName");
+  if (!imgInput.dataset.touched) imgInput.value = "local-llm/" + m.id;
+}
+// Back-compat alias: older flows (template load, build reconnect) call this.
+function updateHint() { renderDetail(SELECTED); }
 
 // Prefill the context default for the selected compute, unless the user edited it.
 function applyComputeDefaults() {
@@ -367,7 +569,7 @@ async function attachToBuild() {
   // Restore the build form to what's actually building, so a refresh shows the
   // config you set (model, compute, image name, init prompt) — not the defaults.
   const c = st.config || {};
-  if (c.model_id && CATALOG.some((m) => m.id === c.model_id)) $("model").value = c.model_id;
+  if (c.model_id && CATALOG.some((m) => m.id === c.model_id)) setModel(c.model_id);
   if (c.engine) $("engine").value = c.engine;
   if (c.compute) $("compute").value = c.compute;
   $("injectMode").value = c.inject_mode || "missing";
@@ -517,7 +719,7 @@ async function useAsTemplate(ref, engine) {
       "&engine=" + encodeURIComponent(engine || "docker"));
   } catch (e) { alert("Couldn't load template: " + e.message); return; }
 
-  if (cfg.model_id && CATALOG.some((m) => m.id === cfg.model_id)) $("model").value = cfg.model_id;
+  if (cfg.model_id && CATALOG.some((m) => m.id === cfg.model_id)) setModel(cfg.model_id);
   if (cfg.engine) $("engine").value = cfg.engine;
   if (cfg.compute) $("compute").value = cfg.compute;
   $("injectMode").value = cfg.inject_mode || "missing";
@@ -723,7 +925,24 @@ function renderEmpty(tbody, cols, msg) {
 
 // ---- Wire up --------------------------------------------------------------
 
-$("model").addEventListener("change", updateHint);
+// Custom model picker (combobox) wiring.
+$("modelTrigger").addEventListener("click", (e) => { e.preventDefault(); togglePanel(); });
+$("modelSearch").addEventListener("input", () => { FILTER.q = $("modelSearch").value; renderList(); });
+$("filterSize").addEventListener("input", () => {
+  const v = parseFloat($("filterSize").value);
+  FILTER.maxSize = v >= parseFloat($("filterSize").max) ? Infinity : v;
+  $("sizeVal").textContent = FILTER.maxSize === Infinity ? "any" : `≤ ${FILTER.maxSize} GB`;
+  renderList();
+});
+$("filterReset").addEventListener("click", () => {
+  FILTER = { q: "", mods: new Set(), strengths: new Set(), maxSize: Infinity };
+  $("modelSearch").value = ""; $("filterSize").value = $("filterSize").max;
+  buildFilters(); renderList();
+});
+// Close the panel on outside-click or Escape.
+document.addEventListener("click", (e) => { if (!$("modelPicker").contains(e.target)) closePanel(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePanel(); });
+
 $("compute").addEventListener("change", applyComputeDefaults);
 $("engine").addEventListener("change", updateEngineHint);
 $("ctxSize").addEventListener("input", () => { $("ctxSize").dataset.touched = "1"; });

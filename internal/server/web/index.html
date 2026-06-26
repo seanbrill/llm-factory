@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>local-llm factory</title>
+  <title>LLM FACTORY</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -16,11 +16,49 @@
     <!-- 1. Build -->
     <section class="card">
       <h2>1 &middot; Build an image</h2>
-      <div id="modalityFilter" class="chips" aria-label="Filter models by capability"></div>
+
+      <!-- Custom searchable model picker: filter by capability, key strengths and
+           size, with a live per-system performance read on every model. -->
+      <div class="field model-field">
+        <span class="field-label">Model</span>
+        <input type="hidden" id="model" />
+        <div id="modelPicker" class="combo">
+          <button type="button" id="modelTrigger" class="combo-trigger" aria-haspopup="listbox" aria-expanded="false">
+            <span class="trig-main"><span class="trig-name">Select a model&hellip;</span></span>
+          </button>
+          <div id="modelPanel" class="combo-panel" hidden>
+            <div class="combo-search">
+              <svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+              <input id="modelSearch" type="text" placeholder="Search models&hellip;" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="combo-filters">
+              <div class="filter-group">
+                <div class="filter-title"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 2 8l10 6 10-6z"/><path d="M2 16l10 6 10-6"/></svg> Capability</div>
+                <div id="filterModalities" class="filter-chips"></div>
+              </div>
+              <div class="filter-group">
+                <div class="filter-title"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg> Key strengths</div>
+                <div id="filterStrengths" class="filter-chips"></div>
+              </div>
+              <div class="filter-group">
+                <div class="filter-row-size">
+                  <span class="filter-title"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-6M4 11V3M12 21v-9M12 7V3M20 21v-5M20 11V3M1 15h6M9 7h6M17 15h6"/></svg> Max size <span id="sizeVal">any</span></span>
+                  <input id="filterSize" type="range" min="0" max="20" step="0.5" value="20" />
+                </div>
+              </div>
+              <div class="combo-head">
+                <span id="modelCount"></span>
+                <button type="button" id="filterReset" class="ghost small">Reset filters</button>
+              </div>
+            </div>
+            <ul id="modelList" class="combo-list" role="listbox" aria-label="Models"></ul>
+          </div>
+        </div>
+      </div>
+
+      <div id="modelHint" class="model-detail"></div>
+
       <div class="grid">
-        <label>Model
-          <select id="model"></select>
-        </label>
         <label>Engine
           <select id="engine">
             <option value="docker">Docker</option>
@@ -41,7 +79,6 @@
           <input id="tag" type="text" value="latest" />
         </label>
       </div>
-      <p id="modelHint" class="hint"></p>
       <p id="engineHint" class="hint"></p>
       <label>Initialization prompt (optional) &mdash; baked in to specialize the model's startup behavior
         <textarea id="systemPrompt" rows="3" placeholder="You are FinBot, a terse financial-data analyst. Always answer with strict JSON."></textarea>
@@ -145,6 +182,7 @@
   </main>
 
   <footer>Local LLM image factory &middot; weights in <code>./models</code> &middot; tarballs in <code>./images</code></footer>
+  <script src="model-meta.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
