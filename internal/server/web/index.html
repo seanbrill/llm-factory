@@ -89,6 +89,11 @@
         <button id="refreshImages" class="ghost">Refresh</button>
       </div>
       <p class="hint">Tip: click an image name to load its settings (model, compute, init prompt) into the build form above as a template.</p>
+      <details class="prompt-override">
+        <summary>Override init prompt for the next Run (no rebuild)</summary>
+        <p class="hint">Leave blank to use each image's baked prompt. When set, the next model you Run uses this prompt instead — applied as a container env, so it's a ~10s restart, not a rebuild.</p>
+        <textarea id="runPromptOverride" rows="4" placeholder="You are Marvin, a general-purpose assistant…"></textarea>
+      </details>
       <table id="imagesTable">
         <thead><tr><th>Image</th><th>Tag</th><th>Engine</th><th>Compute</th><th>Size</th><th>Status</th><th>Run on port</th><th>Actions</th></tr></thead>
         <tbody></tbody>

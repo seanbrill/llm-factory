@@ -1,0 +1,68 @@
+# syntax=docker/dockerfile:1
+#
+# Image-generation runtime (stable-diffusion.cpp), Vulkan/GPU. Mirrors
+# Dockerfile.vulkan's patched-Venus-Mesa runtime so it GPU-accelerates inside the
+# macOS Podman/krunkit machine — validated by spike at ~116s for a 1024² SDXL
+# image, ~25-35s with an SDXL-Turbo model at 6-8 steps. sd-server exposes an
+# OpenAI-compatible POST /v1/images/generations (plus an embedded web UI), so it
+# fronts a model exactly like llama-server does — no llmgate shim needed.
+#
+# Run it (macOS Podman libkrun/krunkit machine):
+#   podman run --device /dev/dri --security-opt label=disable -p 8080:8080 <image>
+
+# ----------------------------------------------------------------------------
+# Stage 1: compile stable-diffusion.cpp with the Vulkan backend (Fedora 44)
+# ----------------------------------------------------------------------------
+FROM quay.io/fedora/fedora:44 AS builder
+ARG SDCPP_REF=master
+RUN dnf install -y \
+        gcc gcc-c++ cmake git ca-certificates \
+        vulkan-headers vulkan-loader-devel vulkan-tools \
+        spirv-tools spirv-headers-devel glslc glslang \
+    && dnf clean all
+WORKDIR /src
+RUN git clone --recursive --depth 1 --branch "${SDCPP_REF}" \
+        https://github.com/leejet/stable-diffusion.cpp.git
+WORKDIR /src/stable-diffusion.cpp
+RUN cmake -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGGML_NATIVE=OFF \
+        -DSD_VULKAN=ON \
+        -DSD_BUILD_SHARED_LIBS=OFF \
+    && cmake --build build --config Release -j "$(nproc)" --target sd-server
+
+# ----------------------------------------------------------------------------
+# Stage 2: Vulkan runtime (Fedora 44 + PATCHED Venus Mesa) + baked checkpoint
+# ----------------------------------------------------------------------------
+FROM quay.io/fedora/fedora:44 AS runtime
+# These build-args are passed uniformly by the builder; sd doesn't use them but
+# declaring them keeps the build log free of "unused ARG" warnings.
+ARG INJECT_MODE=missing
+ARG MODALITY=image
+ARG CTX_SIZE=0
+# Patched Venus Mesa, version-locked to match krunkit/libkrun (see Dockerfile.vulkan).
+ARG MESA_VULKAN_VERSION=25.3.6-102.fc44
+RUN dnf install -y dnf-plugins-core 'dnf-command(copr)' 'dnf-command(versionlock)' \
+    && dnf copr enable -y slp/mesa-libkrun-vulkan \
+    && dnf install -y \
+        mesa-vulkan-drivers-${MESA_VULKAN_VERSION} \
+        vulkan-loader vulkan-tools libgomp curl ca-certificates \
+    && dnf versionlock add mesa-vulkan-drivers \
+    && dnf clean all \
+    && useradd --system --uid 10001 --home-dir /work sd \
+    && mkdir -p /models /work && chown sd /work
+
+COPY --from=builder /src/stable-diffusion.cpp/build/bin/sd-server /usr/local/bin/sd-server
+COPY model.gguf /models/model.gguf
+
+# --vae-tiling is mandatory at 1024² on this machine (the full-res VAE decode OOMs
+# the Venus device otherwise); --diffusion-fa trims UNet VRAM/time. XDG_RUNTIME_DIR
+# silences a Venus init warning. Per-request steps/cfg/size override the defaults.
+ENV PORT=8080 \
+    XDG_RUNTIME_DIR=/tmp
+EXPOSE 8080
+USER sd
+WORKDIR /work
+ENTRYPOINT ["/usr/local/bin/sd-server", "-m", "/models/model.gguf", \
+            "--listen-ip", "0.0.0.0", "--listen-port", "8080", \
+            "--vae-tiling", "--diffusion-fa"]

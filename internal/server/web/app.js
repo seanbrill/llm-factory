@@ -202,7 +202,16 @@ function handleBuildLine(line) {
 
   if (line.startsWith("ERROR:")) {
     stopBuildTimer(); setIndeterminate(false);
-    progressEl().classList.add("error"); setBar(100); setStatus(line); return;
+    progressEl().classList.add("error"); setBar(100); setStatus(line);
+    // Auto-reveal the log so the cause (classifier message + streamed detail) is
+    // visible without the user having to click "Show log".
+    const log = $("buildLog");
+    if (log.hidden) {
+      log.hidden = false;
+      const t = $("logToggle"); if (t) t.textContent = "Hide log";
+    }
+    log.scrollTop = log.scrollHeight;
+    return;
   }
   if (line === "DONE") {
     stopBuildTimer(); setIndeterminate(false);
@@ -514,10 +523,15 @@ async function runImage(ref, port, btn, engine) {
   try {
     // Server decides CPU/GPU and the engine authoritatively from the image label;
     // we pass the engine the row was listed under as the lookup hint.
+    const body = { ref, port, engine: engine || "docker" };
+    // Optional init-prompt override (no rebuild): sent only when non-empty so a
+    // blank field leaves each image's baked prompt untouched.
+    const promptOverride = ($("runPromptOverride") && $("runPromptOverride").value || "").trim();
+    if (promptOverride) body.system_prompt = promptOverride;
     await api("/api/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref, port, engine: engine || "docker" }),
+      body: JSON.stringify(body),
     });
     $("chatPort").value = port;
     loadImages();             // refresh the running indicator (row re-renders)
@@ -554,8 +568,13 @@ async function loadContainers() {
     tr.innerHTML = `
       <td>${c.Names || ""}</td><td>${c.Image || ""}</td><td>${engineBadge(c.Engine)}</td>
       <td>${c.Status || c.State || ""}</td><td>${c.Ports || ""}</td>
-      <td class="actions"><button class="small danger">Stop &amp; remove</button></td>`;
-    tr.querySelector("button").onclick = async () => {
+      <td class="actions">
+        <button class="small" data-act="logs">Logs</button>
+        <button class="small danger" data-act="stop">Stop &amp; remove</button>
+      </td>`;
+    tr.querySelector('[data-act="logs"]').onclick = () =>
+      showContainerLogs(c.ID || c.Names, c.Engine || "docker", c.Names || c.ID);
+    tr.querySelector('[data-act="stop"]').onclick = async () => {
       if (!confirm(`Stop and remove container ${c.Names || c.ID}?`)) return;
       try {
         await api("/api/stop", {
@@ -568,6 +587,22 @@ async function loadContainers() {
     };
     tbody.appendChild(tr);
   }
+}
+
+// Fetch + show the tail of a container's logs in a popup (useful when a model
+// crashes seconds after Run, so it's gone from the list before you can read it).
+async function showContainerLogs(id, engine, name) {
+  let logs;
+  try {
+    const q = `id=${encodeURIComponent(id)}&engine=${encodeURIComponent(engine)}&tail=400`;
+    logs = (await api("/api/container/logs?" + q)).logs || "(no output yet)";
+  } catch (e) { alert("Couldn't fetch logs: " + e.message); return; }
+  const w = window.open("", "_blank", "width=900,height=600");
+  if (!w) { alert("Allow popups to view logs."); return; }
+  w.document.title = "logs: " + (name || id);
+  w.document.body.style.cssText = "margin:0;background:#0b0b0b;color:#ddd";
+  w.document.body.innerHTML =
+    `<pre style="white-space:pre-wrap;font:12px ui-monospace,monospace;padding:1rem;margin:0">${escapeHtml(logs)}</pre>`;
 }
 
 // ---- Downloaded models ----------------------------------------------------

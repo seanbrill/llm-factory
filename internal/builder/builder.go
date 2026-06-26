@@ -15,12 +15,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -123,6 +125,25 @@ func candidateEngines() []string {
 // published host ports, so it works even if models run on the other engine.
 func proxyEngine() string { return candidateEngines()[0] }
 
+// runtimeFamily maps a model modality to the inference runtime that serves it.
+// Each family has its own Dockerfile(s) (Dockerfile.<family>.<compute>, except
+// llama.cpp which keeps the historical Dockerfile.<compute>) and its own baked
+// entrypoint. The llama.cpp family covers everything it can serve directly
+// (chat/code/reasoning, vision via mmproj, embeddings); other modalities need a
+// purpose-built runtime.
+func runtimeFamily(modality string) string {
+	switch modality {
+	case "image":
+		return "sd" // stable-diffusion.cpp (sd-server, /v1/images/generations)
+	case "audio-stt":
+		return "whisper" // whisper.cpp (whisper-server, /inference)
+	case "tts":
+		return "tts" // CPU Piper/Kokoro
+	default:
+		return "llama" // text|code|reasoning|vision|embedding
+	}
+}
+
 // ModelPath is where a catalog model's weights live (or will live) on disk.
 func (b *Builder) ModelPath(m catalog.Model) string {
 	return filepath.Join(b.ModelsDir, m.File)
@@ -135,42 +156,78 @@ func (b *Builder) EnsureModel(ctx context.Context, m catalog.Model, log LogFunc)
 		log(fmt.Sprintf("Model already present: %s (%.2f GB)", filepath.Base(dest), float64(fi.Size())/1e9))
 		return dest, nil
 	}
-
-	log(fmt.Sprintf("Downloading %s ...", m.File))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.URL, nil)
-	if err != nil {
+	if err := b.downloadTo(ctx, m.URL, dest, m.File, log); err != nil {
 		return "", err
+	}
+	return dest, nil
+}
+
+// MMProjPath is the on-disk path of a vision model's projector, or "" if the
+// model declares none (text/code/etc.).
+func (b *Builder) MMProjPath(m catalog.Model) string {
+	if m.MMProjFile == "" {
+		return ""
+	}
+	return filepath.Join(b.ModelsDir, m.MMProjFile)
+}
+
+// EnsureMMProj downloads a vision model's projector (mmproj) GGUF if it declares
+// one and it isn't already present. Returns "" for non-vision models.
+func (b *Builder) EnsureMMProj(ctx context.Context, m catalog.Model, log LogFunc) (string, error) {
+	if m.MMProjFile == "" {
+		return "", nil
+	}
+	dest := b.MMProjPath(m)
+	if fi, err := os.Stat(dest); err == nil && fi.Size() > 0 {
+		log(fmt.Sprintf("Projector already present: %s (%.2f GB)", filepath.Base(dest), float64(fi.Size())/1e9))
+		return dest, nil
+	}
+	if m.MMProjURL == "" {
+		return "", fmt.Errorf("model %s sets mmproj_file but no mmproj_url", m.ID)
+	}
+	if err := b.downloadTo(ctx, m.MMProjURL, dest, m.MMProjFile, log); err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
+// downloadTo streams url -> dest atomically (via a .part file) with progress
+// logging. Shared by the model and projector downloaders.
+func (b *Builder) downloadTo(ctx context.Context, url, dest, label string, log LogFunc) error {
+	log(fmt.Sprintf("Downloading %s ...", label))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("download failed: HTTP %d (%s)", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return fmt.Errorf("download failed: HTTP %d (%s)", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
-
 	tmp := dest + ".part"
 	f, err := os.Create(tmp)
 	if err != nil {
-		return "", err
+		return err
 	}
-	pr := &progressReader{r: resp.Body, total: resp.ContentLength, log: log, label: m.File}
+	pr := &progressReader{r: resp.Body, total: resp.ContentLength, log: log, label: label}
 	if _, err := io.Copy(f, pr); err != nil {
 		f.Close()
 		os.Remove(tmp)
-		return "", fmt.Errorf("download interrupted: %w", err)
+		return fmt.Errorf("download interrupted: %w", err)
 	}
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
-		return "", err
+		return err
 	}
 	if err := os.Rename(tmp, dest); err != nil {
-		return "", err
+		return err
 	}
-	log("Saved model to models/" + m.File)
-	return dest, nil
+	log("Saved " + label + " to models/")
+	return nil
 }
 
 // BuildOptions configures a single image build.
@@ -214,15 +271,27 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	}
 	engine := resolveEngine(o.Engine)
 
-	dockerfileSrc := filepath.Join(b.BaseDir, "docker", "Dockerfile."+compute)
+	// Select the runtime family by modality. llama.cpp keeps the historical
+	// Dockerfile.<compute>; other families use Dockerfile.<family>.<compute>.
+	family := runtimeFamily(o.Model.Mod())
+	dfName := "Dockerfile." + compute
+	if family != "llama" {
+		dfName = "Dockerfile." + family + "." + compute
+	}
+	dockerfileSrc := filepath.Join(b.BaseDir, "docker", dfName)
 	dfData, err := os.ReadFile(dockerfileSrc)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", dockerfileSrc, err)
+		return fmt.Errorf("read %s (modality %q): %w", dockerfileSrc, o.Model.Mod(), err)
 	}
 
-	modelPath, err := b.EnsureModel(ctx, o.Model, log)
-	if err != nil {
-		return err
+	// The tts family is self-contained (its Dockerfile bakes a Piper voice), so it
+	// has no GGUF to download/stage. Every other family needs the model on disk.
+	var modelPath string
+	if family != "tts" {
+		modelPath, err = b.EnsureModel(ctx, o.Model, log)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Assemble a tiny build context: just the Dockerfile + a hardlink to the
@@ -237,35 +306,59 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	if err := os.WriteFile(filepath.Join(work, "Dockerfile"), dfData, 0o644); err != nil {
 		return err
 	}
-	// Stage the model into the build context. Log it so the (potentially slow,
-	// multi-GB) copy fallback never looks like a frozen build.
-	var stageGB float64
-	if fi, err := os.Stat(modelPath); err == nil {
-		stageGB = float64(fi.Size()) / 1e9
-	}
-	log(fmt.Sprintf("Staging model into build context (%.2f GB)…", stageGB))
-	staged, linked, err := linkOrCopyReport(modelPath, filepath.Join(work, "model.gguf"))
-	if err != nil {
-		return fmt.Errorf("stage model into build context: %w", err)
-	}
-	if linked {
-		log("Staged model (hardlinked, instant)")
-	} else {
-		log(fmt.Sprintf("Staged model (copied %.2f GB in %s)", stageGB, staged.Round(time.Millisecond)))
-	}
-
-	// Bake the optional initialization prompt (always present, possibly empty so
-	// the Dockerfile's COPY never fails; an empty prompt = pure passthrough).
-	if err := os.WriteFile(filepath.Join(work, "system_prompt.txt"), []byte(o.SystemPrompt), 0o644); err != nil {
-		return err
-	}
-	if strings.TrimSpace(o.SystemPrompt) != "" {
-		log(fmt.Sprintf("Baking initialization prompt (%d chars, mode=%s)", len(o.SystemPrompt), injectMode(o.InjectMode)))
+	// Stage the model into the build context (skipped for the self-contained tts
+	// family). Log it so the (potentially slow, multi-GB) copy never looks frozen.
+	if family != "tts" {
+		var stageGB float64
+		if fi, err := os.Stat(modelPath); err == nil {
+			stageGB = float64(fi.Size()) / 1e9
+		}
+		log(fmt.Sprintf("Staging model into build context (%.2f GB)…", stageGB))
+		staged, linked, err := linkOrCopyReport(modelPath, filepath.Join(work, "model.gguf"))
+		if err != nil {
+			return fmt.Errorf("stage model into build context: %w", err)
+		}
+		if linked {
+			log("Staged model (hardlinked, instant)")
+		} else {
+			log(fmt.Sprintf("Staged model (copied %.2f GB in %s)", stageGB, staged.Round(time.Millisecond)))
+		}
 	}
 
-	// Stage the llmgate shim source so the Docker `gate` stage can compile it.
-	if err := stageGate(b.BaseDir, work); err != nil {
-		return err
+	// The llama.cpp family fronts the model with the llmgate shim and bakes a
+	// system prompt + optional vision projector. Other families (sd/whisper/tts)
+	// run their own server directly and need none of these, so skip them.
+	if family == "llama" {
+		// Bake the optional initialization prompt (always present, possibly empty
+		// so the Dockerfile's COPY never fails; an empty prompt = pure passthrough).
+		if err := os.WriteFile(filepath.Join(work, "system_prompt.txt"), []byte(o.SystemPrompt), 0o644); err != nil {
+			return err
+		}
+		if strings.TrimSpace(o.SystemPrompt) != "" {
+			log(fmt.Sprintf("Baking initialization prompt (%d chars, mode=%s)", len(o.SystemPrompt), injectMode(o.InjectMode)))
+		}
+
+		// Stage the optional vision projector (mmproj). Always create the file so
+		// the Dockerfile's COPY never fails: a real hardlink for vision models, an
+		// empty placeholder otherwise — llmgate ignores a zero-byte mmproj.
+		mmDst := filepath.Join(work, "mmproj.gguf")
+		mmPath, err := b.EnsureMMProj(ctx, o.Model, log)
+		if err != nil {
+			return err
+		}
+		if mmPath != "" {
+			if _, _, err := linkOrCopyReport(mmPath, mmDst); err != nil {
+				return fmt.Errorf("stage mmproj into build context: %w", err)
+			}
+			log("Staged vision projector (mmproj.gguf)")
+		} else if err := os.WriteFile(mmDst, nil, 0o644); err != nil {
+			return err
+		}
+
+		// Stage the llmgate shim source so the Docker `gate` stage can compile it.
+		if err := stageGate(b.BaseDir, work); err != nil {
+			return err
+		}
 	}
 
 	ref := o.Ref()
@@ -273,7 +366,9 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	buildArgs := []string{
 		"build", "-t", ref,
 		"--build-arg", "INJECT_MODE=" + injectMode(o.InjectMode),
+		"--build-arg", "MODALITY=" + o.Model.Mod(),
 		"--label", "local-llm.tool=builder",
+		"--label", "local-llm.modality=" + o.Model.Mod(),
 		"--label", "local-llm.model=" + o.Model.ID,
 		"--label", "local-llm.compute=" + compute,
 		// Engine the image was built with — Run reads this so a podman-built image
@@ -292,6 +387,14 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	if o.CtxSize > 0 {
 		buildArgs = append(buildArgs, "--build-arg", fmt.Sprintf("CTX_SIZE=%d", o.CtxSize))
 	}
+	// Podman remote (macOS GPU path): the client forwards its default seccomp
+	// profile *path* (/etc/containers/seccomp.json on Alpine) to the machine VM,
+	// which ships the profile at /usr/share/containers/seccomp.json instead, so
+	// the RUN steps fail to open it. The build just compiles llama.cpp, so run it
+	// seccomp-unconfined to sidestep the path mismatch. Docker is unaffected.
+	if engine == enginePodman {
+		buildArgs = append(buildArgs, "--security-opt", "seccomp=unconfined")
+	}
 	buildArgs = append(buildArgs, work)
 	if err := runStreaming(ctx, b.BaseDir, engine, log, buildArgs...); err != nil {
 		return fmt.Errorf("%s build failed: %w", engine, err)
@@ -309,6 +412,16 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 			log(fmt.Sprintf("Exported %.2f GB: images/%s", float64(fi.Size())/1e9, filepath.Base(out)))
 		}
 	}
+
+	// Reclaim the now-dangling previous build: rebuilding over :latest orphans the
+	// old multi-GB model image as <none>, which otherwise accumulates per rebuild.
+	// Scope strictly to our tool label (and dangling-only — no -a) so it can never
+	// touch the user's other images or the active build cache. Best-effort.
+	if out, err := engineCmd(ctx, engine, "image", "prune", "-f", "--filter", "label=local-llm.tool=builder").CombinedOutput(); err == nil {
+		if s := strings.TrimSpace(string(out)); s != "" && !strings.Contains(s, "reclaimed space: 0B") {
+			log("Reclaimed dangling layers from previous builds.")
+		}
+	}
 	return nil
 }
 
@@ -321,6 +434,11 @@ type RunOptions struct {
 	MemoryGB  float64 // >0 sets --memory
 	Route     string  // local URL alias (stored as a label for the proxy)
 	Autostart bool    // adds --restart unless-stopped (starts with Docker Desktop)
+	// Optional init-prompt override applied at run time (no rebuild). llmgate
+	// prefers the SYSTEM_PROMPT env over the baked file, so setting these swaps a
+	// model's behavior for a ~10s container restart instead of a recompile.
+	SystemPrompt string // overrides the baked system prompt when non-empty
+	InjectMode   string // "missing" | "always"; overrides the baked mode when set
 }
 
 // Run starts a container detached and returns its id.
@@ -335,7 +453,11 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 
 	args := []string{
 		"run", "-d", "--name", name,
-		"-p", fmt.Sprintf("%d:8080", o.HostPort),
+		// Bind the published port to loopback only so the model isn't reachable
+		// from the local network (no auth sits in front of it). The managed Caddy
+		// proxy still reaches it via host.docker.internal, which Docker Desktop
+		// routes to the host's loopback.
+		"-p", fmt.Sprintf("127.0.0.1:%d:8080", o.HostPort),
 		"--label", "local-llm.tool=runtime",
 		"--label", "local-llm.ref=" + o.Ref,
 		"--label", "local-llm.route=" + o.Route,
@@ -357,6 +479,26 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 	if o.Autostart {
 		args = append(args, "--restart", "unless-stopped")
 	}
+	// Same podman-remote seccomp path mismatch as Build (see there): the client
+	// forwards a profile path the machine VM lacks. Run the model server
+	// seccomp-unconfined on Podman; it's trusted local llama.cpp. label=disable
+	// turns off SELinux confinement so the container can reach the GPU at /dev/dri
+	// on the (SELinux-enforcing) libkrun machine — the Venus/krunkit GPU path needs
+	// it (matches RamaLama). Both are no-ops/irrelevant on Docker.
+	if engine == enginePodman {
+		args = append(args, "--security-opt", "seccomp=unconfined", "--security-opt", "label=disable")
+	}
+	// Run-time init-prompt override (no rebuild): llmgate reads SYSTEM_PROMPT from
+	// the env in preference to the baked file. A single arg is passed verbatim by
+	// exec, so a multi-line prompt is safe (no shell interpolation).
+	if strings.TrimSpace(o.SystemPrompt) != "" {
+		args = append(args, "-e", "SYSTEM_PROMPT="+o.SystemPrompt)
+		if o.InjectMode != "" {
+			args = append(args, "-e", "INJECT_MODE="+o.InjectMode)
+		}
+		// Record that this instance overrides its baked prompt so the UI can show it.
+		args = append(args, "--label", "local-llm.prompt_override=true")
+	}
 	args = append(args, o.Ref)
 
 	out, err := engineCmd(ctx, engine, args...).CombinedOutput()
@@ -368,11 +510,57 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 
 // Stop force-removes a container by id or name on the given engine.
 func (b *Builder) Stop(ctx context.Context, engine, id string) error {
-	out, err := engineCmd(ctx, engine, "rm", "-f", id).CombinedOutput()
+	// Retry the flaky socket: Stop is the start of the burst (rm -> regen-proxy
+	// -> list-refresh) that used to surface "exit status 125" when one rapid
+	// connection got refused.
+	var out []byte
+	var err error
+	for attempt := 0; ; attempt++ {
+		out, err = engineCmd(ctx, engine, "rm", "-f", id).CombinedOutput()
+		if err == nil || attempt >= engineRetries {
+			break
+		}
+		// CombinedOutput merges stderr into out, so check the text directly.
+		if !transientEngineErr(err) && !strings.Contains(strings.ToLower(string(out)), "connection refused") {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(120*(attempt+1)) * time.Millisecond):
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// EngineVersions probes each installed engine's server version. An empty value
+// means the engine is present but unreachable (e.g. the Podman machine/socket is
+// down) — which is exactly the state that surfaces as "exit status 125" in normal
+// calls. Drives the /readyz endpoint and the UI's degraded banner.
+func (b *Builder) EngineVersions(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	for _, engine := range candidateEngines() {
+		v, _ := engineCmd(ctx, engine, "version", "--format", "{{.Server.Version}}").Output()
+		out[engine] = strings.TrimSpace(string(v))
+	}
+	return out
+}
+
+// ContainerLogs returns the last `tail` lines of a container's logs (stdout+stderr
+// merged). Lets the UI show why a container vanished/crashed instead of silently
+// dropping it from the list.
+func (b *Builder) ContainerLogs(ctx context.Context, engine, id string, tail int) (string, error) {
+	if tail <= 0 {
+		tail = 200
+	}
+	out, err := engineCmd(ctx, resolveEngine(engine), "logs", "--tail", fmt.Sprintf("%d", tail), id).CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
 }
 
 // ----------------------------------------------------------------------------
@@ -494,6 +682,7 @@ func portFromName(name string) string {
 func (b *Builder) Images(ctx context.Context) ([]map[string]any, error) {
 	var all []map[string]any
 	var firstErr error
+	anyOK := false
 	for _, engine := range candidateEngines() {
 		imgs, err := dockerJSONLines(ctx, engine, "images", "-a", "--filter", "label=local-llm.tool=builder", "--format", "{{json .}}")
 		if err != nil {
@@ -502,18 +691,177 @@ func (b *Builder) Images(ctx context.Context) ([]map[string]any, error) {
 			}
 			continue // engine present but unusable (e.g. podman machine stopped) — skip it
 		}
+		anyOK = true
 		for _, im := range imgs {
 			im["Engine"] = engine
+			normalizeImageFields(im)
 			if id, _ := im["ID"].(string); id != "" {
 				im["Compute"] = b.ImageCompute(ctx, engine, id)
 			}
 			all = append(all, im)
 		}
 	}
-	if all == nil && firstErr != nil {
-		return nil, firstErr
+	// Only fail when EVERY engine was unreachable. If a healthy engine answered
+	// (even with zero rows), return that — a dead Podman must never blank a
+	// healthy Docker's table (or vice versa).
+	if all == nil {
+		if !anyOK && firstErr != nil {
+			return nil, firstErr
+		}
+		return []map[string]any{}, nil
 	}
 	return all, nil
+}
+
+// normalizeImageFields makes a podman `images --format {{json .}}` record look
+// like docker's, which the UI (and the compute enrichment above) assume: docker
+// emits Repository, Tag, ID, and a human-readable Size string; podman emits
+// Names/RepoTags, "Id", and a numeric Size (bytes). Left unnormalized, podman
+// images render as blank "<untagged>" rows with dead Run/Delete buttons (ref is
+// built from a missing ID) and no compute badge — and a single such row can
+// abort the whole table render. Docker records already have these fields, so
+// this is a no-op for them.
+func normalizeImageFields(im map[string]any) {
+	if s, _ := im["ID"].(string); s == "" {
+		if id, _ := im["Id"].(string); id != "" {
+			im["ID"] = id
+		}
+	}
+	if s, _ := im["Repository"].(string); s == "" {
+		if repo, tag := firstRepoTag(im); repo != "" {
+			im["Repository"] = repo
+			im["Tag"] = tag
+		}
+	}
+	// podman gives Size as bytes (a JSON number → float64); render the same
+	// decimal-unit human string docker prints.
+	if n, ok := im["Size"].(float64); ok {
+		im["Size"] = humanSize(int64(n))
+	}
+}
+
+// firstRepoTag pulls the first real "repo:tag" reference out of a podman image
+// record (RepoTags, then Names), splitting it into repository and tag. The
+// "localhost/" prefix podman adds to locally-built images is kept so the ref the
+// UI derives (repo:tag) still resolves with `podman run`/`rmi`.
+func firstRepoTag(im map[string]any) (repo, tag string) {
+	for _, key := range []string{"RepoTags", "Names"} {
+		arr, ok := im[key].([]any)
+		if !ok {
+			continue
+		}
+		for _, e := range arr {
+			s, _ := e.(string)
+			s = strings.TrimSpace(s)
+			if s == "" || s == "<none>:<none>" {
+				continue
+			}
+			// Split on the last colon, but only if what follows isn't a path
+			// segment (guards against a registry "host:port/repo" with no tag).
+			if i := strings.LastIndex(s, ":"); i > 0 && !strings.Contains(s[i+1:], "/") {
+				return s[:i], s[i+1:]
+			}
+			return s, "latest"
+		}
+	}
+	return "", ""
+}
+
+// humanSize formats a byte count the way docker's `images` column does: decimal
+// (1000-based) units with two decimals, e.g. 9465678461 -> "9.47 GB".
+func humanSize(n int64) string {
+	const unit = 1000.0
+	f := float64(n)
+	units := []string{"B", "kB", "MB", "GB", "TB", "PB"}
+	i := 0
+	for f >= unit && i < len(units)-1 {
+		f /= unit
+		i++
+	}
+	return fmt.Sprintf("%.2f %s", f, units[i])
+}
+
+// normalizeContainerFields does for `ps` records what normalizeImageFields does
+// for images: reshape podman's JSON to the docker form the UI assumes. Docker
+// emits Names/Ports as strings and Labels as a "k=v,k=v" string; podman emits
+// Names/Ports as arrays and Labels as an object. The Labels case is the worst —
+// the UI does `c.Labels.split(",")` to find the local-llm.ref, which throws on an
+// object and blanks the table. No-op for docker records (already strings).
+func normalizeContainerFields(c map[string]any) {
+	if s, _ := c["ID"].(string); s == "" {
+		if id, _ := c["Id"].(string); id != "" {
+			c["ID"] = id
+		}
+	}
+	if arr, ok := c["Names"].([]any); ok {
+		c["Names"] = joinStrings(arr, ",")
+	}
+	if m, ok := c["Labels"].(map[string]any); ok {
+		c["Labels"] = labelsToString(m)
+	}
+	if arr, ok := c["Ports"].([]any); ok {
+		c["Ports"] = portsToString(arr)
+	}
+}
+
+// joinStrings joins the string elements of a []any with sep (non-strings skipped).
+func joinStrings(arr []any, sep string) string {
+	parts := make([]string, 0, len(arr))
+	for _, e := range arr {
+		if s, ok := e.(string); ok && s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, sep)
+}
+
+// labelsToString renders a podman Labels map as docker's "k=v,k=v" string, sorted
+// for stable output. The UI only needs to find local-llm.ref by splitting on ",".
+func labelsToString(m map[string]any) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%v", k, m[k]))
+	}
+	return strings.Join(parts, ",")
+}
+
+// portsToString renders podman's array of port mappings as a docker-style string
+// (e.g. "0.0.0.0:8080->8080/tcp"). The UI's port fallback regex only needs the
+// ":<hostPort>->" substring; the container name (localllm-<port>) is the primary
+// source, so this is best-effort.
+func portsToString(arr []any) string {
+	parts := make([]string, 0, len(arr))
+	for _, e := range arr {
+		m, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		hostIP, _ := m["host_ip"].(string)
+		if hostIP == "" {
+			hostIP = "0.0.0.0"
+		}
+		hostPort := numField(m, "host_port")
+		ctrPort := numField(m, "container_port")
+		proto, _ := m["protocol"].(string)
+		if proto == "" {
+			proto = "tcp"
+		}
+		parts = append(parts, fmt.Sprintf("%s:%d->%d/%s", hostIP, hostPort, ctrPort, proto))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// numField reads a JSON number field (unmarshaled as float64) as an int.
+func numField(m map[string]any, key string) int {
+	if f, ok := m[key].(float64); ok {
+		return int(f)
+	}
+	return 0
 }
 
 // SaveImage streams `<engine> save <ref>` (the image tarball) to w. Used to let a
@@ -568,6 +916,7 @@ func (b *Builder) ImageLabels(ctx context.Context, engine, ref string) (map[stri
 func (b *Builder) Containers(ctx context.Context) ([]map[string]any, error) {
 	var all []map[string]any
 	var firstErr error
+	anyOK := false
 	for _, engine := range candidateEngines() {
 		cs, err := dockerJSONLines(ctx, engine, "ps", "-a", "--filter", "label=local-llm.tool=runtime", "--format", "{{json .}}")
 		if err != nil {
@@ -576,13 +925,19 @@ func (b *Builder) Containers(ctx context.Context) ([]map[string]any, error) {
 			}
 			continue
 		}
+		anyOK = true
 		for _, c := range cs {
 			c["Engine"] = engine
+			normalizeContainerFields(c)
 			all = append(all, c)
 		}
 	}
-	if all == nil && firstErr != nil {
-		return nil, firstErr
+	// Only fail when EVERY engine was unreachable (see Images for rationale).
+	if all == nil {
+		if !anyOK && firstErr != nil {
+			return nil, firstErr
+		}
+		return []map[string]any{}, nil
 	}
 	return all, nil
 }
@@ -607,7 +962,17 @@ func (b *Builder) ModelOnDisk(m catalog.Model) (bool, int64) {
 	if err != nil || fi.Size() == 0 {
 		return false, 0
 	}
-	return true, fi.Size()
+	total := fi.Size()
+	// Vision models aren't usable until their projector is also present; report
+	// not-ready (but still count the weights toward on-disk size) if it's missing.
+	if m.MMProjFile != "" {
+		mf, mErr := os.Stat(b.MMProjPath(m))
+		if mErr != nil || mf.Size() == 0 {
+			return false, total
+		}
+		total += mf.Size()
+	}
+	return true, total
 }
 
 // RemoveModel deletes a model's downloaded weights from ./models (no-op if absent).
@@ -622,8 +987,85 @@ func (b *Builder) RemoveModel(m catalog.Model) error {
 // helpers
 // ----------------------------------------------------------------------------
 
+// engineRetries is how many extra times a transient engine command is retried.
+// The macOS Docker->Podman bind-mounted socket intermittently refuses *fresh*
+// connections, especially during bursts (Stop fires rm -> regen-proxy -> list
+// in quick succession). Without retry, one refused call blanks the UI ("exit
+// status 125") and the image row vanishes. A few quick retries smooth that over.
+const engineRetries = 4
+
+// transientEngineErr reports whether an engine command failed with a retryable
+// connection error (vs a real error like "no such container", which must NOT be
+// retried — we'd just waste time and still fail).
+func transientEngineErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		msg += " " + strings.ToLower(string(ee.Stderr))
+	}
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "cannot connect to podman") ||
+		strings.Contains(msg, "cannot connect to the docker daemon") ||
+		(strings.Contains(msg, "sock") && strings.Contains(msg, "no such file"))
+}
+
+// ClassifyEngineError maps a raw engine failure to a short, human, actionable
+// message — or "" if it doesn't recognize it. Callers keep the raw error as a
+// collapsible detail. This is what turns a bare "exit status 125" surfaced in the
+// UI into the actual cause (engine down, port taken, out of disk/memory, …).
+func ClassifyEngineError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		msg += " " + strings.ToLower(string(ee.Stderr))
+	}
+	contains := func(subs ...string) bool {
+		for _, s := range subs {
+			if strings.Contains(msg, s) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case contains("connection refused", "cannot connect to podman", "cannot connect to the docker daemon"),
+		strings.Contains(msg, "sock") && strings.Contains(msg, "no such file"):
+		return "Container engine unreachable — the Podman machine or Docker isn't responding. Restart it with ./start.sh (the factory reconnects on launch), then retry."
+	case contains("port is already allocated", "address already in use", "bind for"):
+		return "That host port is already in use — pick a different port."
+	case contains("no space left"):
+		return "The engine is out of disk space — prune old images (or free disk) and retry."
+	case contains("oomkilled", "signal: killed", "cannot allocate memory"):
+		return "Ran out of memory — try a smaller model/quant or raise the machine's memory."
+	case contains("no such container", "no such object"):
+		return "That container no longer exists — refresh; it may already be gone."
+	case contains("image not known", "no such image"):
+		return "That image no longer exists — rebuild it or refresh the list."
+	}
+	return ""
+}
+
 func dockerJSONLines(ctx context.Context, engine string, args ...string) ([]map[string]any, error) {
-	out, err := engineCmd(ctx, engine, args...).Output()
+	var out []byte
+	var err error
+	for attempt := 0; ; attempt++ {
+		out, err = engineCmd(ctx, engine, args...).Output()
+		if err == nil || attempt >= engineRetries || !transientEngineErr(err) {
+			break
+		}
+		// Backoff a little before retrying the flaky socket; bail on cancel.
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(120*(attempt+1)) * time.Millisecond):
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

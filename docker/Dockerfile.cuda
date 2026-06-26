@@ -14,7 +14,8 @@
 # Stage 1: compile llama-server against CUDA
 # ----------------------------------------------------------------------------
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
-ARG LLAMA_CPP_REF=master
+# Pinned llama.cpp release for reproducible builds (override to track master).
+ARG LLAMA_CPP_REF=b9820
 ARG CUDA_ARCHS=75;80;86;89
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git ca-certificates \
@@ -44,6 +45,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /llmgate .
 # ----------------------------------------------------------------------------
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS runtime
 ARG INJECT_MODE=missing
+ARG MODALITY=text
 ARG CTX_SIZE=8192
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 curl ca-certificates \
@@ -54,6 +56,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /src/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 COPY --from=gate    /llmgate                              /usr/local/bin/llmgate
 COPY model.gguf         /models/model.gguf
+# Always-present vision projector (empty placeholder for text; real for VLMs).
+COPY mmproj.gguf        /models/mmproj.gguf
 COPY system_prompt.txt  /etc/llmgate/system_prompt.txt
 
 # NGL = layers offloaded to GPU (99 = all). CTX can go higher on GPU.
@@ -61,9 +65,10 @@ ENV MODEL_PATH=/models/model.gguf \
     PORT=8080 \
     UPSTREAM_PORT=8081 \
     CTX_SIZE=${CTX_SIZE} \
-    THREADS=4 \
     PARALLEL=1 \
     NGL=99 \
+    MMPROJ_PATH=/models/mmproj.gguf \
+    MODALITY=${MODALITY} \
     SYSTEM_PROMPT_FILE=/etc/llmgate/system_prompt.txt \
     INJECT_MODE=${INJECT_MODE}
 

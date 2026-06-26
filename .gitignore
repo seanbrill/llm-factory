@@ -17,3 +17,6 @@
 /config/build-stats.json
 # Generated reverse-proxy config.
 /config/Caddyfile
+
+# Agent scratch/temp files.
+/scratchpad/

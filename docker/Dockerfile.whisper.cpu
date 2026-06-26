@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1
+#
+# Speech-to-text runtime (whisper.cpp), CPU. Transcribes audio via whisper-server
+# POST /inference (multipart form-data, audio in the `file` field). The baked
+# model is a whisper ggml model (staged as model.gguf — name cosmetic).
+
+FROM ubuntu:24.04 AS builder
+ARG WHISPER_CPP_REF=master
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git clone --depth 1 --branch "${WHISPER_CPP_REF}" https://github.com/ggml-org/whisper.cpp.git
+WORKDIR /src/whisper.cpp
+RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DWHISPER_BUILD_SERVER=ON \
+    && cmake --build build --config Release -j "$(nproc)" --target whisper-server
+
+FROM ubuntu:24.04 AS runtime
+ARG INJECT_MODE=missing
+ARG MODALITY=audio-stt
+ARG CTX_SIZE=0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 whisper \
+    && mkdir -p /models
+COPY --from=builder /src/whisper.cpp/build/bin/whisper-server /usr/local/bin/whisper-server
+COPY model.gguf /models/model.gguf
+ENV PORT=8080
+EXPOSE 8080
+USER whisper
+ENTRYPOINT ["/usr/local/bin/whisper-server", "-m", "/models/model.gguf", "--host", "0.0.0.0", "--port", "8080"]

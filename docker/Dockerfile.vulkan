@@ -6,34 +6,40 @@
 #
 # Why Vulkan: it is the one GPU backend that works *inside a container* on Apple
 # Silicon. There is no Metal-in-Docker and no GPU passthrough on macOS; instead a
-# Podman machine running on libkrun/krunkit paravirtualizes the Metal GPU and
-# exposes it to the guest as a virtio Vulkan device (Mesa "Venus"). The same
-# image also runs on real Linux Vulkan GPUs (AMD RADV / Intel ANV / NVIDIA).
+# Podman "libkrun" (krunkit) machine paravirtualizes the Apple GPU and exposes it
+# to the guest as a virtio-gpu device that speaks Mesa's "Venus" Vulkan protocol.
+# The same image also runs on real Linux Vulkan GPUs.
 #
-# Run it (macOS, Podman + libkrun machine):
-#   podman run --device /dev/dri -p 8080:8080 <image>
+# CRITICAL (macOS GPU): STOCK distro Mesa — Ubuntu *or* Fedora — cannot drive
+# krunkit's Venus. It connects to the renderer, then dies mapping Venus's command-
+# ring blob ("failed to allocate/map ring shmem" -> vkCreateInstance returns
+# ERROR_OUT_OF_HOST_MEMORY; the kernel logs virtio_gpu RESOURCE_MAP_BLOB ->
+# ERR_UNSPEC). The virtio-gpu blob-alignment fixes Venus needs are not yet
+# upstream, so the runtime stage installs the *patched* Venus Mesa from the COPR
+# `slp/mesa-libkrun-vulkan`, version-locked to the build that matches krunkit's
+# libkrun (this is RamaLama's verified recipe). With it, vulkaninfo reports
+# "Virtio-GPU Venus (Apple Mx)" / driverName venus and llama.cpp offloads to GPU.
+#
+# Run it (macOS, Podman libkrun/krunkit machine) — note `--security-opt label=disable`:
+#   podman run --device /dev/dri --security-opt label=disable -p 8080:8080 <image>
 # Run it (Linux GPU):
 #   docker run --device /dev/dri -p 8080:8080 <image>   # or podman
-#
-# NOTE (experimental on macOS): GPU acceleration under krunkit requires a Mesa
-# build that includes the virtio/Venus Vulkan driver. Stock distro Mesa may not
-# enable it; if `vulkaninfo` in the container shows no GPU, swap in a Venus-
-# enabled Mesa (see RamaLama / the Red Hat krunkit articles in the README).
 
 # ----------------------------------------------------------------------------
-# Stage 1: compile llama-server against the Vulkan SDK
+# Stage 1: compile llama-server (Fedora, to match the runtime's glibc + Mesa)
 # ----------------------------------------------------------------------------
-FROM ubuntu:24.04 AS builder
-ARG LLAMA_CPP_REF=master
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake git ca-certificates wget gnupg \
-    && rm -rf /var/lib/apt/lists/*
-# LunarG Vulkan SDK provides the loader, headers, and glslc (shader compiler)
-# that llama.cpp's Vulkan backend needs at build time.
-RUN wget -qO /etc/apt/trusted.gpg.d/lunarg.asc https://packages.lunarg.com/lunarg-signing-key-pub.asc \
-    && wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list https://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list \
-    && apt-get update && apt-get install -y --no-install-recommends vulkan-sdk \
-    && rm -rf /var/lib/apt/lists/*
+FROM quay.io/fedora/fedora:44 AS builder
+# Pinned llama.cpp release for reproducible builds (override to track master).
+ARG LLAMA_CPP_REF=b9820
+# Vulkan build deps from Fedora: vulkan-headers + vulkan-loader-devel (headers and
+# the loader to link against), glslc + glslang (GLSL->SPIR-V shader compilers), and
+# spirv-headers-devel (provides SPIRV-HeadersConfig.cmake that ggml-vulkan's
+# find_package() requires). Mirrors RamaLama's llama.cpp build deps.
+RUN dnf install -y \
+        gcc gcc-c++ cmake git ca-certificates \
+        vulkan-headers vulkan-loader-devel vulkan-tools \
+        spirv-tools spirv-headers-devel glslc glslang \
+    && dnf clean all
 WORKDIR /src
 RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/llama.cpp.git
 WORKDIR /src/llama.cpp
@@ -54,32 +60,48 @@ COPY gate/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /llmgate .
 
 # ----------------------------------------------------------------------------
-# Stage 3: Vulkan runtime (loader + Mesa ICDs) + baked weights + prompt
+# Stage 3: Vulkan runtime (Fedora + PATCHED Venus Mesa) + baked weights + prompt
 # ----------------------------------------------------------------------------
-FROM ubuntu:24.04 AS runtime
+FROM quay.io/fedora/fedora:44 AS runtime
 ARG INJECT_MODE=missing
+ARG MODALITY=text
 ARG CTX_SIZE=8192
-# libvulkan1 = loader; mesa-vulkan-drivers = ICDs (RADV/ANV/lavapipe, and the
-# virtio/Venus driver under libkrun where present). vulkan-tools for vulkaninfo.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libvulkan1 mesa-vulkan-drivers vulkan-tools libgomp1 curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
+# Patched Venus Mesa, version-locked to match the host krunkit/libkrun. Bump this
+# (and confirm the COPR has a matching build) when you update krunkit. Stock Mesa
+# here = silent CPU fallback; see the header for why.
+ARG MESA_VULKAN_VERSION=25.3.6-102.fc44
+RUN dnf install -y dnf-plugins-core 'dnf-command(copr)' 'dnf-command(versionlock)' \
+    && dnf copr enable -y slp/mesa-libkrun-vulkan \
+    && dnf install -y \
+        mesa-vulkan-drivers-${MESA_VULKAN_VERSION} \
+        vulkan-loader vulkan-tools libgomp curl ca-certificates \
+    && dnf versionlock add mesa-vulkan-drivers \
+    && dnf clean all \
     && useradd --system --uid 10001 llama \
     && mkdir -p /etc/llmgate
 
 COPY --from=builder /src/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 COPY --from=gate    /llmgate                              /usr/local/bin/llmgate
 COPY model.gguf         /models/model.gguf
+# Vision projector — always present (zero-byte placeholder for text models, which
+# llmgate ignores; a real mmproj for VLMs). Enables --mmproj without a 2nd build path.
+COPY mmproj.gguf        /models/mmproj.gguf
 COPY system_prompt.txt  /etc/llmgate/system_prompt.txt
 
-# NGL = layers offloaded to GPU (99 = all). CTX can go higher on GPU.
+# NGL = layers offloaded to GPU (99 = all). XDG_RUNTIME_DIR silences a Venus
+# init warning. THREADS is intentionally unset — llmgate defaults it to the
+# container's CPU count (used for the CPU layers / prompt when GPU offload is
+# partial).
 ENV MODEL_PATH=/models/model.gguf \
     PORT=8080 \
     UPSTREAM_PORT=8081 \
     CTX_SIZE=${CTX_SIZE} \
-    THREADS=4 \
     PARALLEL=1 \
     NGL=99 \
+    MMPROJ_PATH=/models/mmproj.gguf \
+    MMPROJ_NO_OFFLOAD=1 \
+    XDG_RUNTIME_DIR=/tmp \
+    MODALITY=${MODALITY} \
     SYSTEM_PROMPT_FILE=/etc/llmgate/system_prompt.txt \
     INJECT_MODE=${INJECT_MODE}
 

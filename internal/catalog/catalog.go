@@ -31,6 +31,22 @@ type Model struct {
 	MinVRAMGB   float64 `json:"min_vram_gb"`
 	Recommended bool    `json:"recommended"`
 	Description string  `json:"description"`
+	// Modality + optional multi-file fields. All omitempty so existing single-file
+	// text entries parse byte-for-byte unchanged. Modality is treated as "text"
+	// when empty. MMProjFile/MMProjURL carry a vision projector for VLM models,
+	// which bake a 2nd GGUF alongside the model and pass llama-server --mmproj.
+	// This is the keystone every later modality (vision/embedding/audio) reuses.
+	Modality   string `json:"modality,omitempty"`    // text|code|reasoning|vision|embedding|audio-stt|tts (default text)
+	MMProjFile string `json:"mmproj_file,omitempty"` // vision projector filename (VLMs)
+	MMProjURL  string `json:"mmproj_url,omitempty"`  // download URL for the projector
+}
+
+// Mod returns the model's modality, defaulting to "text" when unset.
+func (m Model) Mod() string {
+	if m.Modality == "" {
+		return "text"
+	}
+	return m.Modality
 }
 
 // Catalog is the loaded set of models plus the path it came from.

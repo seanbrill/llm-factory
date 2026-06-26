@@ -30,10 +30,29 @@ FROM docker:27-cli
 WORKDIR /app
 
 # Podman remote client (named `podman` on PATH so the factory's engine selector
-# can shell out to it). Prefer the lean podman-remote subpackage; fall back to the
-# full podman package if the remote-only one isn't in the repo.
-RUN (apk add --no-cache podman-remote && ln -sf "$(command -v podman-remote)" /usr/local/bin/podman) \
-    || apk add --no-cache podman
+# can shell out to it). We install the official statically-linked release pinned
+# to PODMAN_VERSION rather than Alpine's `podman-remote` package: the Alpine build
+# lags well behind (5.3.x) and chokes when streaming a large model layer to a 5.8
+# host machine — a multi-GB `COPY` drops with "server quit: unexpected EOF". The
+# static binary needs no musl/glibc shims and runs as-is on this base. Pinned URL
+# + SHA-256 verification keeps the supply chain reproducible and tamper-evident.
+# Bump PODMAN_VERSION (and both checksums from the release `shasums`) to track the
+# host Podman; the client should match the machine's server major.minor.
+ARG PODMAN_VERSION=5.8.4
+ARG TARGETARCH
+RUN set -eux; \
+    case "$TARGETARCH" in \
+      arm64) sha=6c7184d158e5d54e5a324ba6a6da264862bd5baa61d992f65fe855db51406bea ;; \
+      amd64) sha=3d2a1a45f668fe5c240deb8df83d9e2e415429fb91f8a7442985a636edf33654 ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    wget -qO /tmp/podman-remote.tgz \
+      "https://github.com/containers/podman/releases/download/v${PODMAN_VERSION}/podman-remote-static-linux_${TARGETARCH}.tar.gz"; \
+    echo "${sha}  /tmp/podman-remote.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/podman-remote.tgz -C /tmp; \
+    install -m 0755 "/tmp/bin/podman-remote-static-linux_${TARGETARCH}" /usr/local/bin/podman; \
+    rm -rf /tmp/podman-remote.tgz /tmp/bin; \
+    podman --version
 
 COPY --from=build /factory      /usr/local/bin/factory
 COPY docker/                    /app/docker/
@@ -44,4 +63,6 @@ COPY cmd/llmgate/               /app/cmd/llmgate/
 ENV MODEL_HOST=host.docker.internal
 
 EXPOSE 8799
+HEALTHCHECK --interval=30s --timeout=4s --start-period=10s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:8799/healthz >/dev/null 2>&1 || exit 1
 ENTRYPOINT ["factory", "-dir", "/app", "-addr", "0.0.0.0:8799", "-open=false"]

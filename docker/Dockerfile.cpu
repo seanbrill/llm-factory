@@ -16,7 +16,8 @@
 # Stage 1: compile llama-server (static; no shared-lib sprawl in runtime)
 # ----------------------------------------------------------------------------
 FROM debian:bookworm-slim AS builder
-ARG LLAMA_CPP_REF=master
+# Pinned llama.cpp release for reproducible builds (override to track master).
+ARG LLAMA_CPP_REF=b9820
 # TARGETARCH is auto-populated by BuildKit (Docker Desktop's default builder).
 # If BuildKit is disabled (older Linux Docker), it is empty and we fall back to
 # the amd64 SIMD path — identical to the previous x86-only behaviour.
@@ -57,6 +58,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /llmgate .
 # ----------------------------------------------------------------------------
 FROM debian:bookworm-slim AS runtime
 ARG INJECT_MODE=missing
+ARG MODALITY=text
 ARG CTX_SIZE=4096
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 curl ca-certificates \
@@ -67,17 +69,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /src/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 COPY --from=gate    /llmgate                              /usr/local/bin/llmgate
 COPY model.gguf         /models/model.gguf
+# Always-present vision projector (empty placeholder for text; real for VLMs).
+COPY mmproj.gguf        /models/mmproj.gguf
 COPY system_prompt.txt  /etc/llmgate/system_prompt.txt
 
-# Tunables (override per `docker run -e ...`). THREADS should match host vCPUs.
+# Tunables (override per `docker run -e ...`). THREADS defaults to the container's
+# CPU count (set by llmgate); set it explicitly to cap or leave cores free.
 # PORT is public (llmgate); UPSTREAM_PORT is llama-server, internal only.
 ENV MODEL_PATH=/models/model.gguf \
     PORT=8080 \
     UPSTREAM_PORT=8081 \
     CTX_SIZE=${CTX_SIZE} \
-    THREADS=4 \
     PARALLEL=1 \
     NGL=0 \
+    MMPROJ_PATH=/models/mmproj.gguf \
+    MODALITY=${MODALITY} \
     SYSTEM_PROMPT_FILE=/etc/llmgate/system_prompt.txt \
     INJECT_MODE=${INJECT_MODE}
 

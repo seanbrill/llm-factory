@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -86,31 +87,37 @@ func main() {
 // ---------------------------------------------------------------------------
 
 type config struct {
-	llamaBin     string
-	modelPath    string
-	publicPort   int
-	upstreamPort int
-	ctxSize      int
-	threads      int
-	parallel     int
-	ngl          int    // GPU layers; 0 = CPU only
-	extraArgs    string // optional space-separated passthrough
-	systemPrompt string
-	injectMode   string // "missing" | "always"
+	llamaBin        string
+	modelPath       string
+	publicPort      int
+	upstreamPort    int
+	ctxSize         int
+	threads         int
+	parallel        int
+	ngl             int    // GPU layers; 0 = CPU only
+	mmprojPath      string // vision projector path; "" or an empty file = text model
+	mmprojNoOffload bool   // keep the projector on CPU (Vulkan VLM caveat)
+	modality        string // text|code|reasoning|vision|embedding (drives runtime flags)
+	extraArgs       string // optional space-separated passthrough
+	systemPrompt    string
+	injectMode      string // "missing" | "always"
 }
 
 func loadConfig() config {
 	c := config{
-		llamaBin:     env("LLAMA_BIN", "llama-server"),
-		modelPath:    env("MODEL_PATH", "/models/model.gguf"),
-		publicPort:   envInt("PORT", 8080),
-		upstreamPort: envInt("UPSTREAM_PORT", 8081),
-		ctxSize:      envInt("CTX_SIZE", 4096),
-		threads:      envInt("THREADS", 4),
-		parallel:     envInt("PARALLEL", 1),
-		ngl:          envInt("NGL", 0),
-		extraArgs:    os.Getenv("EXTRA_ARGS"),
-		injectMode:   env("INJECT_MODE", "missing"),
+		llamaBin:        env("LLAMA_BIN", "llama-server"),
+		modelPath:       env("MODEL_PATH", "/models/model.gguf"),
+		publicPort:      envInt("PORT", 8080),
+		upstreamPort:    envInt("UPSTREAM_PORT", 8081),
+		ctxSize:         envInt("CTX_SIZE", 4096),
+		threads:         envInt("THREADS", defaultThreads()),
+		parallel:        envInt("PARALLEL", 1),
+		ngl:             envInt("NGL", 0),
+		mmprojPath:      env("MMPROJ_PATH", ""),
+		mmprojNoOffload: envInt("MMPROJ_NO_OFFLOAD", 0) != 0,
+		modality:        env("MODALITY", "text"),
+		extraArgs:       os.Getenv("EXTRA_ARGS"),
+		injectMode:      env("INJECT_MODE", "missing"),
 	}
 	// The baked initialization prompt: inline env wins, else a file.
 	c.systemPrompt = strings.TrimSpace(os.Getenv("SYSTEM_PROMPT"))
@@ -139,6 +146,22 @@ func (c config) llamaArgs() []string {
 	}
 	if c.ngl > 0 {
 		args = append(args, "--n-gpu-layers", strconv.Itoa(c.ngl))
+	}
+	// Embedding models serve /v1/embeddings instead of chat; --embedding switches
+	// llama-server into that mode (pooling auto-detects from the model).
+	if c.modality == "embedding" {
+		args = append(args, "--embedding")
+	}
+	// Vision projector: only when a real (non-empty) mmproj was baked. Text models
+	// bake a zero-byte placeholder, which we skip. On Vulkan the projector encode
+	// is kept on CPU (--no-mmproj-offload) to dodge the known Venus VLM-encoder bug.
+	if c.mmprojPath != "" {
+		if fi, err := os.Stat(c.mmprojPath); err == nil && fi.Size() > 0 {
+			args = append(args, "--mmproj", c.mmprojPath)
+			if c.mmprojNoOffload {
+				args = append(args, "--no-mmproj-offload")
+			}
+		}
 	}
 	if strings.TrimSpace(c.extraArgs) != "" {
 		args = append(args, strings.Fields(c.extraArgs)...)
@@ -249,4 +272,16 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// defaultThreads is the llama-server thread count when THREADS is unset: the
+// number of CPUs the container actually sees. The Dockerfiles used to hardcode
+// THREADS=4, which left most cores idle on multi-core hosts (e.g. an 8-vCPU
+// macOS Podman machine ran a 14B at ~half speed). Set THREADS explicitly to
+// override (e.g. to leave a core free for other work).
+func defaultThreads() int {
+	if n := runtime.NumCPU(); n > 0 {
+		return n
+	}
+	return 4
 }

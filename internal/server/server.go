@@ -179,8 +179,11 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.mux.HandleFunc("/api/image/config", s.handleImageConfig)
 	s.mux.HandleFunc("/api/run", s.handleRun)
 	s.mux.HandleFunc("/api/containers", s.handleContainers)
+	s.mux.HandleFunc("/api/container/logs", s.handleContainerLogs)
 	s.mux.HandleFunc("/api/stop", s.handleStop)
 	s.mux.HandleFunc("/api/chat", s.handleChat)
+	s.mux.HandleFunc("/healthz", s.handleHealthz)
+	s.mux.HandleFunc("/readyz", s.handleReadyz)
 	return s, nil
 }
 
@@ -191,6 +194,17 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// engineErrPayload formats an engine error for the UI: an actionable lead message
+// when we recognize the failure (e.g. engine-down, port-in-use), with the raw
+// error kept as `detail`. Stops bare "exit status 125" from reaching the user.
+func engineErrPayload(err error) map[string]string {
+	raw := err.Error()
+	if hint := builder.ClassifyEngineError(err); hint != "" {
+		return map[string]string{"error": hint, "detail": raw}
+	}
+	return map[string]string{"error": raw}
 }
 
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
@@ -263,7 +277,7 @@ func (s *Server) handleImageDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleImages(w http.ResponseWriter, r *http.Request) {
 	imgs, err := s.b.Images(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, imgs)
@@ -272,10 +286,55 @@ func (s *Server) handleImages(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 	cs, err := s.b.Containers(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, cs)
+}
+
+// handleHealthz is a liveness probe: the factory process is up. Always 200.
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleReadyz is a readiness probe: at least one container engine is reachable.
+// Returns the per-engine server version (empty = unreachable) so the UI can show
+// a precise degraded banner instead of cryptic failures on every call.
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	defer cancel()
+	versions := s.b.EngineVersions(ctx)
+	ready := false
+	for _, v := range versions {
+		if v != "" {
+			ready = true
+			break
+		}
+	}
+	code := http.StatusOK
+	if !ready {
+		code = http.StatusServiceUnavailable
+	}
+	writeJSON(w, code, map[string]any{"ready": ready, "engines": versions})
+}
+
+// handleContainerLogs returns the tail of a container's logs so a model that
+// crashed right after Run can be diagnosed instead of silently vanishing.
+func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "id query param is required", http.StatusBadRequest)
+		return
+	}
+	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	logs, err := s.b.ContainerLogs(ctx, normalizeEngine(r.URL.Query().Get("engine")), id, tail)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"logs": logs})
 }
 
 // handleBuild starts a build (one at a time) and returns immediately. The build
@@ -356,7 +415,14 @@ func (s *Server) runBuild(opts builder.BuildOptions, compute string) {
 
 	start := time.Now()
 	if err := s.b.Build(ctx, opts, log); err != nil {
-		s.bs.append("ERROR: " + err.Error())
+		// Lead with the recognized cause (engine down / disk / memory / port);
+		// the full engine output was already streamed into the log above.
+		if hint := builder.ClassifyEngineError(err); hint != "" {
+			s.bs.append("ERROR: " + hint)
+			s.bs.append("detail: " + err.Error())
+		} else {
+			s.bs.append("ERROR: " + err.Error())
+		}
 		s.bs.finish("error")
 		return
 	}
@@ -409,6 +475,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		Port    int    `json:"port"`
 		Engine  string `json:"engine"`
 		Compute string `json:"compute"`
+		// Optional run-time init-prompt override (no rebuild). When non-empty,
+		// llmgate uses these instead of the baked prompt for this instance.
+		SystemPrompt string `json:"system_prompt"`
+		InjectMode   string `json:"inject_mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -434,9 +504,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	id, err := s.b.Run(r.Context(), builder.RunOptions{
 		Ref: req.Ref, HostPort: req.Port, Engine: engine, Compute: compute,
 		MemoryGB: memGB, Route: route, Autostart: autostart,
+		SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
 		return
 	}
 	if err := s.b.RegenProxy(r.Context()); err != nil {
@@ -505,7 +576,7 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.b.Stop(r.Context(), normalizeEngine(req.Engine), req.ID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
 		return
 	}
 	if err := s.b.RegenProxy(r.Context()); err != nil {

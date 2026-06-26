@@ -15,6 +15,10 @@ cd "$(dirname "$0")"
 
 command -v docker >/dev/null 2>&1 || { echo "Docker is required and must be running." >&2; exit 1; }
 
+# Podman Desktop on macOS installs the CLI under /opt/podman/bin, which isn't on
+# a non-login shell's PATH. Add it so the Podman-socket detection below works.
+[ -x /opt/podman/bin/podman ] && PATH="/opt/podman/bin:$PATH"
+
 NAME=local-llm-factory
 PORT="${PORT:-8799}"
 mkdir -p models images config
@@ -47,7 +51,7 @@ docker run -d --name "$NAME" \
     -v "$PWD/images:/app/images" \
     -v "$PWD/config:/app/config" \
     --add-host host.docker.internal:host-gateway \
-    "${PODMAN_ARGS[@]}" \
+    ${PODMAN_ARGS[@]+"${PODMAN_ARGS[@]}"} \
     "$NAME"
 
 echo "local-llm factory is running at http://localhost:$PORT"
