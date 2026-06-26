@@ -536,6 +536,47 @@ func (b *Builder) Stop(ctx context.Context, engine, id string) error {
 	return nil
 }
 
+// SysInfo reports the active engine machine's resources so the UI can show
+// "fits your system" guidance. Best-effort: zero/empty fields when undeterminable.
+type SysInfo struct {
+	MemGB  float64 `json:"mem_gb"`
+	CPUs   int     `json:"cpus"`
+	GPU    string  `json:"gpu"`    // "" | "vulkan" | "cuda"
+	Engine string  `json:"engine"` // engine the numbers came from
+}
+
+// SysInfo reports where models actually run. It prefers podman (the GPU path on
+// macOS) over docker, reading each engine's machine memory/CPUs via the remote
+// `info` API (which works from inside the containerized factory, unlike the
+// host-only `machine inspect`). GPU is taken from FACTORY_GPU, which start.sh sets
+// when it detects a GPU-capable Podman machine.
+func (b *Builder) SysInfo(ctx context.Context) SysInfo {
+	si := SysInfo{GPU: os.Getenv("FACTORY_GPU")}
+	for _, engine := range candidateEngines() {
+		// podman exposes host RAM/CPU under .Host; docker at the top level.
+		out, err := engineCmd(ctx, engine, "info", "--format", "{{.Host.MemTotal}} {{.Host.NCPU}}").Output()
+		if err != nil || strings.Contains(string(out), "<no value>") {
+			out, err = engineCmd(ctx, engine, "info", "--format", "{{.MemTotal}} {{.NCPU}}").Output()
+		}
+		if err != nil {
+			continue
+		}
+		var memBytes int64
+		var cpus int
+		fmt.Sscan(strings.TrimSpace(string(out)), &memBytes, &cpus)
+		if memBytes <= 0 {
+			continue
+		}
+		si.MemGB = float64(memBytes) / 1e9
+		si.CPUs = cpus
+		si.Engine = engine
+		if engine == enginePodman {
+			return si // podman is the GPU path — prefer its numbers
+		}
+	}
+	return si
+}
+
 // EngineVersions probes each installed engine's server version. An empty value
 // means the engine is present but unreachable (e.g. the Podman machine/socket is
 // down) — which is exactly the state that surfaces as "exit status 125" in normal
@@ -547,6 +588,39 @@ func (b *Builder) EngineVersions(ctx context.Context) map[string]string {
 		out[engine] = strings.TrimSpace(string(v))
 	}
 	return out
+}
+
+// RecoverOnStartup brings the deployment back after a host/VM reboot: it restarts
+// any stopped containers that were built with autostart=true, then regenerates the
+// proxy from whatever is running. Best-effort and non-fatal — on a fresh factory
+// with nothing to recover it's a no-op. (Podman's unless-stopped restart policy
+// doesn't reliably fire after a full machine stop, and the Caddy proxy needs its
+// routes rebuilt, so the factory handles both itself.)
+func (b *Builder) RecoverOnStartup(ctx context.Context, log LogFunc) {
+	conts, err := b.Containers(ctx)
+	if err != nil {
+		return
+	}
+	for _, c := range conts {
+		if s, _ := c["State"].(string); s == "running" {
+			continue
+		}
+		labels, _ := c["Labels"].(string)
+		if labelValue(labels, "local-llm.autostart") != "true" {
+			continue
+		}
+		name, _ := c["Names"].(string)
+		engine, _ := c["Engine"].(string)
+		if name == "" {
+			continue
+		}
+		if err := engineCmd(ctx, engine, "start", name).Run(); err == nil {
+			log("restarted autostart container after boot: " + name)
+		}
+	}
+	if err := b.RegenProxy(ctx); err != nil {
+		log("regen proxy on startup: " + err.Error())
+	}
 }
 
 // ContainerLogs returns the last `tail` lines of a container's logs (stdout+stderr
@@ -958,6 +1032,9 @@ func (b *Builder) RemoveImage(ctx context.Context, engine, ref string, alsoTar b
 
 // ModelOnDisk reports whether a model's weights are present and their byte size.
 func (b *Builder) ModelOnDisk(m catalog.Model) (bool, int64) {
+	if m.File == "" {
+		return false, 0 // self-contained family (e.g. tts) — nothing to download
+	}
 	fi, err := os.Stat(b.ModelPath(m))
 	if err != nil || fi.Size() == 0 {
 		return false, 0
@@ -1036,7 +1113,7 @@ func ClassifyEngineError(err error) string {
 	switch {
 	case contains("connection refused", "cannot connect to podman", "cannot connect to the docker daemon"),
 		strings.Contains(msg, "sock") && strings.Contains(msg, "no such file"):
-		return "Container engine unreachable — the Podman machine or Docker isn't responding. Restart it with ./start.sh (the factory reconnects on launch), then retry."
+		return "Container engine unreachable — the Podman machine or Docker isn't responding. Restart the factory (scripts/<your-os>/start.sh) so it reconnects, then retry."
 	case contains("port is already allocated", "address already in use", "bind for"):
 		return "That host port is already in use — pick a different port."
 	case contains("no space left"):

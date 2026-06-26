@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net/http"
@@ -64,6 +65,12 @@ func main() {
 			openBrowser(url)
 		}()
 	}
+
+	// After a host/VM reboot, bring autostart models back and rebuild the proxy
+	// routes (Podman's restart policy doesn't reliably fire after a machine stop).
+	// Runs in the background so it never blocks serving the UI.
+	go b.RecoverOnStartup(context.Background(), func(s string) { log.Printf("startup recovery: %s", s) })
+
 	log.Fatal(httpSrv.ListenAndServe())
 }
 

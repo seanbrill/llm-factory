@@ -13,7 +13,7 @@
 
 param([int]$Port = 8799)
 
-Set-Location -Path $PSScriptRoot
+Set-Location -Path (Join-Path $PSScriptRoot '..\..')
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Write-Host "ERROR: Docker is required and must be running." -ForegroundColor Red

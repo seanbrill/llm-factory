@@ -184,6 +184,7 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.mux.HandleFunc("/api/chat", s.handleChat)
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
 	s.mux.HandleFunc("/readyz", s.handleReadyz)
+	s.mux.HandleFunc("/api/sysinfo", s.handleSysInfo)
 	return s, nil
 }
 
@@ -290,6 +291,14 @@ func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, cs)
+}
+
+// handleSysInfo returns the active engine machine's RAM/CPU/GPU so the build form
+// can show whether a model fits the user's actual system.
+func (s *Server) handleSysInfo(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, s.b.SysInfo(ctx))
 }
 
 // handleHealthz is a liveness probe: the factory process is up. Always 200.

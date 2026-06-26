@@ -523,6 +523,21 @@
       "recommended": false,
       "description": "Tiny English-only STT; runs anywhere.",
       "modality": "audio-stt"
+    },
+    {
+      "id": "piper-en-us",
+      "name": "Piper TTS (en_US, CPU)",
+      "repo": "rhasspy/piper-voices",
+      "file": "",
+      "url": "",
+      "size_gb": 0.06,
+      "tier": "tiny",
+      "params": "VITS",
+      "min_ram_gb": 1,
+      "min_vram_gb": 0,
+      "recommended": true,
+      "description": "Fast CPU text-to-speech; serves /v1/audio/speech. Self-contained (compute: CPU).",
+      "modality": "tts"
     }
   ]
 }

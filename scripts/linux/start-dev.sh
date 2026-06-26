@@ -10,7 +10,7 @@
 #
 # Stop with ./stop.sh (removes prod and dev containers).
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/../.."
 
 command -v docker >/dev/null 2>&1 || { echo "Docker is required and must be running." >&2; exit 1; }
 

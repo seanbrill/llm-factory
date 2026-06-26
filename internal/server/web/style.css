@@ -136,4 +136,34 @@ td input { width: 90px; padding: 5px 8px; }
 .empty { color: var(--muted); padding: 10px; font-size: 13px; }
 .toast { color: var(--err); font-size: 13px; margin-top: 8px; min-height: 16px; }
 footer { text-align: center; color: var(--muted); font-size: 12.5px; padding: 0 24px 30px; }
+
+/* Capability filter chips */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 14px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  background: #1a2030; color: #cbd3e1; border: 1px solid var(--border);
+  font-size: 12.5px; line-height: 1; transition: background .12s, border-color .12s;
+}
+.chip:hover { background: #222a3d; }
+.chip.active { background: #2a3550; border-color: #4b6ad6; color: #fff; }
+.chip-n { color: var(--muted); font-size: 11px; }
+.chip.active .chip-n { color: #c7d2fe; }
+
+/* Modality + fit badges */
+.badge.mod {
+  display: inline-block; padding: 2px 7px; border-radius: 6px;
+  font-size: 11.5px; line-height: 1.5; background: #1c2436;
+  border: 1px solid var(--border); color: #c7d0e0; white-space: nowrap;
+}
+.mod-vision { border-color: #6d5ae0; color: #c4b8ff; }
+.mod-image  { border-color: #c062a0; color: #f3b8e0; }
+.mod-audio-stt, .mod-tts { border-color: #4a9c8c; color: #a8f0e0; }
+.mod-embedding { border-color: #b08a3a; color: #f0d8a0; }
+.mod-code, .mod-reasoning { border-color: #3a78b0; color: #a8d0f0; }
+.hint-badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
+.fit { font-size: 12px; font-weight: 600; }
+.fit-ok { color: var(--ok); }
+.fit-warn { color: #e0b341; }
+.fit-bad { color: var(--err); }
 code { background: #0c0e13; padding: 1px 5px; border-radius: 4px; }

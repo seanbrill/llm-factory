@@ -48,12 +48,12 @@ Make sure the app is **running** (its tray / menu-bar icon says "running") first
 **2. Start the factory.** From this project's folder:
 
 ```powershell
-.\start.ps1                 # Windows         (stop with .\stop.ps1)
-.\start.ps1 -Port 9000      # optional: custom port
+.\scripts\windows\start.ps1                 # Windows         (stop with .\scripts\windows\stop.ps1)
+.\scripts\windows\start.ps1 -Port 9000      # optional: custom port
 ```
 ```bash
-./start.sh                  # macOS / Linux   (stop with ./stop.sh)
-PORT=9000 ./start.sh        # optional: custom port
+./scripts/macos/start.sh                  # macOS / Linux   (stop with ./scripts/macos/stop.sh)
+PORT=9000 ./scripts/macos/start.sh        # optional: custom port
 ```
 
 The first run builds a small helper image, then launches the factory. Leave it
@@ -161,7 +161,7 @@ of native). More in [Running on a Mac](#running-on-a-mac-apple-silicon) below.
 ## Development (hot reload)
 
 ```powershell
-.\start-dev.ps1     # Windows   (./start-dev.sh on macOS/Linux);  stop with .\stop.ps1
+.\scripts\windows\start-dev.ps1     # Windows   (./scripts/macos/start-dev.sh on macOS/Linux);  stop with .\scripts\windows\stop.ps1
 ```
 
 Runs the factory in a dev container with the repo bind-mounted and **UI and
@@ -179,7 +179,7 @@ Notes:
   see your host edits.
 - The Go build cache is kept in a named volume so rebuilds are fast (this project
   has zero third-party deps, so a backend reload is ~1–2s).
-- Use the regular `.\start.ps1` for the production image (UI embedded, no watcher).
+- Use the regular `.\scripts\windows\start.ps1` for the production image (UI embedded, no watcher).
 
 Then in the UI:
 1. **Build** — choose a model, pick an **Engine** (Docker/Podman) and **Compute**

@@ -3,7 +3,7 @@
 # independently and are NOT stopped here — remove those from the UI (or
 # `docker rm -f <name>`).
 
-Set-Location -Path $PSScriptRoot
+Set-Location -Path (Join-Path $PSScriptRoot '..\..')
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Write-Host "ERROR: Docker not found." -ForegroundColor Red

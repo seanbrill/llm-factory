@@ -11,7 +11,7 @@
 #
 # (For native dev without Docker you can still run:  go run ./cmd/builder)
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/../.."
 
 command -v docker >/dev/null 2>&1 || { echo "Docker is required and must be running." >&2; exit 1; }
 
@@ -38,6 +38,13 @@ if command -v podman >/dev/null 2>&1; then
     if [ -z "${PSOCK:-}" ] && [ -S /run/podman/podman.sock ]; then PSOCK=/run/podman/podman.sock; fi
     if [ -n "${PSOCK:-}" ] && [ -S "$PSOCK" ]; then
         PODMAN_ARGS=(-v "$PSOCK:/run/podman/podman.sock" -e "CONTAINER_HOST=unix:///run/podman/podman.sock")
+        # GPU hint for the UI's "fits your system" badges: a libkrun/krunkit machine
+        # paravirtualizes the Apple/host GPU into a Vulkan device. (machine inspect
+        # is a host command, so we detect it here and pass it into the container.)
+        # The machine's config dir path encodes the provider (…/machine/libkrun).
+        # `|| true` keeps a detection hiccup from aborting startup under `set -e`.
+        MACHINE_CFG="$(podman machine inspect --format '{{.ConfigDir.Path}}' 2>/dev/null | head -n1 || true)"
+        case "$MACHINE_CFG" in *krun*) PODMAN_ARGS+=(-e "FACTORY_GPU=vulkan") ;; esac
         echo "Podman machine detected — enabling the Podman engine (socket: $PSOCK)"
     fi
 fi

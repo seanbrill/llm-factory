@@ -17,17 +17,9 @@ async function api(path, opts) {
 
 async function loadCatalog() {
   CATALOG = await api("/api/catalog");
-  const sel = $("model");
-  sel.innerHTML = "";
-  for (const m of CATALOG) {
-    const opt = document.createElement("option");
-    opt.value = m.id;
-    opt.textContent = `${m.name} — ${m.size_gb} GB (${m.tier})${m.recommended ? "  ★" : ""}`;
-    sel.appendChild(opt);
-  }
-  const rec = CATALOG.find((m) => m.recommended);
-  if (rec) sel.value = rec.id;
-  updateHint();
+  await loadSysInfo();
+  renderModalityFilter();   // capability filter chips
+  populateModelSelect();    // fills #model (respecting the filter) + updateHint()
 }
 
 function selectedModel() {
@@ -70,7 +62,8 @@ function updateHint() {
   const vram = m.min_vram_gb > 0 ? `, ~${m.min_vram_gb} GB VRAM on GPU` : "";
   const ctx = info.context ? ` · context ${info.context}` : "";
 
-  let html = `<span class="hint-spec">${escapeHtml(m.params)} · ~${m.min_ram_gb} GB RAM${vram}${ctx}</span>` +
+  let html = `<div class="hint-badges">${modalityBadge(modOf(m))} ${fitHint(m)}</div>` +
+             `<span class="hint-spec">${escapeHtml(m.params)} · ~${m.min_ram_gb} GB RAM${vram}${ctx}</span>` +
              `<br>${escapeHtml(m.description)}`;
   if (info.ratings) html += `<div class="ratings">${ratingsHtml(info.ratings)}</div>`;
   html += `<div class="ctxnote">Ratings are rough guidance. Native context shown; the image serves at CTX_SIZE ` +
@@ -90,6 +83,69 @@ function ctxDefaultFor(compute) { return (compute === "cuda" || compute === "vul
 const COMPUTE_BADGE = { cpu: "CPU", cuda: "GPU (CUDA)", vulkan: "GPU (Vulkan)" };
 function computeBadge(c) { return COMPUTE_BADGE[c] || "CPU"; }
 function engineBadge(e) { return e === "podman" ? "Podman" : "Docker"; }
+
+// Modality → icon + label. Emoji keeps capability badges dependency-free; keep
+// keys in sync with the catalog "modality" values.
+const MODALITY = {
+  text:        { icon: "💬", label: "Chat" },
+  code:        { icon: "💻", label: "Code" },
+  reasoning:   { icon: "🧠", label: "Reasoning" },
+  vision:      { icon: "👁", label: "Vision" },
+  embedding:   { icon: "🔢", label: "Embeddings" },
+  image:       { icon: "🎨", label: "Image gen" },
+  "audio-stt": { icon: "🎙", label: "Speech→Text" },
+  tts:         { icon: "🔊", label: "Text→Speech" },
+};
+function modOf(m) { return (m && m.modality) || "text"; }
+function modMeta(k) { return MODALITY[k] || MODALITY.text; }
+function modalityBadge(k) { const x = modMeta(k); return `<span class="badge mod mod-${k}">${x.icon} ${x.label}</span>`; }
+
+// System resources of the engine machine the model will actually run in, for the
+// "fits your system" hints. Fetched once; failure is non-fatal (hints just hide).
+let SYSINFO = null;
+async function loadSysInfo() { try { SYSINFO = await api("/api/sysinfo"); } catch { SYSINFO = null; } }
+function fitHint(m) {
+  if (!SYSINFO || !SYSINFO.mem_gb) return "";
+  const need = m.min_ram_gb || 0, have = SYSINFO.mem_gb;
+  let cls, txt;
+  if (need <= have - 2)  { cls = "ok";   txt = `✓ fits your ${have.toFixed(0)} GB`; }
+  else if (need <= have) { cls = "warn"; txt = `△ tight on ${have.toFixed(0)} GB`; }
+  else                   { cls = "bad";  txt = `✕ needs ~${need} GB (you have ${have.toFixed(0)})`; }
+  let gpu = "";
+  if (modOf(m) === "image" || m.min_vram_gb > 0)
+    gpu = SYSINFO.gpu ? ` · GPU-ready (${SYSINFO.gpu})` : " · CPU only (no GPU)";
+  return `<span class="fit fit-${cls}">${txt}${gpu}</span>`;
+}
+
+// Capability filter for the model picker.
+let MODALITY_FILTER = "all";
+function renderModalityFilter() {
+  const order = ["all", "text", "code", "reasoning", "vision", "embedding", "image", "audio-stt", "tts"];
+  const present = ["all", ...new Set(CATALOG.map(modOf))].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  const el = $("modalityFilter");
+  el.innerHTML = present.map((k) => {
+    const label = k === "all" ? "All" : `${modMeta(k).icon} ${modMeta(k).label}`;
+    const n = k === "all" ? CATALOG.length : CATALOG.filter((m) => modOf(m) === k).length;
+    return `<button type="button" class="chip${k === MODALITY_FILTER ? " active" : ""}" data-mod="${k}">${label} <span class="chip-n">${n}</span></button>`;
+  }).join("");
+  el.querySelectorAll(".chip").forEach((c) => c.onclick = () => {
+    MODALITY_FILTER = c.dataset.mod; renderModalityFilter(); populateModelSelect();
+  });
+}
+function populateModelSelect() {
+  const sel = $("model"), prev = sel.value;
+  sel.innerHTML = "";
+  const list = CATALOG.filter((m) => MODALITY_FILTER === "all" || modOf(m) === MODALITY_FILTER);
+  for (const m of list) {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = `${modMeta(modOf(m)).icon} ${m.name} — ${m.size_gb} GB · ${modMeta(modOf(m)).label}${m.recommended ? "  ★" : ""}`;
+    sel.appendChild(opt);
+  }
+  if (list.some((m) => m.id === prev)) sel.value = prev;
+  else { const r = list.find((m) => m.recommended) || list[0]; if (r) sel.value = r.id; }
+  updateHint();
+}
 
 // Prefill the context default for the selected compute, unless the user edited it.
 function applyComputeDefaults() {
@@ -426,9 +482,10 @@ async function loadImages() {
     const up = cs.find(isRunning);
     const status = statusBadge(up, cs);
 
+    const imMod = (im.Labels && im.Labels["local-llm.modality"]) || "text";
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td><a href="#" class="link tpl" title="Use as a template for a new build">${displayName}</a></td>
+      <td><a href="#" class="link tpl" title="Use as a template for a new build">${displayName}</a><br>${modalityBadge(imMod)}</td>
       <td>${displayTag}</td><td>${engineBadge(engine)}</td><td>${computeBadge(im.Compute)}</td><td>${im.Size || ""}</td>
       <td>${status}</td>
       <td><input type="number" value="${up ? containerPort(up) : port++}" /></td>
