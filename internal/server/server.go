@@ -288,6 +288,11 @@ func (s *Server) handleImages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
 		return
 	}
+	// Tell the UI which configured engines are unreachable so a partial/empty
+	// list can be explained instead of read as "nothing here".
+	if down := s.b.EnginesDown(); len(down) > 0 {
+		w.Header().Set("X-Engines-Down", strings.Join(down, ","))
+	}
 	writeJSON(w, http.StatusOK, imgs)
 }
 
@@ -296,6 +301,9 @@ func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
 		return
+	}
+	if down := s.b.EnginesDown(); len(down) > 0 {
+		w.Header().Set("X-Engines-Down", strings.Join(down, ","))
 	}
 	writeJSON(w, http.StatusOK, cs)
 }

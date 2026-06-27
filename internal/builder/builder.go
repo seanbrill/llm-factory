@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yourorg/local-llm/internal/catalog"
@@ -1074,6 +1075,49 @@ const engineRetries = 4
 // transientEngineErr reports whether an engine command failed with a retryable
 // connection error (vs a real error like "no such container", which must NOT be
 // retried — we'd just waste time and still fail).
+// Engine circuit-breaker state: which engines are currently failing to connect.
+// Flipped by dockerJSONLines (down on a connection error, up on any success) so
+// a stopped/absent engine is fast-failed instead of retried on every poll.
+var (
+	engineDownMu sync.Mutex
+	engineDown   = map[string]bool{}
+)
+
+func engineIsDown(engine string) bool {
+	engineDownMu.Lock()
+	defer engineDownMu.Unlock()
+	return engineDown[engine]
+}
+func setEngineDown(engine string, down bool) {
+	engineDownMu.Lock()
+	defer engineDownMu.Unlock()
+	if down {
+		engineDown[engine] = true
+	} else {
+		delete(engineDown, engine)
+	}
+}
+
+// EnginesDown reports engines that are currently unreachable AND actually
+// configured here, so the UI can explain "Podman unreachable" instead of showing
+// a silently-empty table. A host with the podman binary but no machine/socket
+// (CONTAINER_HOST unset) is not flagged — that's expected, not a fault.
+func (b *Builder) EnginesDown() []string {
+	engineDownMu.Lock()
+	defer engineDownMu.Unlock()
+	var out []string
+	for _, e := range candidateEngines() {
+		if !engineDown[e] {
+			continue
+		}
+		if e == enginePodman && os.Getenv("CONTAINER_HOST") == "" {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 func transientEngineErr(err error) bool {
 	if err == nil {
 		return false
@@ -1129,11 +1173,23 @@ func ClassifyEngineError(err error) string {
 }
 
 func dockerJSONLines(ctx context.Context, engine string, args ...string) ([]map[string]any, error) {
+	// Bound a single list call so a hung/absent socket can't stall a poll forever.
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	// Circuit breaker: an engine that just refused a connection is fast-failed
+	// (no multi-attempt backoff) until a probe succeeds again, so a stopped or
+	// absent engine — e.g. the podman binary is installed but its machine is off,
+	// which is the common case — doesn't add ~5s to every poll. One probe still
+	// runs each call, so recovery is detected immediately.
+	retries := engineRetries
+	if engineIsDown(engine) {
+		retries = 0
+	}
 	var out []byte
 	var err error
 	for attempt := 0; ; attempt++ {
 		out, err = engineCmd(ctx, engine, args...).Output()
-		if err == nil || attempt >= engineRetries || !transientEngineErr(err) {
+		if err == nil || attempt >= retries || !transientEngineErr(err) {
 			break
 		}
 		// Backoff a little before retrying the flaky socket; bail on cancel.
@@ -1144,8 +1200,12 @@ func dockerJSONLines(ctx context.Context, engine string, args ...string) ([]map[
 		}
 	}
 	if err != nil {
+		if transientEngineErr(err) {
+			setEngineDown(engine, true) // trip the breaker so the next poll fast-fails
+		}
 		return nil, err
 	}
+	setEngineDown(engine, false) // answered — clear any breaker for this engine
 	res := []map[string]any{}
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)

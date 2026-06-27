@@ -62,6 +62,7 @@ const ICONS = {
   link:      '<path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/>',
   paperclip: '<path d="M21.4 11.05 12.25 20.2a6 6 0 0 1-8.49-8.49l9.2-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
   x:         '<path d="M18 6 6 18M6 6l12 12"/>',
+  alert:     '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
 };
 function icon(name, cls) {
   const p = ICONS[name];
@@ -810,8 +811,14 @@ function statusBadge(up, cs) {
 async function loadImages() {
   const tbody = $("imagesTable").querySelector("tbody");
   tbody.innerHTML = "";
-  let imgs = [], conts = [], bstate = null;
-  try { imgs = await api("/api/images"); } catch (e) { renderEmpty(tbody, 8, e.message); return; }
+  let imgs = [], conts = [], bstate = null, down = [];
+  try {
+    const res = await fetch("/api/images");
+    imgs = await res.json();
+    if (!res.ok) throw new Error(imgs.error || res.statusText);
+    down = (res.headers.get("X-Engines-Down") || "").split(",").filter(Boolean);
+  } catch (e) { renderEmpty(tbody, 8, e.message); return; }
+  showEngineWarn(down);
   try { conts = await api("/api/containers"); } catch { conts = []; }
   try { bstate = await api("/api/build/state?offset=0"); } catch {}
 
@@ -995,10 +1002,16 @@ async function deleteImage(ref, engine) {
 async function loadContainers() {
   const tbody = $("containersTable").querySelector("tbody");
   tbody.innerHTML = "";
-  let cs = [];
-  try { cs = await api("/api/containers"); } catch (e) { renderEmpty(tbody, 6, e.message); return; }
+  let cs = [], down = [];
+  try {
+    const res = await fetch("/api/containers");
+    cs = await res.json();
+    if (!res.ok) throw new Error(cs.error || res.statusText);
+    down = (res.headers.get("X-Engines-Down") || "").split(",").filter(Boolean);
+  } catch (e) { renderEmpty(tbody, 6, e.message); return; }
+  showEngineWarn(down);
   updateNavBadge(cs);
-  if (!cs.length) { renderEmpty(tbody, 6, "No containers."); return; }
+  if (!cs.length) { renderEmpty(tbody, 6, down.length ? `No containers visible — ${down.join(", ")} unreachable.` : "No containers."); return; }
 
   for (const c of cs) {
     const tr = document.createElement("tr");
@@ -1078,6 +1091,17 @@ function updateNavBadge(cs) {
   const n = (cs || []).filter(isRunning).length;
   const b = $("navContainers");
   if (b) { b.hidden = n === 0; b.textContent = n; }
+}
+// Show/hide the "engine unreachable" banner from an X-Engines-Down header.
+function showEngineWarn(down) {
+  const el = $("engineWarn");
+  if (!el) return;
+  if (!down || !down.length) { el.hidden = true; return; }
+  const osDir = /mac/i.test(navigator.platform) ? "macos" : /win/i.test(navigator.platform) ? "windows" : "linux";
+  const names = down.map((d) => d.charAt(0).toUpperCase() + d.slice(1)).join(" & ");
+  el.innerHTML = `${icon("alert")} <span><b>${names} unreachable.</b> Your models keep running, but the factory ` +
+    `lost its connection to the engine — re-run <code>scripts/${osDir}/start.sh</code> (or restart the factory) to reconnect.</span>`;
+  el.hidden = false;
 }
 
 // ===========================================================================
