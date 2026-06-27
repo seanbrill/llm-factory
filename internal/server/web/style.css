@@ -311,7 +311,7 @@ code { background: #0c0e13; padding: 1px 5px; border-radius: 4px; }
 .cap-label .ico { width: 13px; height: 13px; color: #8893a7; }
 .cap-label span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cap-track { flex: 1; height: 7px; background: #0c0e13; border: 1px solid var(--border); border-radius: 99px; overflow: hidden; }
-.cap-fill { height: 100%; border-radius: 99px; }
+.cap-fill { display: block; height: 100%; border-radius: 99px; }
 .cap-fill.b-hi  { background: linear-gradient(90deg, #2f9e4a, #46c969); }
 .cap-fill.b-mid { background: linear-gradient(90deg, #3a78b0, #4f9be0); }
 .cap-fill.b-lo  { background: linear-gradient(90deg, #b0873a, #e0b341); }

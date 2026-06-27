@@ -325,7 +325,8 @@ function buildFilters() {
     const on = FILTER.mods.has(k);
     return `<button type="button" class="fchip${on ? " on" : ""}" data-mod="${k}"${tipAttr("mod:" + k)}>${icon(modMeta(k).icon)} ${modMeta(k).label} <span class="fn">${n}</span></button>`;
   }).join("");
-  $("filterModalities").querySelectorAll(".fchip").forEach((b) => b.onclick = () => {
+  $("filterModalities").querySelectorAll(".fchip").forEach((b) => b.onclick = (e) => {
+    e.stopPropagation();   // rebuilding the chips detaches us; don't let the click bubble and close the panel
     const k = b.dataset.mod; FILTER.mods.has(k) ? FILTER.mods.delete(k) : FILTER.mods.add(k);
     buildFilters(); renderList();
   });
@@ -338,7 +339,8 @@ function buildFilters() {
       const on = FILTER.strengths.has(t);
       return `<button type="button" class="fchip sm${on ? " on" : ""}" data-tag="${escapeHtml(t)}"${tipAttr("tag:" + t)}>${escapeHtml(t)}</button>`;
     }).join("");
-    $("filterStrengths").querySelectorAll(".fchip").forEach((b) => b.onclick = () => {
+    $("filterStrengths").querySelectorAll(".fchip").forEach((b) => b.onclick = (e) => {
+      e.stopPropagation();
       const t = b.dataset.tag; FILTER.strengths.has(t) ? FILTER.strengths.delete(t) : FILTER.strengths.add(t);
       buildFilters(); renderList();
     });
