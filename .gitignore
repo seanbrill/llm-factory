@@ -11,8 +11,8 @@
 /local-llm
 /local-llm.exe
 
-# User-edited catalog is generated on first run from the embedded default.
-/config/models.json
+# Note: config/models.json is committed (tracked) so the catalog syncs across
+# machines. It is still seeded from the embedded default on a fresh checkout.
 # Runtime build-duration stats (used for the build ETA).
 /config/build-stats.json
 # Generated reverse-proxy config.
