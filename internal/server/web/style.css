@@ -430,3 +430,80 @@ button.ghost.icon-btn { padding: 6px 8px; }
 .help-card ul.help-mods { list-style: none; padding: 0; margin: 0 0 8px; display: grid; gap: 7px; }
 .help-card ul.help-mods li { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--muted); }
 .help-perf { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+
+/* ===================================================================== */
+/* Chat — tabs, markdown, thinking, media, bridge                        */
+/* ===================================================================== */
+.chat-tabs { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+.ctab { margin: 0; display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--muted); max-width: 220px; }
+.ctab:hover { background: #161b27; }
+.ctab.active { background: #182338; color: #fff; border-color: var(--border); }
+.ctab-ic { display: inline-flex; }
+.ctab-ic .ico { width: 14px; height: 14px; }
+.ctab-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.ctab-x { display: inline-flex; opacity: .55; border-radius: 4px; }
+.ctab-x .ico { width: 13px; height: 13px; }
+.ctab-x:hover { opacity: 1; background: #33404f; }
+.ctab-new { margin: 0; padding: 6px; background: transparent; border: 1px dashed var(--border); color: var(--muted); border-radius: 8px; }
+.ctab-new .ico { width: 15px; height: 15px; }
+
+.chat-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.chat-toolbar .chat-target { flex: 1; max-width: 340px; }
+.chat-toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+
+.menu { position: relative; display: inline-block; }
+.menu > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; }
+.menu > summary::-webkit-details-marker { display: none; }
+.menu[open] > summary { border-color: var(--accent); }
+.menu-items { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; background: #12151c; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,.5); padding: 4px; display: flex; flex-direction: column; min-width: 130px; }
+.menu-items button { margin: 0; text-align: left; background: transparent; border: none; padding: 7px 10px; border-radius: 6px; color: var(--text); font-size: 13px; }
+.menu-items button:hover { background: #1a2030; }
+
+/* Markdown inside assistant bubbles */
+.msg-body p { margin: 0 0 8px; }
+.msg-body p:last-child { margin-bottom: 0; }
+.msg-body ul, .msg-body ol { margin: 4px 0 8px; padding-left: 20px; }
+.msg-body li { margin: 2px 0; }
+.msg-body .md-h { font-size: 14.5px; margin: 8px 0 4px; }
+.msg-body code { background: #0c0e13; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+.code-block { margin: 8px 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #06080c; }
+.code-head { display: flex; align-items: center; justify-content: space-between; padding: 5px 10px; background: #10141b; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); }
+.code-lang { text-transform: uppercase; letter-spacing: .5px; }
+.code-copy { margin: 0; padding: 3px 7px; font-size: 11px; background: transparent; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.code-copy .ico { width: 12px; height: 12px; }
+.code-copy:hover { color: var(--text); border-color: var(--accent); }
+.code-block pre { margin: 0; padding: 11px 12px; overflow: auto; }
+.code-block code { background: transparent; padding: 0; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; color: #cbd3e1; }
+
+/* Thinking trace */
+.think { margin: 0 0 8px; border: 1px dashed var(--border); border-radius: 8px; background: #0f1320; }
+.think > summary { cursor: pointer; padding: 6px 10px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; list-style: none; }
+.think > summary::-webkit-details-marker { display: none; }
+.think > summary .ico { width: 13px; height: 13px; color: #c08af0; }
+.think-body { padding: 0 12px 10px; font-size: 12.5px; color: #9aa6bd; white-space: pre-wrap; }
+
+/* Media + errors in bubbles */
+.chat-img { max-width: 100%; border-radius: 10px; display: block; }
+.chat-img.sm { max-width: 220px; margin-bottom: 6px; }
+.msg-body audio { width: 260px; max-width: 100%; }
+.audio-cap { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.msg-error .msg-body { color: #ffb3ad; }
+.msg-bridge { align-self: flex-start; max-width: 88%; }
+
+/* Attachments + image settings */
+.attach-preview { margin: 6px 0 0; }
+.att { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; background: #1a2030; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; color: #cbd3e1; }
+.att img { width: 24px; height: 24px; object-fit: cover; border-radius: 4px; }
+.att-x { margin: 0; padding: 2px; background: transparent; border: none; color: var(--muted); display: inline-flex; }
+.att-x .ico { width: 13px; height: 13px; }
+.img-settings { margin-top: 8px; }
+.img-settings summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.img-settings-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 8px; }
+.img-settings-grid label { font-size: 12px; }
+
+/* Modal */
+.modal { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.modal[hidden] { display: none; }
+.modal-box { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 20px; width: min(520px, 100%); }
+.modal-box h3 { margin: 0 0 4px; font-size: 16px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }

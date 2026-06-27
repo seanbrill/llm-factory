@@ -4,12 +4,15 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -182,6 +185,10 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.mux.HandleFunc("/api/container/logs", s.handleContainerLogs)
 	s.mux.HandleFunc("/api/stop", s.handleStop)
 	s.mux.HandleFunc("/api/chat", s.handleChat)
+	s.mux.HandleFunc("/api/chat/stream", s.handleChatStream)
+	s.mux.HandleFunc("/api/image/generate", s.handleImageGenerate)
+	s.mux.HandleFunc("/api/transcribe", s.handleTranscribe)
+	s.mux.HandleFunc("/api/tts", s.handleTTS)
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
 	s.mux.HandleFunc("/readyz", s.handleReadyz)
 	s.mux.HandleFunc("/api/sysinfo", s.handleSysInfo)
@@ -700,4 +707,221 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"response": resp})
+}
+
+// modelURL builds the URL to an endpoint on a running model container. Models
+// publish their server on modelHost:<port> (loopback natively, the gateway host
+// in-container); the factory proxies to keep the browser same-origin.
+func (s *Server) modelURL(port int, path string) string {
+	if port == 0 {
+		port = 8080
+	}
+	return fmt.Sprintf("http://%s:%d%s", s.modelHost, port, path)
+}
+
+// handleChatStream proxies an OpenAI chat request to a running llama-server and
+// streams the text/event-stream response straight through to the browser. The
+// request body is forwarded verbatim (so an OpenAI content-array carrying an
+// image rides this path for vision too); we just stamp model+stream. The shim in
+// front of the model already proxies SSE with no buffering.
+func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	port := 8080
+	if p, ok := req["port"].(float64); ok {
+		port = int(p)
+	}
+	delete(req, "port")
+	req["model"] = "local-model" // required by schema, ignored with one model loaded
+	req["stream"] = true
+	body, _ := json.Marshal(req)
+
+	upReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, s.modelURL(port, "/v1/chat/completions"), bytes.NewReader(body))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	upReq.Header.Set("Content-Type", "application/json")
+	// No client timeout: streaming can run a while; r.Context cancels on disconnect.
+	resp, err := (&http.Client{}).Do(upReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, engineErrPayload(err))
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		writeJSON(w, resp.StatusCode, map[string]string{"error": strings.TrimSpace(string(b))})
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	buf := make([]byte, 4096)
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if rerr != nil {
+			return
+		}
+	}
+}
+
+// handleImageGenerate proxies a text-to-image request to a running sd-server and
+// returns each image as a ready-to-use data URL. Synchronous and slow (SDXL can
+// take ~2 min), so it uses a long upstream timeout.
+func (s *Server) handleImageGenerate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	port := 8080
+	if p, ok := req["port"].(float64); ok {
+		port = int(p)
+	}
+	delete(req, "port")
+	body, _ := json.Marshal(req)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	upReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.modelURL(port, "/sdapi/v1/txt2img"), bytes.NewReader(body))
+	upReq.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{}).Do(upReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, engineErrPayload(err))
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		writeJSON(w, resp.StatusCode, map[string]string{"error": strings.TrimSpace(string(b))})
+		return
+	}
+	var out struct {
+		Images []string `json:"images"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "bad image response: " + err.Error()})
+		return
+	}
+	for i, b64 := range out.Images {
+		if !strings.HasPrefix(b64, "data:") {
+			out.Images[i] = "data:image/png;base64," + b64
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"images": out.Images})
+}
+
+// handleTranscribe proxies an uploaded audio file to a running whisper-server as
+// a fresh multipart body and returns the transcript text.
+func (s *Server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseMultipartForm(64 << 20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	file, hdr, err := r.FormFile("file")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing audio 'file'"})
+		return
+	}
+	defer file.Close()
+	port, _ := strconv.Atoi(r.FormValue("port"))
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("file", hdr.Filename)
+	io.Copy(fw, file)
+	mw.WriteField("response_format", "json")
+	for _, k := range []string{"temperature", "language"} {
+		if v := r.FormValue(k); v != "" {
+			mw.WriteField(k, v)
+		}
+	}
+	mw.Close()
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+	upReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.modelURL(port, "/inference"), &buf)
+	upReq.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := (&http.Client{}).Do(upReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, engineErrPayload(err))
+		return
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		writeJSON(w, resp.StatusCode, map[string]string{"error": strings.TrimSpace(string(b))})
+		return
+	}
+	var out struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(b, &out) == nil && out.Text != "" {
+		writeJSON(w, http.StatusOK, map[string]string{"text": strings.TrimSpace(out.Text)})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"text": strings.TrimSpace(string(b))})
+}
+
+// handleTTS proxies text to a running Piper server and streams the WAV back.
+func (s *Server) handleTTS(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Port int    `json:"port"`
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.Text) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty text"})
+		return
+	}
+	body, _ := json.Marshal(map[string]string{"input": req.Text})
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+	upReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.modelURL(req.Port, "/v1/audio/speech"), bytes.NewReader(body))
+	upReq.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{}).Do(upReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, engineErrPayload(err))
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		writeJSON(w, resp.StatusCode, map[string]string{"error": strings.TrimSpace(string(b))})
+		return
+	}
+	w.Header().Set("Content-Type", "audio/wav")
+	io.Copy(w, resp.Body)
 }

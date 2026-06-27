@@ -56,6 +56,11 @@ const ICONS = {
   download:  '<path d="M12 3v12M7 11l5 5 5-5M5 21h14"/>',
   doc:       '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
   refresh:   '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v5h-5"/>',
+  plus:      '<path d="M12 5v14M5 12h14"/>',
+  send:      '<path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/>',
+  link:      '<path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/>',
+  paperclip: '<path d="M21.4 11.05 12.25 20.2a6 6 0 0 1-8.49-8.49l9.2-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+  x:         '<path d="M18 6 6 18M6 6l12 12"/>',
 };
 function icon(name, cls) {
   const p = ICONS[name];
@@ -1074,75 +1079,420 @@ function updateNavBadge(cs) {
   if (b) { b.hidden = n === 0; b.textContent = n; }
 }
 
-// ---- Chat -----------------------------------------------------------------
-// Multi-turn chat with a running model (its OpenAI-compatible API, proxied by
-// /api/chat). History lives client-side and is sent each turn for context.
-let CHAT = [];                 // [{ role, content }]
-let LAST_RUN_PORT = 0;         // a model just started from the Images page
-let chatBusy = false;
+// ===========================================================================
+// Chat — a tabbed, modality-aware, streaming chat client over the model proxies
+// ===========================================================================
+// Each tab is an independent conversation targeting one running container. The
+// composer + send behavior adapt to the target's modality (text/vision stream
+// chat, image generates, STT transcribes an upload, TTS speaks). A "bridge" tab
+// wires two models to talk to each other.
 
-async function refreshChatTargets() {
-  const sel = $("chatTarget");
-  if (!sel) return;
-  let cs = [];
-  try { cs = await api("/api/containers"); } catch {}
-  const running = cs.filter(isRunning);
-  const prev = sel.value;
-  sel.innerHTML = "";
-  if (!running.length) {
-    sel.innerHTML = `<option value="">No running models — Run one from the Images page</option>`;
-    return;
-  }
-  for (const c of running) {
-    const port = containerPort(c);
-    const opt = document.createElement("option");
-    opt.value = port;
-    opt.textContent = `${c.Names || "model"} · :${port}`;
-    sel.appendChild(opt);
-  }
-  const want = String(LAST_RUN_PORT || prev || "");
-  LAST_RUN_PORT = 0;   // one-shot: prefer a just-started model once, don't override later manual picks
-  sel.value = [...sel.options].some((o) => o.value === want) ? want : containerPort(running[0]);
-}
+let LAST_RUN_PORT = 0;   // a model just started from the Images page (one-shot preference)
+let RUNNING = [];        // [{ port, name, modality, ref }] of running containers
+let TABS = [];           // [{ id, port, modality, name, system, msgs[], busy, bridge? }]
+let ACTIVE = null;       // active tab id
+let tabSeq = 0;
+let pendingImage = null; // data: URL staged for a vision message
+let pendingFile = null;  // File staged for STT
+let bridgeStop = false;
 
 function autoGrow(t) { t.style.height = "auto"; t.style.height = Math.min(160, t.scrollHeight) + "px"; }
-function chatBubble(role, content) {
-  const who = role === "user" ? "You" : "Model";
-  return `<div class="msg msg-${role}"><div class="msg-who">${who}</div>` +
-    `<div class="msg-body">${escapeHtml(content)}</div></div>`;
+function activeTab() { return TABS.find((t) => t.id === ACTIVE) || null; }
+function isStreamMod(m) { return m === "text" || m === "code" || m === "reasoning" || m === "vision"; }
+
+// ---- Markdown (small, safe: escape first, then format) --------------------
+function mdInline(escaped) {
+  return escaped
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
-function renderChat() {
+let cbSeq = 0;
+function codeBlockHtml(lang, code) {
+  const id = "cb" + (++cbSeq);
+  return `<div class="code-block"><div class="code-head"><span class="code-lang">${escapeHtml(lang || "code")}</span>` +
+    `<button type="button" class="code-copy" data-code-id="${id}">${icon("doc")} copy</button></div>` +
+    `<pre><code id="${id}">${escapeHtml(code)}</code></pre></div>`;
+}
+function renderMarkdown(src) {
+  const lines = String(src).split("\n");
+  let html = "", i = 0, inList = false, listTag = "";
+  const closeList = () => { if (inList) { html += `</${listTag}>`; inList = false; } };
+  while (i < lines.length) {
+    const line = lines[i];
+    const fence = line.match(/^```(\w*)\s*$/);
+    if (fence) {
+      closeList();
+      const buf = []; i++;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++; // closing fence (or EOF)
+      html += codeBlockHtml(fence[1], buf.join("\n"));
+      continue;
+    }
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { closeList(); const n = h[1].length; html += `<h${n} class="md-h">${mdInline(escapeHtml(h[2]))}</h${n}>`; i++; continue; }
+    const li = line.match(/^\s*([-*]|\d+\.)\s+(.*)$/);
+    if (li) {
+      const want = /\d/.test(li[1]) ? "ol" : "ul";
+      if (!inList || listTag !== want) { closeList(); listTag = want; inList = true; html += `<${want}>`; }
+      html += `<li>${mdInline(escapeHtml(li[2]))}</li>`; i++; continue;
+    }
+    if (/^\s*$/.test(line)) { closeList(); i++; continue; }
+    closeList();
+    const para = [line]; i++;
+    while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^```/.test(lines[i]) &&
+           !/^#{1,4}\s/.test(lines[i]) && !/^\s*([-*]|\d+\.)\s/.test(lines[i])) { para.push(lines[i]); i++; }
+    html += `<p>${mdInline(escapeHtml(para.join("\n"))).replace(/\n/g, "<br>")}</p>`;
+  }
+  closeList();
+  return html;
+}
+// Split a reasoning model's <think>…</think> prelude from its answer.
+function splitThinking(content) {
+  let m = content.match(/^\s*<think>([\s\S]*?)<\/think>\s*([\s\S]*)$/);
+  if (m) return { think: m[1].trim(), answer: m[2] };
+  m = content.match(/^\s*<think>([\s\S]*)$/);
+  if (m) return { think: m[1], answer: "", thinking: true };
+  return { think: "", answer: content };
+}
+function renderAssistant(content) {
+  if (!content) return `<span class="typing"><i></i><i></i><i></i></span>`;
+  const t = splitThinking(content);
+  let html = "";
+  if (t.think || t.thinking) {
+    html += `<details class="think"${t.thinking ? " open" : ""}><summary>${icon("idea")} thinking${t.thinking ? "…" : ""}</summary>` +
+      `<div class="think-body">${escapeHtml(t.think)}</div></details>`;
+  }
+  if (t.answer) html += renderMarkdown(t.answer);
+  return html || `<span class="typing"><i></i><i></i><i></i></span>`;
+}
+
+// ---- Running targets + tabs ----------------------------------------------
+async function refreshChatTargets() {
+  let cs = [], imgs = [];
+  try { cs = await api("/api/containers"); } catch {}
+  try { imgs = await api("/api/images"); } catch {}
+  const modByRef = {};
+  for (const im of imgs) {
+    const repo = im.Repository && im.Repository !== "<none>" ? im.Repository : null;
+    const tagged = im.Tag && im.Tag !== "<none>" ? im.Tag : null;
+    const shortId = (im.ID || "").replace(/^sha256:/, "").slice(0, 12);
+    const ref = (repo && tagged) ? `${repo}:${tagged}` : shortId;
+    modByRef[ref] = labelVal(im.Labels, "local-llm.modality") ||
+      modOf(CATALOG.find((m) => m.id === labelVal(im.Labels, "local-llm.model"))) || "text";
+  }
+  RUNNING = cs.filter(isRunning).map((c) => {
+    const ref = containerRef(c), port = parseInt(containerPort(c), 10) || 0;
+    let mod = modByRef[ref];
+    if (!mod) { const hit = CATALOG.find((m) => ref.includes(m.id)); mod = hit ? modOf(hit) : "text"; }
+    return { port, name: c.Names || ("model:" + port), modality: mod, ref };
+  });
+  // Refresh modality/name on existing tabs whose target is still running.
+  for (const tab of TABS) {
+    if (tab.bridge) continue;
+    const r = RUNNING.find((x) => x.port === tab.port);
+    if (r) { tab.modality = r.modality; tab.name = r.name; }
+  }
+  if (!TABS.length) newTab(LAST_RUN_PORT || (RUNNING[0] && RUNNING[0].port) || 0);
+  LAST_RUN_PORT = 0;
+  renderTabs(); renderActive();
+}
+function newTab(port) {
+  const r = RUNNING.find((x) => String(x.port) === String(port)) || RUNNING[0];
+  const tab = { id: ++tabSeq, port: r ? r.port : 0, modality: r ? r.modality : "text",
+                name: r ? r.name : "(no model)", system: "", msgs: [], busy: false };
+  TABS.push(tab); ACTIVE = tab.id;
+}
+function closeTab(id) {
+  const i = TABS.findIndex((t) => t.id === id);
+  if (i < 0) return;
+  TABS.splice(i, 1);
+  if (ACTIVE === id) ACTIVE = TABS.length ? TABS[Math.max(0, i - 1)].id : null;
+  if (!TABS.length) newTab(RUNNING[0] ? RUNNING[0].port : 0);
+  renderTabs(); renderActive();
+}
+function renderTabs() {
+  const el = $("chatTabs");
+  el.innerHTML = TABS.map((t) =>
+    `<button type="button" class="ctab${t.id === ACTIVE ? " active" : ""}" data-id="${t.id}">` +
+    `<span class="ctab-ic mod-${t.modality}">${icon(t.bridge ? "link" : modMeta(t.modality).icon)}</span>` +
+    `<span class="ctab-name">${escapeHtml(t.name || "chat")}</span>` +
+    `<span class="ctab-x" data-close="${t.id}" title="Close">${icon("x")}</span></button>`
+  ).join("") + `<button type="button" class="ctab-new" id="ctabNew" data-tip="New chat">${icon("plus")}</button>`;
+  el.querySelectorAll(".ctab").forEach((b) => b.onclick = (e) => {
+    if (e.target.closest(".ctab-x")) { closeTab(parseInt(e.target.closest(".ctab-x").dataset.close, 10)); return; }
+    ACTIVE = parseInt(b.dataset.id, 10); renderTabs(); renderActive();
+  });
+  $("ctabNew").onclick = () => { newTab(RUNNING[0] ? RUNNING[0].port : 0); renderTabs(); renderActive(); };
+}
+
+// ---- Active tab rendering -------------------------------------------------
+const MODE = {
+  text:        { ph: "Message the model…  (Enter to send)", send: "send", tip: "Send" },
+  code:        { ph: "Ask for code…", send: "send", tip: "Send" },
+  reasoning:   { ph: "Ask something that needs reasoning…", send: "send", tip: "Send" },
+  vision:      { ph: "Attach an image, then ask about it…", send: "send", tip: "Send", attach: "image/*" },
+  image:       { ph: "Describe the image to generate…", send: "image", tip: "Generate image" },
+  "audio-stt": { ph: "Attach an audio file to transcribe…", send: "doc", tip: "Transcribe", attach: "audio/*" },
+  tts:         { ph: "Text to speak aloud…", send: "speaker", tip: "Speak" },
+  embedding:   { ph: "Embedding models return vectors, not chat.", send: "send", tip: "", disabled: true },
+};
+function renderActive() {
+  const tab = activeTab();
+  // target select
+  const sel = $("chatTarget");
+  sel.innerHTML = RUNNING.length
+    ? RUNNING.map((r) => `<option value="${r.port}">${escapeHtml(r.name)} · ${modMeta(r.modality).label} · :${r.port}</option>`).join("")
+    : `<option value="">No running models — Run one from the Images page</option>`;
+  if (tab && !tab.bridge) sel.value = String(tab.port);
+  sel.disabled = !!(tab && tab.bridge);
+  $("chatModality").innerHTML = tab ? modalityBadge(tab.modality) : "";
+  $("chatSystem").value = tab ? tab.system : "";
+  $("chatSystem").disabled = !!(tab && tab.bridge);
+
+  const mod = tab ? tab.modality : "text";
+  const m = MODE[mod] || MODE.text;
+  const composer = $("chatForm");
+  if (tab && tab.bridge) { composer.style.display = "none"; }
+  else {
+    composer.style.display = "";
+    $("chatPrompt").placeholder = m.ph;
+    $("chatPrompt").disabled = !!m.disabled;
+    $("chatSend").disabled = !!m.disabled;
+    $("chatSend").innerHTML = icon(m.send);
+    $("chatSend").title = m.tip;
+    $("chatAttach").hidden = !m.attach;
+    $("chatFile").accept = m.attach || "";
+    $("imageSettings").hidden = mod !== "image";
+  }
+  renderLog(tab);
+  updateAttachPreview();
+}
+
+let logDirty = false;
+function scheduleLog(tab) {
+  if (tab && tab.id !== ACTIVE) return;
+  if (logDirty) return;
+  logDirty = true;
+  requestAnimationFrame(() => { logDirty = false; const t = activeTab(); if (t) renderLog(t); });
+}
+function bubbleHtml(m) {
+  const who = m.bridgeFrom || (m.role === "user" ? "You" : "Model");
+  let body;
+  if (m.kind === "image" && m.images && m.images.length) {
+    body = m.images.map((src) => `<img class="chat-img" src="${src}" alt="generated image" />`).join("");
+  } else if (m.kind === "audio" && m.audio) {
+    body = `<audio controls src="${m.audio}"></audio>` + (m.content ? `<div class="audio-cap">${escapeHtml(m.content)}</div>` : "");
+  } else if (m.role === "assistant") {
+    body = renderAssistant(m.content || "");
+  } else {
+    body = "";
+    if (m.image) body += `<img class="chat-img sm" src="${m.image}" alt="attached image" />`;
+    if (m.audio) body += `<audio controls src="${m.audio}"></audio>`;
+    body += `<div class="user-text">${escapeHtml(m.content || "").replace(/\n/g, "<br>")}</div>`;
+  }
+  return `<div class="msg msg-${m.role}${m.error ? " msg-error" : ""}${m.bridgeFrom ? " msg-bridge" : ""}">` +
+    `<div class="msg-who">${escapeHtml(who)}</div><div class="msg-body">${body}</div></div>`;
+}
+function renderLog(tab) {
   const log = $("chatLog");
-  if (!CHAT.length && !chatBusy) {
-    log.innerHTML = `<div class="chat-empty">Pick a running model and say hello. If the list is empty, Run one from the Images page first.</div>`;
+  if (!tab || (!tab.msgs.length && !tab.busy)) {
+    log.innerHTML = `<div class="chat-empty">${tab && tab.port ? "Say hello — or attach media, depending on the model's capability." : "Run a model from the Images page, then come back here."}</div>`;
     return;
   }
-  log.innerHTML = CHAT.map((m) => chatBubble(m.role, m.content)).join("") +
-    (chatBusy ? `<div class="msg msg-assistant"><div class="msg-who">Model</div><div class="msg-body"><span class="typing"><i></i><i></i><i></i></span></div></div>` : "");
+  log.innerHTML = tab.msgs.map(bubbleHtml).join("");
   log.scrollTop = log.scrollHeight;
 }
-async function sendChat() {
-  if (chatBusy) return;
-  const port = parseInt($("chatTarget").value, 10);
-  if (!port) { alert("No running model selected — Run one from the Images page first."); return; }
-  const text = $("chatPrompt").value.trim();
-  if (!text) return;
-  CHAT.push({ role: "user", content: text });
-  $("chatPrompt").value = ""; autoGrow($("chatPrompt"));
-  chatBusy = true; renderChat(); $("chatSend").disabled = true;
-  try {
-    const data = await api("/api/chat", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ port, system: $("chatSystem").value, messages: CHAT, prompt: text, max_tokens: 1024 }),
-    });
-    CHAT.push({ role: "assistant", content: data.response || "(empty response)" });
-  } catch (e) {
-    CHAT.push({ role: "assistant", content: "⚠ " + e.message });
-  } finally {
-    chatBusy = false; $("chatSend").disabled = false; renderChat(); $("chatPrompt").focus();
+
+// ---- Sending (modality dispatch) -----------------------------------------
+function buildMessages(tab) {
+  const out = [];
+  if (tab.system && tab.system.trim()) out.push({ role: "system", content: tab.system.trim() });
+  for (const m of tab.msgs) {
+    if (m.role === "assistant") { if (!m.kind || m.kind === "text") out.push({ role: "assistant", content: m.content || "" }); continue; }
+    if (m.role !== "user") continue;
+    if (m.image) out.push({ role: "user", content: [{ type: "text", text: m.content || "" }, { type: "image_url", image_url: { url: m.image } }] });
+    else if (!m.kind || m.kind === "text") out.push({ role: "user", content: m.content || "" });
+  }
+  return out;
+}
+async function streamChat(port, messages, onDelta, signal) {
+  const res = await fetch("/api/chat/stream", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ port, messages, max_tokens: 1024, temperature: 0.4 }), signal,
+  });
+  if (!res.ok || !res.body) {
+    let msg = res.statusText;
+    try { msg = (JSON.parse(await res.text()).error) || msg; } catch {}
+    throw new Error(msg);
+  }
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (data === "[DONE]") return;
+      try { const d = JSON.parse(data).choices?.[0]?.delta?.content; if (d) onDelta(d); } catch {}
+    }
   }
 }
-function clearChat() { CHAT = []; renderChat(); }
+async function sendStream(tab) {
+  const messages = buildMessages(tab);
+  const asst = { role: "assistant", content: "" };
+  tab.msgs.push(asst);
+  tab.busy = true; renderLog(tab);
+  try {
+    await streamChat(tab.port, messages, (d) => { asst.content += d; scheduleLog(tab); });
+    if (!asst.content) asst.content = "(empty response)";
+  } catch (e) { asst.content += (asst.content ? "\n\n" : "") + "⚠ " + e.message; asst.error = true; }
+  finally { tab.busy = false; renderLog(tab); }
+}
+async function genImage(tab, prompt) {
+  tab.msgs.push({ role: "user", content: prompt });
+  const ph = { role: "assistant", kind: "image", content: "Generating… (can take 30–120s)" };
+  tab.msgs.push(ph); tab.busy = true; renderLog(tab);
+  try {
+    const body = { port: tab.port, prompt,
+      steps: parseInt($("imgSteps").value, 10) || 24,
+      width: parseInt($("imgSize").value, 10) || 512, height: parseInt($("imgSize").value, 10) || 512,
+      seed: parseInt($("imgSeed").value, 10) || -1 };
+    const data = await api("/api/image/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    ph.content = ""; ph.images = data.images || [];
+    if (!ph.images.length) { ph.content = "(no image returned)"; ph.kind = "text"; }
+  } catch (e) { ph.kind = "text"; ph.content = "⚠ " + e.message; ph.error = true; }
+  finally { tab.busy = false; renderLog(tab); }
+}
+async function transcribe(tab, file) {
+  tab.msgs.push({ role: "user", kind: "audio", content: file.name, audio: URL.createObjectURL(file) });
+  const ph = { role: "assistant", content: "Transcribing…" };
+  tab.msgs.push(ph); tab.busy = true; renderLog(tab);
+  try {
+    const fd = new FormData(); fd.append("file", file); fd.append("port", tab.port);
+    const res = await fetch("/api/transcribe", { method: "POST", body: fd });
+    if (!res.ok) { let m = res.statusText; try { m = JSON.parse(await res.text()).error || m; } catch {} throw new Error(m); }
+    ph.content = (await res.json()).text || "(no speech detected)";
+  } catch (e) { ph.content = "⚠ " + e.message; ph.error = true; }
+  finally { tab.busy = false; renderLog(tab); }
+}
+async function speak(tab, text) {
+  tab.msgs.push({ role: "user", content: text });
+  const ph = { role: "assistant", kind: "audio", content: "Synthesizing…" };
+  tab.msgs.push(ph); tab.busy = true; renderLog(tab);
+  try {
+    const res = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ port: tab.port, text }) });
+    if (!res.ok) { let m = res.statusText; try { m = JSON.parse(await res.text()).error || m; } catch {} throw new Error(m); }
+    ph.content = ""; ph.audio = URL.createObjectURL(await res.blob());
+  } catch (e) { ph.kind = "text"; ph.content = "⚠ " + e.message; ph.error = true; }
+  finally { tab.busy = false; renderLog(tab); }
+}
+async function sendChat() {
+  const tab = activeTab();
+  if (!tab || tab.bridge || tab.busy) return;
+  if (!tab.port) { alert("No running model selected — Run one from the Images page first."); return; }
+  const mod = tab.modality, text = $("chatPrompt").value.trim();
+  if (mod === "image") { if (!text) return; $("chatPrompt").value = ""; genImage(tab, text); return; }
+  if (mod === "tts") { if (!text) return; $("chatPrompt").value = ""; speak(tab, text); return; }
+  if (mod === "audio-stt") {
+    if (!pendingFile) { alert("Attach an audio file first (the paperclip)."); return; }
+    const f = pendingFile; pendingFile = null; updateAttachPreview(); transcribe(tab, f); return;
+  }
+  if (mod === "embedding") { alert("Embedding models return vectors, not chat replies."); return; }
+  // text / code / reasoning / vision
+  if (!text && !pendingImage) return;
+  const um = { role: "user", content: text };
+  if (pendingImage) { um.image = pendingImage; pendingImage = null; updateAttachPreview(); }
+  $("chatPrompt").value = ""; autoGrow($("chatPrompt"));
+  tab.msgs.push(um);
+  sendStream(tab);
+}
+function clearChat() { const t = activeTab(); if (t) { t.msgs = []; renderLog(t); } }
+
+// ---- Attachments ----------------------------------------------------------
+function onAttach() { $("chatFile").click(); }
+function onFile() {
+  const f = $("chatFile").files[0]; if (!f) return;
+  const tab = activeTab();
+  if (tab && tab.modality === "audio-stt") { pendingFile = f; updateAttachPreview(); }
+  else {
+    const rd = new FileReader();
+    rd.onload = () => { pendingImage = rd.result; updateAttachPreview(); };
+    rd.readAsDataURL(f);
+  }
+  $("chatFile").value = "";
+}
+function updateAttachPreview() {
+  const el = $("chatAttachPreview");
+  if (pendingImage) el.innerHTML = `<span class="att"><img src="${pendingImage}" /> image <button type="button" class="att-x">${icon("x")}</button></span>`;
+  else if (pendingFile) el.innerHTML = `<span class="att">${icon("doc")} ${escapeHtml(pendingFile.name)} <button type="button" class="att-x">${icon("x")}</button></span>`;
+  else { el.innerHTML = ""; el.hidden = true; return; }
+  el.hidden = false;
+  el.querySelector(".att-x").onclick = () => { pendingImage = null; pendingFile = null; updateAttachPreview(); };
+}
+
+// ---- Export ---------------------------------------------------------------
+function exportChat(fmt) {
+  const tab = activeTab();
+  if (!tab || !tab.msgs.length) { alert("Nothing to export yet."); return; }
+  let content, mime, ext;
+  if (fmt === "json") {
+    content = JSON.stringify({ model: tab.name, modality: tab.modality, system: tab.system,
+      messages: tab.msgs.map((m) => ({ who: m.bridgeFrom || m.role, kind: m.kind || "text", content: m.content })) }, null, 2);
+    mime = "application/json"; ext = "json";
+  } else {
+    content = `# Chat — ${tab.name}\n\n` + tab.msgs.map((m) =>
+      `**${m.bridgeFrom || (m.role === "user" ? "You" : "Model")}:**\n\n${m.content || "(" + (m.kind || "media") + ")"}`).join("\n\n---\n\n");
+    mime = "text/markdown"; ext = "md";
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([content], { type: mime }));
+  a.download = `chat-${(tab.name || "session").replace(/[^a-z0-9]+/gi, "-")}.${ext}`;
+  a.click();
+}
+
+// ---- Bridge: two models converse ------------------------------------------
+function openBridge() {
+  if (RUNNING.length < 2) { alert("Run at least two models first (Images page) to bridge them."); return; }
+  const opts = RUNNING.map((r) => `<option value="${r.port}">${escapeHtml(r.name)} (${modMeta(r.modality).label})</option>`).join("");
+  $("bridgeA").innerHTML = opts; $("bridgeB").innerHTML = opts;
+  if (RUNNING[1]) $("bridgeB").value = String(RUNNING[1].port);
+  $("bridgeModal").hidden = false;
+}
+async function runBridge() {
+  const a = RUNNING.find((r) => String(r.port) === $("bridgeA").value);
+  const b = RUNNING.find((r) => String(r.port) === $("bridgeB").value);
+  const seed = $("bridgeSeed").value.trim();
+  const rounds = parseInt($("bridgeRounds").value, 10) || 4;
+  if (!a || !b || !seed) { alert("Pick two models and a seed message."); return; }
+  $("bridgeModal").hidden = true;
+  const tab = { id: ++tabSeq, port: 0, modality: "text", bridge: true, busy: true,
+                name: `${a.name} ↔ ${b.name}`, system: "", msgs: [] };
+  TABS.push(tab); ACTIVE = tab.id; renderTabs(); renderActive();
+  bridgeStop = false;
+  $("chatBridgeStop").hidden = false;
+  tab.msgs.push({ role: "assistant", bridgeFrom: a.name, content: seed });
+  renderLog(tab);
+  const transcript = [{ from: "a", text: seed }];
+  let speaker = "b";
+  for (let i = 0; i < rounds * 2 && !bridgeStop; i++) {
+    const tgt = speaker === "a" ? a : b;
+    const messages = transcript.map((t) => ({ role: t.from === speaker ? "assistant" : "user", content: t.text }));
+    const ph = { role: "assistant", bridgeFrom: tgt.name, content: "" };
+    tab.msgs.push(ph); renderLog(tab);
+    try { await streamChat(tgt.port, messages, (d) => { ph.content += d; scheduleLog(tab); }); }
+    catch (e) { ph.content = "⚠ " + e.message; ph.error = true; bridgeStop = true; }
+    transcript.push({ from: speaker, text: ph.content });
+    speaker = speaker === "a" ? "b" : "a";
+    renderLog(tab);
+  }
+  tab.busy = false; $("chatBridgeStop").hidden = true; renderTabs();
+}
 
 // ---- Page router (hash-based) + tooltips + help ---------------------------
 const PAGES = {
@@ -1279,6 +1629,30 @@ $("chatPrompt").addEventListener("keydown", (e) => {
 $("chatPrompt").addEventListener("input", () => autoGrow($("chatPrompt")));
 $("chatRefresh").addEventListener("click", refreshChatTargets);
 $("chatClear").addEventListener("click", clearChat);
+$("chatTarget").addEventListener("change", () => {
+  const tab = activeTab(); if (!tab || tab.bridge) return;
+  const r = RUNNING.find((x) => String(x.port) === $("chatTarget").value);
+  if (r) { tab.port = r.port; tab.modality = r.modality; tab.name = r.name; }
+  renderTabs(); renderActive();
+});
+$("chatSystem").addEventListener("input", () => { const t = activeTab(); if (t) t.system = $("chatSystem").value; });
+$("chatAttach").addEventListener("click", onAttach);
+$("chatFile").addEventListener("change", onFile);
+// Copy button on rendered code blocks (event-delegated; the log re-renders).
+$("chatLog").addEventListener("click", (e) => {
+  const b = e.target.closest(".code-copy"); if (!b) return;
+  const code = document.getElementById(b.dataset.codeId);
+  if (code) navigator.clipboard.writeText(code.textContent).then(() => {
+    b.innerHTML = `${icon("doc")} copied`; setTimeout(() => { b.innerHTML = `${icon("doc")} copy`; }, 1200);
+  });
+});
+$("exportMenu").querySelectorAll("[data-exp]").forEach((b) => b.addEventListener("click", () => {
+  exportChat(b.dataset.exp); $("exportMenu").open = false;
+}));
+$("chatBridge").addEventListener("click", openBridge);
+$("bridgeCancel").addEventListener("click", () => { $("bridgeModal").hidden = true; });
+$("bridgeStart").addEventListener("click", runBridge);
+$("chatBridgeStop").addEventListener("click", () => { bridgeStop = true; });
 
 // Page navigation
 window.addEventListener("hashchange", route);
