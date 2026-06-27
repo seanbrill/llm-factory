@@ -49,6 +49,13 @@ const ICONS = {
   shield:    '<path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6z"/>',
   shapes:    '<path d="M12 2 2 8l10 6 10-6z"/><path d="M2 16l10 6 10-6"/>',
   wave:      '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  // actions
+  play:      '<polygon points="6 4 20 12 6 20 6 4"/>',
+  stop:      '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
+  trash:     '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>',
+  download:  '<path d="M12 3v12M7 11l5 5 5-5M5 21h14"/>',
+  doc:       '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
+  refresh:   '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v5h-5"/>',
 };
 function icon(name, cls) {
   const p = ICONS[name];
@@ -72,7 +79,7 @@ const MODALITY = {
 const MOD_ORDER = ["text", "code", "reasoning", "vision", "embedding", "image", "audio-stt", "tts"];
 function modOf(m) { return (m && m.modality) || "text"; }
 function modMeta(k) { return MODALITY[k] || MODALITY.text; }
-function modalityBadge(k) { const x = modMeta(k); return `<span class="badge mod mod-${k}">${icon(x.icon)} ${x.label}</span>`; }
+function modalityBadge(k) { const x = modMeta(k); return `<span class="badge mod mod-${k}"${tipAttr("mod:" + k)}>${icon(x.icon)} ${x.label}</span>`; }
 
 // The capability dimensions shown as progress bars, per modality (mirrors the
 // rating workflow). LLM-like modalities share one set so they're comparable.
@@ -93,6 +100,73 @@ const CAT_ICON = {
   "Image quality": "image", "Prompt adherence": "target", Speed: "gauge", Versatility: "shapes",
   Accuracy: "target", Robustness: "shield", "Voice quality": "speaker", Naturalness: "wave", Languages: "globe",
 };
+
+// Plain-language explanations shown as rich tooltips on hover. Keys are prefixed
+// by kind (mod:/cat:/tag:/perf:) to avoid collisions (e.g. the "vision" modality
+// vs the "Vision" capability vs the "vision" strength tag).
+const GLOSSARY = {
+  // Modalities — note the explicit understand-vs-generate distinction.
+  "mod:text": "General conversation, writing, Q&A and reasoning — the everyday all-rounder.",
+  "mod:code": "Specialized for programming: code completion, fill-in-the-middle, refactoring and debugging.",
+  "mod:reasoning": "Thinks step-by-step before answering (visible chain-of-thought). Best for math and logic — but slower and more verbose.",
+  "mod:vision": "UNDERSTANDS images you send it — describe a photo, analyze a chart, read a document. It does NOT create images.",
+  "mod:embedding": "Turns text into vectors for search, RAG and similarity. It is not a chatbot — it returns numbers, not replies.",
+  "mod:image": "GENERATES images from a text prompt. It cannot view or understand images you upload.",
+  "mod:audio-stt": "Transcribes spoken audio into text (Whisper).",
+  "mod:tts": "Speaks text aloud as audio (Piper). Runs on CPU only here.",
+  // Capability categories (the progress bars).
+  "cat:Reasoning": "Multi-step logic, breaking problems down, and drawing sound conclusions.",
+  "cat:Coding": "Writing, completing and debugging code across programming languages.",
+  "cat:Math": "Arithmetic, algebra, word problems and quantitative reasoning.",
+  "cat:Knowledge": "Breadth of world facts it can recall without looking anything up.",
+  "cat:Writing": "Fluent, well-structured prose: essays, emails, summaries and stories.",
+  "cat:Instruction": "How reliably it follows your directions and the output format you ask for.",
+  "cat:Multilingual": "Quality in languages other than English.",
+  "cat:Vision": "Understanding the visual content of images — scenes, objects, charts, layout.",
+  "cat:OCR": "Reading text that appears inside images: documents, screenshots, receipts, handwriting.",
+  "cat:Retrieval": "How well its embeddings rank the right results for search and RAG.",
+  "cat:Efficiency": "Speed and lightness for its quality — a bigger bar means leaner on resources.",
+  "cat:Image quality": "Sharpness, coherence and overall aesthetics of generated images.",
+  "cat:Prompt adherence": "How faithfully the generated image matches what you asked for.",
+  "cat:Speed": "How quickly it produces a result.",
+  "cat:Versatility": "The range of styles, subjects and tasks it handles well.",
+  "cat:Accuracy": "Transcription correctness — a low word-error rate.",
+  "cat:Robustness": "Holding up on noisy audio, strong accents and background crosstalk.",
+  "cat:Voice quality": "Clarity and pleasantness of the synthesized voice.",
+  "cat:Naturalness": "How human (vs robotic) the speech sounds.",
+  "cat:Languages": "How many languages and voices it can speak.",
+  // Key-strength tags.
+  "tag:general-purpose": "A well-rounded all-rounder with no major weak spot — a safe default pick.",
+  "tag:agentic": "Strong at tool use and multi-step, autonomous workflows.",
+  "tag:coding": "A strong programming model.",
+  "tag:creative-writing": "Shines at stories, marketing copy and expressive prose.",
+  "tag:fast": "Quick responses for its quality tier.",
+  "tag:instruction-following": "Sticks closely to your directions and requested format.",
+  "tag:knowledge": "Broad general knowledge.",
+  "tag:lightweight": "Tiny footprint — runs comfortably on modest hardware.",
+  "tag:long-context": "Handles very long inputs (a large context window).",
+  "tag:math": "Strong quantitative and symbolic reasoning.",
+  "tag:multilingual": "Works well across many languages.",
+  "tag:ocr": "Reads text out of images well.",
+  "tag:prompt-adherence": "Image output matches the prompt closely.",
+  "tag:photorealism": "Produces realistic, photographic-looking images.",
+  "tag:reasoning": "Strong step-by-step problem solving.",
+  "tag:retrieval": "High-quality embeddings for search and RAG.",
+  "tag:structured-output": "Reliable at JSON and other structured formats.",
+  "tag:transcription": "Accurate speech-to-text.",
+  "tag:vision": "Understands images you send it.",
+  "tag:voice-quality": "Clear, pleasant synthesized speech.",
+  "tag:image-quality": "High visual quality of generated images.",
+  // Performance levels (appended to the CPU/GPU chip tooltips).
+  "perf:excellent": "Runs great on this hardware.",
+  "perf:good": "Runs well.",
+  "perf:fair": "Usable, but noticeably slower.",
+  "perf:warning": "Slow and memory-tight — expect to wait.",
+  "perf:poor": "Very slow on this hardware.",
+  "perf:impossible": "Won't fit in your memory — it can't run here.",
+  "perf:na": "Not applicable for this model.",
+};
+function tipAttr(key) { const t = GLOSSARY[key]; return t ? ` data-tip="${escapeHtml(t)}"` : ""; }
 
 // Native context window per family (prefix match, longest first). Display-only;
 // the image actually serves at CTX_SIZE (default 4096 CPU / 8192 GPU).
@@ -120,6 +194,24 @@ function loadMeta() {
   for (const x of d.models) META[x.id] = x;
   TAG_LIST = d.tagList || [];
 }
+// Derive a "general-purpose" strength for well-rounded chat models (no weak core
+// dimension) so users can filter for a safe default. Computed client-side from
+// the ratings rather than baked into the data.
+function deriveGeneralPurpose() {
+  let added = false;
+  for (const m of CATALOG) {
+    if (modOf(m) !== "text") continue;
+    const meta = META[m.id];
+    if (!meta || !meta.ratings) continue;
+    const core = ["Reasoning", "Knowledge", "Writing", "Instruction", "Coding"]
+      .map((d) => meta.ratings[d]).filter((x) => x != null);
+    if (core.length >= 4 && Math.min(...core) >= 58 && !meta.strengths.includes("general-purpose")) {
+      meta.strengths = ["general-purpose", ...meta.strengths];
+      added = true;
+    }
+  }
+  if (added && !TAG_LIST.includes("general-purpose")) TAG_LIST = ["general-purpose", ...TAG_LIST];
+}
 
 // ---- System info + hardware performance estimator -------------------------
 // SYSINFO = the engine machine the model actually runs in (RAM/CPU/GPU). Used
@@ -129,6 +221,13 @@ async function loadSysInfo() { try { SYSINFO = await api("/api/sysinfo"); } catc
 function sysSummary() {
   if (!SYSINFO || !SYSINFO.mem_gb) return "current";
   return `${SYSINFO.mem_gb.toFixed(0)} GB${SYSINFO.gpu ? " · " + SYSINFO.gpu + " GPU" : " · no GPU"}`;
+}
+function renderSysPill() {
+  const el = $("sysPill");
+  if (!el) return;
+  if (!SYSINFO || !SYSINFO.mem_gb) { el.textContent = "System: unknown"; return; }
+  const gpu = SYSINFO.gpu ? `${SYSINFO.gpu} GPU` : "CPU only";
+  el.innerHTML = `${icon("cpu")} <span>${SYSINFO.mem_gb.toFixed(0)} GB · ${SYSINFO.cpus} CPU · ${gpu}</span>`;
 }
 
 // Six performance levels (+ N/A), worst → best. The estimator returns one of
@@ -189,7 +288,8 @@ function hwPerf(m) {
 function perfChip(kind, level) {
   const lab = (PERF[level] || PERF.na).label;
   const name = kind === "gpu" ? "GPU" : "CPU";
-  return `<span class="perf perf-${level}" title="${name} performance on your system: ${lab}">` +
+  const tip = ` data-tip="${escapeHtml(`${name} performance: ${lab} — ${GLOSSARY["perf:" + level] || ""}`)}"`;
+  return `<span class="perf perf-${level}"${tip}>` +
     `${icon(kind)} <span class="perf-name">${name}</span> ${lab}</span>`;
 }
 function perfMini(m) {
@@ -203,7 +303,9 @@ function perfMini(m) {
 async function loadCatalog() {
   CATALOG = await api("/api/catalog");
   loadMeta();
+  deriveGeneralPurpose();
   await loadSysInfo();
+  renderSysPill();
   $("modelSearch").placeholder = `Search ${CATALOG.length} models…`;
   buildFilters();
   renderList();
@@ -221,7 +323,7 @@ function buildFilters() {
   $("filterModalities").innerHTML = mods.map((k) => {
     const n = CATALOG.filter((m) => modOf(m) === k).length;
     const on = FILTER.mods.has(k);
-    return `<button type="button" class="fchip${on ? " on" : ""}" data-mod="${k}">${icon(modMeta(k).icon)} ${modMeta(k).label} <span class="fn">${n}</span></button>`;
+    return `<button type="button" class="fchip${on ? " on" : ""}" data-mod="${k}"${tipAttr("mod:" + k)}>${icon(modMeta(k).icon)} ${modMeta(k).label} <span class="fn">${n}</span></button>`;
   }).join("");
   $("filterModalities").querySelectorAll(".fchip").forEach((b) => b.onclick = () => {
     const k = b.dataset.mod; FILTER.mods.has(k) ? FILTER.mods.delete(k) : FILTER.mods.add(k);
@@ -234,7 +336,7 @@ function buildFilters() {
     if (grp) grp.hidden = false;
     $("filterStrengths").innerHTML = TAG_LIST.map((t) => {
       const on = FILTER.strengths.has(t);
-      return `<button type="button" class="fchip sm${on ? " on" : ""}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`;
+      return `<button type="button" class="fchip sm${on ? " on" : ""}" data-tag="${escapeHtml(t)}"${tipAttr("tag:" + t)}>${escapeHtml(t)}</button>`;
     }).join("");
     $("filterStrengths").querySelectorAll(".fchip").forEach((b) => b.onclick = () => {
       const t = b.dataset.tag; FILTER.strengths.has(t) ? FILTER.strengths.delete(t) : FILTER.strengths.add(t);
@@ -267,7 +369,7 @@ function renderList() {
   $("modelList").innerHTML = list.map((m) => {
     const sel = SELECTED && SELECTED.id === m.id;
     const tags = (((META[m.id] && META[m.id].strengths) || []).slice(0, 3))
-      .map((t) => `<span class="tag xs">${escapeHtml(t)}</span>`).join("");
+      .map((t) => `<span class="tag xs"${tipAttr("tag:" + t)}>${escapeHtml(t)}</span>`).join("");
     return `<li class="combo-opt${sel ? " sel" : ""}" role="option" aria-selected="${sel}" data-id="${m.id}">
       <span class="opt-ic mod-${modOf(m)}">${icon(modMeta(modOf(m)).icon)}</span>
       <span class="opt-main">
@@ -302,6 +404,9 @@ function setModel(id) {
     const on = li.dataset.id === id;
     li.classList.toggle("sel", on); li.setAttribute("aria-selected", on);
   });
+  // Re-resolve an Auto/Max context tier against the newly selected model so it
+  // never carries a stale window from the previous pick.
+  if ($("ctxTier")) syncCtx(false);
 }
 function selectDefault() {
   if (SELECTED && CATALOG.some((m) => m.id === SELECTED.id)) { setModel(SELECTED.id); return; }
@@ -314,7 +419,7 @@ function capBar(label, val) {
   const v = Math.max(0, Math.min(100, val || 0));
   const tier = v >= 80 ? "b-hi" : v >= 55 ? "b-mid" : v >= 35 ? "b-lo" : "b-min";
   const ic = CAT_ICON[label] ? icon(CAT_ICON[label]) : "";
-  return `<div class="cap-row"><span class="cap-label">${ic}<span>${escapeHtml(label)}</span></span>` +
+  return `<div class="cap-row"><span class="cap-label"${tipAttr("cat:" + label)}>${ic}<span>${escapeHtml(label)}</span></span>` +
     `<span class="cap-track"><span class="cap-fill ${tier}" style="width:${v}%"></span></span>` +
     `<span class="cap-val">${v}</span></div>`;
 }
@@ -328,7 +433,7 @@ function renderDetail(m) {
   const bars = meta.ratings
     ? dimsFor(mod).filter((d) => d in meta.ratings).map((d) => capBar(d, meta.ratings[d])).join("")
     : `<div class="cap-empty">Capability ratings unavailable for this model.</div>`;
-  const tags = (meta.strengths || []).map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join("");
+  const tags = (meta.strengths || []).map((t) => `<span class="tag"${tipAttr("tag:" + t)}>${escapeHtml(t)}</span>`).join("");
   const rec = m.recommended ? `<span class="badge rec">${icon("star")} Recommended</span>` : "";
 
   $("modelHint").innerHTML =
@@ -351,9 +456,56 @@ function updateHint() { renderDetail(SELECTED); }
 
 // Prefill the context default for the selected compute, unless the user edited it.
 function applyComputeDefaults() {
-  const ci = $("ctxSize");
-  if (!ci.dataset.touched) ci.value = ctxDefaultFor($("compute").value);
+  syncCtx(false);   // an "Auto" context tier tracks the compute default
   updateEngineHint();
+}
+
+// ---- Resources tiers (context window + memory limit) ----------------------
+// The two selects offer Auto + recommended tiers + Max + Custom; they resolve
+// into the hidden #ctxSize / #memoryGb numbers that build() actually reads.
+function ctxMaxFor() {
+  const ctx = SELECTED ? contextFor(SELECTED.id) : "";
+  if (!ctx) return 32768;
+  let max = 0;
+  for (const mm of ctx.matchAll(/(\d+)\s*(K?)/gi)) {
+    let v = parseInt(mm[1], 10); if (mm[2]) v *= 1024;
+    if (v > max) max = v;
+  }
+  return max ? Math.min(131072, max) : 32768;
+}
+function syncCtx(focusCustom) {
+  const tier = $("ctxTier").value, ci = $("ctxSize");
+  if (tier === "custom") {
+    ci.hidden = false;
+    if (!parseInt(ci.value, 10)) ci.value = ctxDefaultFor($("compute").value); // never leave it empty → 0
+    if (focusCustom) ci.focus();
+    return;
+  }
+  ci.hidden = true;
+  ci.value = tier === "auto" ? ctxDefaultFor($("compute").value)
+    : tier === "max" ? ctxMaxFor()
+    : (parseInt(tier, 10) || 4096);
+}
+function syncMem(focusCustom) {
+  const tier = $("memTier").value, mi = $("memoryGb");
+  if (tier === "custom") { mi.hidden = false; if (focusCustom) mi.focus(); return; }
+  mi.hidden = true;
+  mi.value = tier === "max" ? (SYSINFO && SYSINFO.mem_gb ? Math.floor(SYSINFO.mem_gb) : 0)
+    : (parseFloat(tier) || 0);
+}
+// Reflect a concrete value back into the tier select (used when loading a
+// template / reconnecting to a build): pick a matching tier or fall to Custom.
+function setCtxValue(n) {
+  const opt = [...$("ctxTier").options].some((o) => o.value === String(n));
+  $("ctxTier").value = opt ? String(n) : "custom";
+  $("ctxSize").hidden = opt;
+  $("ctxSize").value = n;
+}
+function setMemValue(n) {
+  const opt = [...$("memTier").options].some((o) => o.value === String(n));
+  $("memTier").value = opt ? String(n) : "custom";
+  $("memoryGb").hidden = opt;
+  $("memoryGb").value = n;
 }
 
 // Guidance for the engine/compute combo. Vulkan/Metal GPU only works under
@@ -597,6 +749,18 @@ function scrollToBuild() {
 
 // ---- Images ---------------------------------------------------------------
 
+// Read one label value. Image records carry Labels as docker's "k=v,k=v" STRING
+// (normalizeImageFields doesn't parse them) or podman's object — handle both.
+function labelVal(labels, k) {
+  if (!labels) return "";
+  if (typeof labels === "object") return labels[k] || "";
+  for (const part of String(labels).split(",")) {
+    const i = part.indexOf("=");
+    if (i > 0 && part.slice(0, i) === k) return part.slice(i + 1);
+  }
+  return "";
+}
+
 // Map a runtime container back to the image ref it was started from.
 function containerRef(c) {
   for (const part of (c.Labels || "").split(",")) {
@@ -675,7 +839,9 @@ async function loadImages() {
     const repo = im.Repository && im.Repository !== "<none>" ? im.Repository : null;
     const tagged = im.Tag && im.Tag !== "<none>" ? im.Tag : null;
     const shortId = (im.ID || "").replace(/^sha256:/, "").slice(0, 12);
-    const ref = repo ? `${repo}:${im.Tag}` : shortId;
+    // Use the sanitized tag so the ref matches what's displayed (and what the
+    // run/delete/group-by-ref logic expects); fall back to the image ID.
+    const ref = (repo && tagged) ? `${repo}:${tagged}` : shortId;
     const displayName = repo || "<untagged>";
     const displayTag = tagged || shortId;
     const engine = im.Engine || "docker";
@@ -684,7 +850,10 @@ async function loadImages() {
     const up = cs.find(isRunning);
     const status = statusBadge(up, cs);
 
-    const imMod = (im.Labels && im.Labels["local-llm.modality"]) || "text";
+    // Prefer the baked modality label; fall back to the model-id label looked up
+    // in the catalog so images built before that label existed still badge right.
+    const imMod = labelVal(im.Labels, "local-llm.modality") ||
+      modOf(CATALOG.find((m) => m.id === labelVal(im.Labels, "local-llm.model"))) || "text";
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td><a href="#" class="link tpl" title="Use as a template for a new build">${displayName}</a><br>${modalityBadge(imMod)}</td>
@@ -692,9 +861,9 @@ async function loadImages() {
       <td>${status}</td>
       <td><input type="number" value="${up ? containerPort(up) : port++}" /></td>
       <td class="actions">
-        <button class="small primary" data-act="run">Run</button>
-        <button class="small" data-act="dl">Download</button>
-        <button class="small danger" data-act="del">Delete</button>
+        <button class="small primary act-run" data-act="run">${icon("play")} Run</button>
+        <button class="small icon-btn" data-act="dl" data-tip="Download as .tar">${icon("download")}</button>
+        <button class="small danger icon-btn" data-act="del" data-tip="Delete image + .tar">${icon("trash")}</button>
       </td>`;
     tr.querySelector(".tpl").onclick = (e) => { e.preventDefault(); useAsTemplate(ref, engine); };
     const runBtn = tr.querySelector('[data-act="run"]');
@@ -741,9 +910,8 @@ async function useAsTemplate(ref, engine) {
 // (values may arrive as numbers from /api/build/state or strings from labels).
 function applyDeployConfig(c) {
   const ctx = parseInt(c.ctx_size, 10);
-  $("ctxSize").value = ctx > 0 ? ctx : ctxDefaultFor($("compute").value);
-  $("ctxSize").dataset.touched = "1";
-  $("memoryGb").value = parseFloat(c.memory_gb) || 0;
+  setCtxValue(ctx > 0 ? ctx : ctxDefaultFor($("compute").value));
+  setMemValue(parseFloat(c.memory_gb) || 0);
   $("route").value = c.route || "";
   $("autostart").checked = !!c.autostart;
   updateRouteHint();
@@ -792,13 +960,14 @@ async function runImage(ref, port, btn, engine) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    $("chatPort").value = port;
+    LAST_RUN_PORT = port;     // the Chat page will prefer this freshly-started model
+    refreshChatTargets();
     loadImages();             // refresh the running indicator (row re-renders)
     loadContainers();
     scheduleHealthRefresh();  // keep refreshing until the model reports healthy
   } catch (e) {
     alert("Run failed: " + e.message);
-    if (btn) { btn.disabled = false; btn.textContent = "Run"; }
+    if (btn) { btn.disabled = false; btn.innerHTML = `${icon("play")} Run`; }
   }
 }
 
@@ -820,6 +989,7 @@ async function loadContainers() {
   tbody.innerHTML = "";
   let cs = [];
   try { cs = await api("/api/containers"); } catch (e) { renderEmpty(tbody, 6, e.message); return; }
+  updateNavBadge(cs);
   if (!cs.length) { renderEmpty(tbody, 6, "No containers."); return; }
 
   for (const c of cs) {
@@ -828,8 +998,8 @@ async function loadContainers() {
       <td>${c.Names || ""}</td><td>${c.Image || ""}</td><td>${engineBadge(c.Engine)}</td>
       <td>${c.Status || c.State || ""}</td><td>${c.Ports || ""}</td>
       <td class="actions">
-        <button class="small" data-act="logs">Logs</button>
-        <button class="small danger" data-act="stop">Stop &amp; remove</button>
+        <button class="small icon-btn" data-act="logs" data-tip="View logs">${icon("doc")}</button>
+        <button class="small danger act-stop" data-act="stop" data-tip="Stop &amp; remove">${icon("stop")} Stop</button>
       </td>`;
     tr.querySelector('[data-act="logs"]').onclick = () =>
       showContainerLogs(c.ID || c.Names, c.Engine || "docker", c.Names || c.ID);
@@ -878,7 +1048,7 @@ async function loadModels() {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${m.name}</td><td><code>${m.file}</code></td><td>${m.on_disk_gb.toFixed(2)} GB</td>
-      <td class="actions"><button class="small danger">Delete</button></td>`;
+      <td class="actions"><button class="small danger icon-btn" data-tip="Delete weights">${icon("trash")}</button></td>`;
     tr.querySelector("button").onclick = async () => {
       if (!confirm(`Delete weights for ${m.name} (${m.on_disk_gb.toFixed(2)} GB)? A future build will re-download it.`)) return;
       try {
@@ -893,34 +1063,174 @@ async function loadModels() {
   }
 }
 
-// ---- Chat / test ----------------------------------------------------------
-
-async function chat() {
-  const out = $("chatOut");
-  out.hidden = false;
-  out.textContent = "Thinking… (CPU inference can take a few seconds)";
-  const btn = $("chatBtn");
-  btn.disabled = true;
-  try {
-    const data = await api("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        port: parseInt($("chatPort").value, 10) || 8080,
-        system: $("chatSystem").value,
-        prompt: $("chatPrompt").value,
-      }),
-    });
-    out.textContent = data.response;
-  } catch (e) {
-    out.textContent = "ERROR: " + e.message;
-  } finally {
-    btn.disabled = false;
-  }
-}
-
 function renderEmpty(tbody, cols, msg) {
   tbody.innerHTML = `<tr><td class="empty" colspan="${cols}">${msg}</td></tr>`;
+}
+function updateNavBadge(cs) {
+  const n = (cs || []).filter(isRunning).length;
+  const b = $("navContainers");
+  if (b) { b.hidden = n === 0; b.textContent = n; }
+}
+
+// ---- Chat -----------------------------------------------------------------
+// Multi-turn chat with a running model (its OpenAI-compatible API, proxied by
+// /api/chat). History lives client-side and is sent each turn for context.
+let CHAT = [];                 // [{ role, content }]
+let LAST_RUN_PORT = 0;         // a model just started from the Images page
+let chatBusy = false;
+
+async function refreshChatTargets() {
+  const sel = $("chatTarget");
+  if (!sel) return;
+  let cs = [];
+  try { cs = await api("/api/containers"); } catch {}
+  const running = cs.filter(isRunning);
+  const prev = sel.value;
+  sel.innerHTML = "";
+  if (!running.length) {
+    sel.innerHTML = `<option value="">No running models — Run one from the Images page</option>`;
+    return;
+  }
+  for (const c of running) {
+    const port = containerPort(c);
+    const opt = document.createElement("option");
+    opt.value = port;
+    opt.textContent = `${c.Names || "model"} · :${port}`;
+    sel.appendChild(opt);
+  }
+  const want = String(LAST_RUN_PORT || prev || "");
+  LAST_RUN_PORT = 0;   // one-shot: prefer a just-started model once, don't override later manual picks
+  sel.value = [...sel.options].some((o) => o.value === want) ? want : containerPort(running[0]);
+}
+
+function autoGrow(t) { t.style.height = "auto"; t.style.height = Math.min(160, t.scrollHeight) + "px"; }
+function chatBubble(role, content) {
+  const who = role === "user" ? "You" : "Model";
+  return `<div class="msg msg-${role}"><div class="msg-who">${who}</div>` +
+    `<div class="msg-body">${escapeHtml(content)}</div></div>`;
+}
+function renderChat() {
+  const log = $("chatLog");
+  if (!CHAT.length && !chatBusy) {
+    log.innerHTML = `<div class="chat-empty">Pick a running model and say hello. If the list is empty, Run one from the Images page first.</div>`;
+    return;
+  }
+  log.innerHTML = CHAT.map((m) => chatBubble(m.role, m.content)).join("") +
+    (chatBusy ? `<div class="msg msg-assistant"><div class="msg-who">Model</div><div class="msg-body"><span class="typing"><i></i><i></i><i></i></span></div></div>` : "");
+  log.scrollTop = log.scrollHeight;
+}
+async function sendChat() {
+  if (chatBusy) return;
+  const port = parseInt($("chatTarget").value, 10);
+  if (!port) { alert("No running model selected — Run one from the Images page first."); return; }
+  const text = $("chatPrompt").value.trim();
+  if (!text) return;
+  CHAT.push({ role: "user", content: text });
+  $("chatPrompt").value = ""; autoGrow($("chatPrompt"));
+  chatBusy = true; renderChat(); $("chatSend").disabled = true;
+  try {
+    const data = await api("/api/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ port, system: $("chatSystem").value, messages: CHAT, prompt: text, max_tokens: 1024 }),
+    });
+    CHAT.push({ role: "assistant", content: data.response || "(empty response)" });
+  } catch (e) {
+    CHAT.push({ role: "assistant", content: "⚠ " + e.message });
+  } finally {
+    chatBusy = false; $("chatSend").disabled = false; renderChat(); $("chatPrompt").focus();
+  }
+}
+function clearChat() { CHAT = []; renderChat(); }
+
+// ---- Page router (hash-based) + tooltips + help ---------------------------
+const PAGES = {
+  build:      { title: "Build an image", sub: "Configure a model, build a self-contained image, and export it." },
+  images:     { title: "Built images", sub: "Run, download or delete the images you've built." },
+  containers: { title: "Running containers", sub: "Manage the models currently running." },
+  models:     { title: "Downloaded model files", sub: "Model weights cached on disk (re-downloaded on demand)." },
+  chat:       { title: "Chat", sub: "Talk to a running model in your browser." },
+  help:       { title: "Help & concepts", sub: "How the factory works, in plain language." },
+};
+function showPage(p) {
+  if (!PAGES[p]) p = "build";
+  document.querySelectorAll(".page").forEach((s) => s.classList.toggle("active", s.id === "page-" + p));
+  document.querySelectorAll(".nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === p));
+  $("pageTitle").textContent = PAGES[p].title;
+  $("pageSub").textContent = PAGES[p].sub;
+  if (p === "images") loadImages();
+  if (p === "containers") loadContainers();
+  if (p === "models") loadModels();
+  if (p === "chat") refreshChatTargets();
+}
+function route() { showPage(location.hash.replace(/^#/, "") || "build"); }
+
+// Lightweight rich tooltips for any [data-tip] element.
+function initTooltips() {
+  const tip = document.createElement("div");
+  tip.className = "tooltip"; tip.hidden = true;
+  document.body.appendChild(tip);
+  let cur = null;
+  document.addEventListener("mouseover", (e) => {
+    const el = e.target.closest("[data-tip]");
+    if (el === cur) return;
+    cur = el;
+    if (!el) { tip.hidden = true; return; }
+    tip.textContent = el.getAttribute("data-tip");
+    tip.hidden = false;
+    const r = el.getBoundingClientRect();
+    tip.style.left = Math.max(8, Math.min(window.innerWidth - 312, r.left)) + "px";
+    tip.style.top = (r.bottom + 8) + "px";
+    const tr = tip.getBoundingClientRect();
+    if (tr.bottom > window.innerHeight - 8) tip.style.top = (r.top - tr.height - 8) + "px";
+  });
+  document.addEventListener("mouseout", (e) => {
+    if (!cur) return;
+    const to = e.relatedTarget;
+    if (!to || !(to.closest && to.closest("[data-tip]"))) { tip.hidden = true; cur = null; }
+  });
+  window.addEventListener("scroll", () => { tip.hidden = true; cur = null; }, true);
+}
+
+function renderHelp() {
+  const el = document.querySelector("#page-help .help-card");
+  if (!el) return;
+  el.innerHTML = `
+    <h2>What this is</h2>
+    <p>The factory turns an open AI model into a <b>self-contained container image</b> you can run
+       locally and talk to over an OpenAI-compatible API. The flow is: <b>Build → Run → Chat</b>.</p>
+
+    <h2>One image = one model</h2>
+    <p>Each image you build serves <b>exactly one model</b>. There is no runtime router that picks a
+       model per request. What <i>is</i> automatic is a <b>build-time</b> choice: based on the model's
+       capability (modality), the factory selects the right inference engine — llama.cpp for chat/code/
+       vision/embeddings, stable-diffusion.cpp for image generation, whisper.cpp for speech-to-text,
+       and Piper for text-to-speech.</p>
+
+    <h2>Capabilities — understand vs generate</h2>
+    <ul class="help-mods">
+      <li>${modalityBadge("text")} general conversation, writing, reasoning.</li>
+      <li>${modalityBadge("code")} programming help and completion.</li>
+      <li>${modalityBadge("reasoning")} step-by-step "thinking" answers (slower, verbose).</li>
+      <li>${modalityBadge("vision")} <b>understands</b> images you send it — it does <b>not</b> create images.</li>
+      <li>${modalityBadge("image")} <b>generates</b> images from a prompt — it cannot view images you upload.</li>
+      <li>${modalityBadge("embedding")} turns text into vectors for search/RAG (no chat replies).</li>
+      <li>${modalityBadge("audio-stt")} transcribes audio to text.</li>
+      <li>${modalityBadge("tts")} speaks text aloud (CPU only).</li>
+    </ul>
+
+    <h2>Performance levels</h2>
+    <p>On the Build page, each model shows a CPU and GPU rating <i>for your machine</i>:</p>
+    <div class="help-perf">
+      ${["excellent","good","fair","warning","poor","impossible"].map((lv) =>
+        `<span class="perf perf-${lv}">${PERF[lv].label}</span>`).join("")}
+    </div>
+    <p class="hint">"Won't run" means the model is too large for your memory. Hover any capability,
+       strength or performance chip anywhere in the app for a fuller explanation.</p>
+
+    <h2>GPU on a Mac</h2>
+    <p>Apple GPUs speak Metal, which Linux containers can't use directly. Picking <b>Engine = Podman</b>
+       with a <b>libkrun/krunkit</b> machine bridges the GPU into the container as Vulkan. Choose
+       <b>Compute = GPU — Vulkan / Apple Metal</b> when building.</p>`;
 }
 
 // ---- Wire up --------------------------------------------------------------
@@ -945,7 +1255,8 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePanel
 
 $("compute").addEventListener("change", applyComputeDefaults);
 $("engine").addEventListener("change", updateEngineHint);
-$("ctxSize").addEventListener("input", () => { $("ctxSize").dataset.touched = "1"; });
+$("ctxTier").addEventListener("change", () => syncCtx(true));
+$("memTier").addEventListener("change", () => syncMem(true));
 $("route").addEventListener("input", updateRouteHint);
 $("imageName").addEventListener("input", () => { $("imageName").dataset.touched = "1"; });
 $("buildBtn").addEventListener("click", build);
@@ -957,13 +1268,28 @@ $("logToggle").addEventListener("click", () => {
 $("refreshImages").addEventListener("click", loadImages);
 $("refreshContainers").addEventListener("click", loadContainers);
 $("refreshModels").addEventListener("click", loadModels);
-$("chatBtn").addEventListener("click", chat);
+
+// Chat page
+$("chatForm").addEventListener("submit", (e) => { e.preventDefault(); sendChat(); });
+$("chatPrompt").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+$("chatPrompt").addEventListener("input", () => autoGrow($("chatPrompt")));
+$("chatRefresh").addEventListener("click", refreshChatTargets);
+$("chatClear").addEventListener("click", clearChat);
+
+// Page navigation
+window.addEventListener("hashchange", route);
 
 (async () => {
-  await loadCatalog();          // ensure the model dropdown is ready first
-  applyComputeDefaults();       // prefill context default for the selected compute
+  initTooltips();
+  renderHelp();
+  await loadCatalog();          // model picker + system info ready first
+  applyComputeDefaults();       // resolve the context tier for the selected compute
+  syncMem(false);               // resolve the memory tier
+  route();                      // show the page named in the URL hash (default: build)
   loadImages();
-  loadContainers();
+  loadContainers();             // also populates the sidebar "running" badge
   loadModels();
   attachToBuild();              // reconnect to an in-progress build after a refresh
 })();

@@ -665,9 +665,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Port   int    `json:"port"`
-		System string `json:"system"`
-		Prompt string `json:"prompt"`
+		Port      int           `json:"port"`
+		System    string        `json:"system"`
+		Prompt    string        `json:"prompt"`
+		Messages  []llm.Message `json:"messages"` // multi-turn history (preferred)
+		MaxTokens int           `json:"max_tokens"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -682,9 +684,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if req.System != "" {
 		msgs = append(msgs, llm.Message{Role: "system", Content: req.System})
 	}
-	msgs = append(msgs, llm.Message{Role: "user", Content: req.Prompt})
+	if len(req.Messages) > 0 {
+		msgs = append(msgs, req.Messages...) // full conversation for context
+	} else {
+		msgs = append(msgs, llm.Message{Role: "user", Content: req.Prompt})
+	}
+	maxTok := req.MaxTokens
+	if maxTok <= 0 {
+		maxTok = 1024
+	}
 
-	resp, err := client.Chat(r.Context(), msgs, llm.ChatOptions{Temperature: 0.4, MaxTokens: 512})
+	resp, err := client.Chat(r.Context(), msgs, llm.ChatOptions{Temperature: 0.4, MaxTokens: maxTok})
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return

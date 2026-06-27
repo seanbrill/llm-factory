@@ -3,185 +3,248 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LLM FACTORY</title>
+  <title>LLM Factory</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header>
-    <h1>local&#8209;llm factory</h1>
-    <p class="sub">Configure a model, build a self&#8209;contained image, export it, run it, and test it.</p>
-  </header>
+  <div class="app">
+    <!-- Sidebar navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg></span>
+        <span class="brand-text"><b>LLM</b> Factory</span>
+      </div>
+      <nav class="nav">
+        <a href="#build" data-page="build"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 12-8.5 8.5a2.12 2.12 0 0 1-3-3L12 9"/><path d="M17.6 6.4 20 4l-2.3-2.3a1 1 0 0 0-1.4 0l-3 3a1 1 0 0 0 0 1.4l.7.7M14.5 5.5 18 9"/></svg> <span>Build</span></a>
+        <a href="#images" data-page="images"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg> <span>Images</span></a>
+        <a href="#containers" data-page="containers"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg> <span>Containers</span> <span id="navContainers" class="nav-badge" hidden></span></a>
+        <a href="#models" data-page="models"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg> <span>Model files</span></a>
+        <a href="#chat" data-page="chat"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> <span>Chat</span></a>
+        <a href="#help" data-page="help"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/></svg> <span>Help</span></a>
+      </nav>
+      <div class="sidebar-foot">
+        <div id="sysPill" class="sys-pill" data-tip="The engine machine your models actually run in. The build picker uses this to estimate per-model performance.">Detecting system…</div>
+      </div>
+    </aside>
 
-  <main>
-    <!-- 1. Build -->
-    <section class="card">
-      <h2>1 &middot; Build an image</h2>
+    <!-- Main content -->
+    <div class="content">
+      <header class="topbar">
+        <div class="topbar-text">
+          <h1 id="pageTitle">Build an image</h1>
+          <p class="sub" id="pageSub">Configure a model, build a self-contained image, run it, and chat.</p>
+        </div>
+      </header>
 
-      <!-- Custom searchable model picker: filter by capability, key strengths and
-           size, with a live per-system performance read on every model. -->
-      <div class="field model-field">
-        <span class="field-label">Model</span>
-        <input type="hidden" id="model" />
-        <div id="modelPicker" class="combo">
-          <button type="button" id="modelTrigger" class="combo-trigger" aria-haspopup="listbox" aria-expanded="false">
-            <span class="trig-main"><span class="trig-name">Select a model&hellip;</span></span>
-          </button>
-          <div id="modelPanel" class="combo-panel" hidden>
-            <div class="combo-search">
-              <svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-              <input id="modelSearch" type="text" placeholder="Search models&hellip;" autocomplete="off" spellcheck="false" />
-            </div>
-            <div class="combo-filters">
-              <div class="filter-group">
-                <div class="filter-title"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 2 8l10 6 10-6z"/><path d="M2 16l10 6 10-6"/></svg> Capability</div>
-                <div id="filterModalities" class="filter-chips"></div>
-              </div>
-              <div class="filter-group">
-                <div class="filter-title"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg> Key strengths</div>
-                <div id="filterStrengths" class="filter-chips"></div>
-              </div>
-              <div class="filter-group">
-                <div class="filter-row-size">
-                  <span class="filter-title"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-6M4 11V3M12 21v-9M12 7V3M20 21v-5M20 11V3M1 15h6M9 7h6M17 15h6"/></svg> Max size <span id="sizeVal">any</span></span>
-                  <input id="filterSize" type="range" min="0" max="20" step="0.5" value="20" />
+      <main>
+        <!-- BUILD -->
+        <section class="page active" id="page-build">
+          <div class="card">
+            <!-- Custom searchable model picker -->
+            <div class="field model-field">
+              <span class="field-label">Model</span>
+              <input type="hidden" id="model" />
+              <div id="modelPicker" class="combo">
+                <button type="button" id="modelTrigger" class="combo-trigger" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="trig-main"><span class="trig-name">Select a model&hellip;</span></span>
+                </button>
+                <div id="modelPanel" class="combo-panel" hidden>
+                  <div class="combo-search">
+                    <svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+                    <input id="modelSearch" type="text" placeholder="Search models&hellip;" autocomplete="off" spellcheck="false" />
+                  </div>
+                  <div class="combo-filters">
+                    <div class="filter-group">
+                      <div class="filter-title"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 2 8l10 6 10-6z"/><path d="M2 16l10 6 10-6"/></svg> Capability</div>
+                      <div id="filterModalities" class="filter-chips"></div>
+                    </div>
+                    <div class="filter-group">
+                      <div class="filter-title"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg> Key strengths</div>
+                      <div id="filterStrengths" class="filter-chips"></div>
+                    </div>
+                    <div class="filter-group">
+                      <div class="filter-row-size">
+                        <span class="filter-title"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-6M4 11V3M12 21v-9M12 7V3M20 21v-5M20 11V3M1 15h6M9 7h6M17 15h6"/></svg> Max size <span id="sizeVal">any</span></span>
+                        <input id="filterSize" type="range" min="0" max="20" step="0.5" value="20" />
+                      </div>
+                    </div>
+                    <div class="combo-head">
+                      <span id="modelCount"></span>
+                      <button type="button" id="filterReset" class="ghost small">Reset filters</button>
+                    </div>
+                  </div>
+                  <ul id="modelList" class="combo-list" role="listbox" aria-label="Models"></ul>
                 </div>
               </div>
-              <div class="combo-head">
-                <span id="modelCount"></span>
-                <button type="button" id="filterReset" class="ghost small">Reset filters</button>
+            </div>
+
+            <div id="modelHint" class="model-detail"></div>
+
+            <div class="grid">
+              <label>Engine
+                <select id="engine">
+                  <option value="docker">Docker</option>
+                  <option value="podman">Podman</option>
+                </select>
+              </label>
+              <label>Compute
+                <select id="compute">
+                  <option value="cpu">CPU (portable)</option>
+                  <option value="cuda">NVIDIA GPU (CUDA)</option>
+                  <option value="vulkan">GPU — Vulkan / Apple Metal</option>
+                </select>
+              </label>
+              <label>Image name
+                <input id="imageName" type="text" placeholder="myorg/qwen-analyzer" />
+              </label>
+              <label>Tag
+                <input id="tag" type="text" value="latest" />
+              </label>
+            </div>
+            <p id="engineHint" class="hint"></p>
+
+            <label>Initialization prompt (optional) &mdash; baked in to specialize the model's startup behavior
+              <textarea id="systemPrompt" rows="3" placeholder="You are FinBot, a terse financial-data analyst. Always answer with strict JSON."></textarea>
+            </label>
+            <label>When to apply it
+              <select id="injectMode">
+                <option value="missing">Default &mdash; use it only if the client sends no system message</option>
+                <option value="always">Always &mdash; enforce it, overriding any client system message</option>
+              </select>
+            </label>
+
+            <h3 class="subhead">Resources &amp; deploy</h3>
+            <div class="grid">
+              <label>Context window (tokens)
+                <select id="ctxTier">
+                  <option value="auto">Auto &mdash; recommended</option>
+                  <option value="2048">2K &mdash; minimal</option>
+                  <option value="4096">4K</option>
+                  <option value="8192">8K</option>
+                  <option value="16384">16K</option>
+                  <option value="32768">32K</option>
+                  <option value="max">Max for this model</option>
+                  <option value="custom">Custom&hellip;</option>
+                </select>
+                <input id="ctxSize" type="number" min="512" step="512" placeholder="4096" hidden />
+              </label>
+              <label>Memory limit
+                <select id="memTier">
+                  <option value="0">Auto &mdash; unlimited</option>
+                  <option value="4">4 GB</option>
+                  <option value="8">8 GB</option>
+                  <option value="12">12 GB</option>
+                  <option value="16">16 GB</option>
+                  <option value="max">Max for your system</option>
+                  <option value="custom">Custom&hellip;</option>
+                </select>
+                <input id="memoryGb" type="number" min="0" step="0.5" value="0" hidden />
+              </label>
+              <label>Local URL (optional)
+                <input id="route" type="text" placeholder="ai" />
+              </label>
+              <label class="check">
+                <input id="autostart" type="checkbox" />
+                <span>Start on desktop start</span>
+              </label>
+            </div>
+            <p id="routeHint" class="hint"></p>
+
+            <button id="buildBtn" class="primary">Build &amp; export .tar</button>
+
+            <div id="buildProgress" class="progress" hidden>
+              <div class="bar"><div id="buildBar" class="fill"></div></div>
+              <div class="row-between">
+                <span id="buildStatus" class="status">Starting&hellip;</span>
+                <button id="logToggle" class="ghost">Show log</button>
               </div>
             </div>
-            <ul id="modelList" class="combo-list" role="listbox" aria-label="Models"></ul>
+            <pre id="buildLog" class="log" hidden></pre>
           </div>
-        </div>
-      </div>
+        </section>
 
-      <div id="modelHint" class="model-detail"></div>
+        <!-- IMAGES -->
+        <section class="page" id="page-images">
+          <div class="card">
+            <div class="row-between">
+              <h2>Built images</h2>
+              <button id="refreshImages" class="ghost icon-btn" data-tip="Refresh"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v5h-5"/></svg></button>
+            </div>
+            <p class="hint">Tip: click an image name to load its settings (model, compute, init prompt) into the build form as a template.</p>
+            <details class="prompt-override">
+              <summary>Override init prompt for the next Run (no rebuild)</summary>
+              <p class="hint">Leave blank to use each image's baked prompt. When set, the next model you Run uses this prompt instead — applied as a container env, so it's a ~10s restart, not a rebuild.</p>
+              <textarea id="runPromptOverride" rows="4" placeholder="You are Marvin, a general-purpose assistant…"></textarea>
+            </details>
+            <table id="imagesTable">
+              <thead><tr><th>Image</th><th>Tag</th><th>Engine</th><th>Compute</th><th>Size</th><th>Status</th><th>Port</th><th class="col-actions">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
 
-      <div class="grid">
-        <label>Engine
-          <select id="engine">
-            <option value="docker">Docker</option>
-            <option value="podman">Podman</option>
-          </select>
-        </label>
-        <label>Compute
-          <select id="compute">
-            <option value="cpu">CPU (portable)</option>
-            <option value="cuda">NVIDIA GPU (CUDA)</option>
-            <option value="vulkan">GPU — Vulkan / Apple Metal</option>
-          </select>
-        </label>
-        <label>Image name
-          <input id="imageName" type="text" placeholder="myorg/qwen-analyzer" />
-        </label>
-        <label>Tag
-          <input id="tag" type="text" value="latest" />
-        </label>
-      </div>
-      <p id="engineHint" class="hint"></p>
-      <label>Initialization prompt (optional) &mdash; baked in to specialize the model's startup behavior
-        <textarea id="systemPrompt" rows="3" placeholder="You are FinBot, a terse financial-data analyst. Always answer with strict JSON."></textarea>
-      </label>
-      <label>When to apply it
-        <select id="injectMode">
-          <option value="missing">Default &mdash; use it only if the client sends no system message</option>
-          <option value="always">Always &mdash; enforce it, overriding any client system message</option>
-        </select>
-      </label>
+        <!-- CONTAINERS -->
+        <section class="page" id="page-containers">
+          <div class="card">
+            <div class="row-between">
+              <h2>Running containers</h2>
+              <button id="refreshContainers" class="ghost icon-btn" data-tip="Refresh"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v5h-5"/></svg></button>
+            </div>
+            <table id="containersTable">
+              <thead><tr><th>Name</th><th>Image</th><th>Engine</th><th>Status</th><th>Ports</th><th class="col-actions">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
 
-      <h3 class="subhead">Resources &amp; deploy</h3>
-      <div class="grid">
-        <label>Context window (tokens)
-          <input id="ctxSize" type="number" min="512" step="512" placeholder="4096" />
-        </label>
-        <label>Memory limit (GB, 0 = unlimited)
-          <input id="memoryGb" type="number" min="0" step="0.5" value="0" />
-        </label>
-        <label>Local URL (optional)
-          <input id="route" type="text" placeholder="ai" />
-        </label>
-        <label class="check">
-          <input id="autostart" type="checkbox" />
-          <span>Start on desktop start</span>
-        </label>
-      </div>
-      <p id="routeHint" class="hint"></p>
+        <!-- MODEL FILES -->
+        <section class="page" id="page-models">
+          <div class="card">
+            <div class="row-between">
+              <h2>Downloaded model files</h2>
+              <button id="refreshModels" class="ghost icon-btn" data-tip="Refresh"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v5h-5"/></svg></button>
+            </div>
+            <table id="modelsTable">
+              <thead><tr><th>Model</th><th>File</th><th>Size on disk</th><th class="col-actions">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
 
-      <button id="buildBtn" class="primary">Build &amp; export .tar</button>
+        <!-- CHAT -->
+        <section class="page" id="page-chat">
+          <div class="card chat-card">
+            <div class="chat-head">
+              <label class="chat-target">Talk to
+                <select id="chatTarget"></select>
+              </label>
+              <button id="chatRefresh" class="ghost icon-btn" data-tip="Refresh running models"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v5h-5"/></svg></button>
+              <div class="chat-head-right">
+                <button id="chatClear" class="ghost small">Clear chat</button>
+              </div>
+            </div>
+            <details class="chat-sys">
+              <summary>System prompt (optional)</summary>
+              <textarea id="chatSystem" rows="2" placeholder="You are a helpful assistant."></textarea>
+            </details>
+            <div id="chatLog" class="chat-log">
+              <div class="chat-empty">Pick a running model and say hello. If the list is empty, Run one from the Images page first.</div>
+            </div>
+            <form id="chatForm" class="chat-input">
+              <textarea id="chatPrompt" rows="1" placeholder="Message the model…  (Enter to send, Shift+Enter for a newline)"></textarea>
+              <button id="chatSend" class="primary icon-btn" type="submit" data-tip="Send"><svg class="ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg></button>
+            </form>
+          </div>
+        </section>
 
-      <div id="buildProgress" class="progress" hidden>
-        <div class="bar"><div id="buildBar" class="fill"></div></div>
-        <div class="row-between">
-          <span id="buildStatus" class="status">Starting&hellip;</span>
-          <button id="logToggle" class="ghost">Show log</button>
-        </div>
-      </div>
-      <pre id="buildLog" class="log" hidden></pre>
-    </section>
+        <!-- HELP -->
+        <section class="page" id="page-help">
+          <div class="card help-card"></div>
+        </section>
+      </main>
+    </div>
+  </div>
 
-    <!-- 2. Images -->
-    <section class="card">
-      <div class="row-between">
-        <h2>2 &middot; Built images</h2>
-        <button id="refreshImages" class="ghost">Refresh</button>
-      </div>
-      <p class="hint">Tip: click an image name to load its settings (model, compute, init prompt) into the build form above as a template.</p>
-      <details class="prompt-override">
-        <summary>Override init prompt for the next Run (no rebuild)</summary>
-        <p class="hint">Leave blank to use each image's baked prompt. When set, the next model you Run uses this prompt instead — applied as a container env, so it's a ~10s restart, not a rebuild.</p>
-        <textarea id="runPromptOverride" rows="4" placeholder="You are Marvin, a general-purpose assistant…"></textarea>
-      </details>
-      <table id="imagesTable">
-        <thead><tr><th>Image</th><th>Tag</th><th>Engine</th><th>Compute</th><th>Size</th><th>Status</th><th>Run on port</th><th>Actions</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </section>
-
-    <!-- 3. Running containers -->
-    <section class="card">
-      <div class="row-between">
-        <h2>3 &middot; Containers</h2>
-        <button id="refreshContainers" class="ghost">Refresh</button>
-      </div>
-      <table id="containersTable">
-        <thead><tr><th>Name</th><th>Image</th><th>Engine</th><th>Status</th><th>Ports</th><th>Actions</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </section>
-
-    <!-- 4. Downloaded models -->
-    <section class="card">
-      <div class="row-between">
-        <h2>4 &middot; Downloaded model files</h2>
-        <button id="refreshModels" class="ghost">Refresh</button>
-      </div>
-      <table id="modelsTable">
-        <thead><tr><th>Model</th><th>File</th><th>Size on disk</th><th>Actions</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </section>
-
-    <!-- 5. Test -->
-    <section class="card">
-      <h2>5 &middot; Test a running model</h2>
-      <div class="grid">
-        <label>Port
-          <input id="chatPort" type="number" value="8080" />
-        </label>
-        <label>System prompt (optional)
-          <input id="chatSystem" type="text" placeholder="You are a helpful assistant." />
-        </label>
-      </div>
-      <label>Prompt
-        <textarea id="chatPrompt" rows="3" placeholder="Summarize: AAPL beat earnings by 12%..."></textarea>
-      </label>
-      <button id="chatBtn" class="primary">Send</button>
-      <pre id="chatOut" class="log" hidden></pre>
-    </section>
-  </main>
-
-  <footer>Local LLM image factory &middot; weights in <code>./models</code> &middot; tarballs in <code>./images</code></footer>
   <script src="model-meta.js"></script>
   <script src="app.js"></script>
 </body>
