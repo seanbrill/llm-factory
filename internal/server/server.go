@@ -854,7 +854,10 @@ func (s *Server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	fw, _ := mw.CreateFormFile("file", hdr.Filename)
-	io.Copy(fw, file)
+	if _, err := io.Copy(fw, file); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read uploaded audio: " + err.Error()})
+		return
+	}
 	mw.WriteField("response_format", "json")
 	for _, k := range []string{"temperature", "language"} {
 		if v := r.FormValue(k); v != "" {

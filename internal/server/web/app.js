@@ -58,6 +58,7 @@ const ICONS = {
   refresh:   '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v5h-5"/>',
   plus:      '<path d="M12 5v14M5 12h14"/>',
   send:      '<path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/>',
+  arrowup:   '<path d="M12 19V5M5 12l7-7 7 7"/>',
   link:      '<path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/>',
   paperclip: '<path d="M21.4 11.05 12.25 20.2a6 6 0 0 1-8.49-8.49l9.2-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
   x:         '<path d="M18 6 6 18M6 6l12 12"/>',
@@ -1229,14 +1230,14 @@ function renderTabs() {
 
 // ---- Active tab rendering -------------------------------------------------
 const MODE = {
-  text:        { ph: "Message the model…  (Enter to send)", send: "send", tip: "Send" },
-  code:        { ph: "Ask for code…", send: "send", tip: "Send" },
-  reasoning:   { ph: "Ask something that needs reasoning…", send: "send", tip: "Send" },
-  vision:      { ph: "Attach an image, then ask about it…", send: "send", tip: "Send", attach: "image/*" },
+  text:        { ph: "Message the model…", send: "arrowup", tip: "Send" },
+  code:        { ph: "Ask for code…", send: "arrowup", tip: "Send" },
+  reasoning:   { ph: "Ask something that needs reasoning…", send: "arrowup", tip: "Send" },
+  vision:      { ph: "Attach or paste an image, then ask about it…", send: "arrowup", tip: "Send", attach: "image/*" },
   image:       { ph: "Describe the image to generate…", send: "image", tip: "Generate image" },
   "audio-stt": { ph: "Attach an audio file to transcribe…", send: "doc", tip: "Transcribe", attach: "audio/*" },
   tts:         { ph: "Text to speak aloud…", send: "speaker", tip: "Speak" },
-  embedding:   { ph: "Embedding models return vectors, not chat.", send: "send", tip: "", disabled: true },
+  embedding:   { ph: "Embedding models return vectors, not chat.", send: "arrowup", tip: "", disabled: true },
 };
 function renderActive() {
   const tab = activeTab();
@@ -1265,6 +1266,7 @@ function renderActive() {
     $("chatAttach").hidden = !m.attach;
     $("chatFile").accept = m.attach || "";
     $("imageSettings").hidden = mod !== "image";
+    $("composerHint").innerHTML = tab ? `${icon(modMeta(mod).icon)} ${escapeHtml(tab.name)}` : "";
   }
   renderLog(tab);
   updateAttachPreview();
@@ -1296,9 +1298,15 @@ function bubbleHtml(m) {
     `<div class="msg-who">${escapeHtml(who)}</div><div class="msg-body">${body}</div></div>`;
 }
 function renderLog(tab) {
+  if (tab && tab.id !== ACTIVE) return;   // a background tab must not repaint the shared log
   const log = $("chatLog");
   if (!tab || (!tab.msgs.length && !tab.busy)) {
-    log.innerHTML = `<div class="chat-empty">${tab && tab.port ? "Say hello — or attach media, depending on the model's capability." : "Run a model from the Images page, then come back here."}</div>`;
+    const greet = { image: "Describe an image to generate.", "audio-stt": "Attach an audio file to transcribe.",
+      tts: "Type something to hear it spoken.", vision: "Attach or paste an image, then ask about it.",
+      embedding: "Embedding models return vectors, not chat." };
+    const sub = tab && tab.port ? (greet[tab.modality] || `You're chatting with ${tab.name}.`)
+      : "Run a model from the Images page, then come back here.";
+    log.innerHTML = `<div class="chat-empty"><div class="greet">Hello there</div><div class="greet-sub">${escapeHtml(sub)}</div></div>`;
     return;
   }
   log.innerHTML = tab.msgs.map(bubbleHtml).join("");
@@ -1359,10 +1367,11 @@ async function genImage(tab, prompt) {
   const ph = { role: "assistant", kind: "image", content: "Generating… (can take 30–120s)" };
   tab.msgs.push(ph); tab.busy = true; renderLog(tab);
   try {
+    const seed = parseInt($("imgSeed").value, 10);   // 0 is a valid reproducible seed; don't coerce to -1
     const body = { port: tab.port, prompt,
       steps: parseInt($("imgSteps").value, 10) || 24,
       width: parseInt($("imgSize").value, 10) || 512, height: parseInt($("imgSize").value, 10) || 512,
-      seed: parseInt($("imgSeed").value, 10) || -1 };
+      seed: Number.isNaN(seed) ? -1 : seed };
     const data = await api("/api/image/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     ph.content = ""; ph.images = data.images || [];
     if (!ph.images.length) { ph.content = "(no image returned)"; ph.kind = "text"; }
@@ -1435,6 +1444,20 @@ function updateAttachPreview() {
   el.hidden = false;
   el.querySelector(".att-x").onclick = () => { pendingImage = null; pendingFile = null; updateAttachPreview(); };
 }
+// Stage a pasted/dropped image — only Vision models can actually use one.
+function stageImageFile(f) {
+  const tab = activeTab(); if (!tab) return;
+  if (tab.modality !== "vision") { toast("This model can't see images — switch to a Vision model to send one."); return; }
+  const rd = new FileReader();
+  rd.onload = () => { pendingImage = rd.result; updateAttachPreview(); };
+  rd.readAsDataURL(f);
+}
+function toast(msg) {
+  let t = document.getElementById("toastPop");
+  if (!t) { t = document.createElement("div"); t.id = "toastPop"; t.className = "toast-pop"; document.body.appendChild(t); }
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2800);
+}
 
 // ---- Export ---------------------------------------------------------------
 function exportChat(fmt) {
@@ -1457,11 +1480,13 @@ function exportChat(fmt) {
 }
 
 // ---- Bridge: two models converse ------------------------------------------
+let bridgeAbort = null;
 function openBridge() {
-  if (RUNNING.length < 2) { alert("Run at least two models first (Images page) to bridge them."); return; }
-  const opts = RUNNING.map((r) => `<option value="${r.port}">${escapeHtml(r.name)} (${modMeta(r.modality).label})</option>`).join("");
+  const cands = RUNNING.filter((r) => isStreamMod(r.modality)); // only chat-capable runtimes can bridge
+  if (cands.length < 2) { alert("Run at least two text/chat-capable models to bridge them."); return; }
+  const opts = cands.map((r) => `<option value="${r.port}">${escapeHtml(r.name)} (${modMeta(r.modality).label})</option>`).join("");
   $("bridgeA").innerHTML = opts; $("bridgeB").innerHTML = opts;
-  if (RUNNING[1]) $("bridgeB").value = String(RUNNING[1].port);
+  $("bridgeB").value = String(cands[1].port);
   $("bridgeModal").hidden = false;
 }
 async function runBridge() {
@@ -1475,6 +1500,7 @@ async function runBridge() {
                 name: `${a.name} ↔ ${b.name}`, system: "", msgs: [] };
   TABS.push(tab); ACTIVE = tab.id; renderTabs(); renderActive();
   bridgeStop = false;
+  bridgeAbort = new AbortController();
   $("chatBridgeStop").hidden = false;
   tab.msgs.push({ role: "assistant", bridgeFrom: a.name, content: seed });
   renderLog(tab);
@@ -1485,13 +1511,17 @@ async function runBridge() {
     const messages = transcript.map((t) => ({ role: t.from === speaker ? "assistant" : "user", content: t.text }));
     const ph = { role: "assistant", bridgeFrom: tgt.name, content: "" };
     tab.msgs.push(ph); renderLog(tab);
-    try { await streamChat(tgt.port, messages, (d) => { ph.content += d; scheduleLog(tab); }); }
-    catch (e) { ph.content = "⚠ " + e.message; ph.error = true; bridgeStop = true; }
+    try { await streamChat(tgt.port, messages, (d) => { ph.content += d; scheduleLog(tab); }, bridgeAbort.signal); }
+    catch (e) {
+      if (e.name === "AbortError") { ph.content += " (stopped)"; }
+      else { ph.content = "⚠ " + e.message; ph.error = true; }
+      bridgeStop = true;
+    }
     transcript.push({ from: speaker, text: ph.content });
     speaker = speaker === "a" ? "b" : "a";
     renderLog(tab);
   }
-  tab.busy = false; $("chatBridgeStop").hidden = true; renderTabs();
+  tab.busy = false; bridgeAbort = null; $("chatBridgeStop").hidden = true; renderTabs();
 }
 
 // ---- Page router (hash-based) + tooltips + help ---------------------------
@@ -1638,6 +1668,24 @@ $("chatTarget").addEventListener("change", () => {
 $("chatSystem").addEventListener("input", () => { const t = activeTab(); if (t) t.system = $("chatSystem").value; });
 $("chatAttach").addEventListener("click", onAttach);
 $("chatFile").addEventListener("change", onFile);
+// Paste an image straight into the composer, or drag-drop one onto it.
+$("chatPrompt").addEventListener("paste", (e) => {
+  for (const it of (e.clipboardData && e.clipboardData.items) || []) {
+    if (it.type.startsWith("image/")) { const f = it.getAsFile(); if (f) { e.preventDefault(); stageImageFile(f); } return; }
+  }
+});
+{
+  const comp = document.querySelector(".composer");
+  if (comp) {
+    comp.addEventListener("dragover", (e) => { e.preventDefault(); comp.classList.add("drag"); });
+    comp.addEventListener("dragleave", () => comp.classList.remove("drag"));
+    comp.addEventListener("drop", (e) => {
+      e.preventDefault(); comp.classList.remove("drag");
+      const f = [...((e.dataTransfer && e.dataTransfer.files) || [])].find((x) => x.type.startsWith("image/"));
+      if (f) stageImageFile(f);
+    });
+  }
+}
 // Copy button on rendered code blocks (event-delegated; the log re-renders).
 $("chatLog").addEventListener("click", (e) => {
   const b = e.target.closest(".code-copy"); if (!b) return;
@@ -1652,7 +1700,7 @@ $("exportMenu").querySelectorAll("[data-exp]").forEach((b) => b.addEventListener
 $("chatBridge").addEventListener("click", openBridge);
 $("bridgeCancel").addEventListener("click", () => { $("bridgeModal").hidden = true; });
 $("bridgeStart").addEventListener("click", runBridge);
-$("chatBridgeStop").addEventListener("click", () => { bridgeStop = true; });
+$("chatBridgeStop").addEventListener("click", () => { bridgeStop = true; if (bridgeAbort) bridgeAbort.abort(); });
 
 // Page navigation
 window.addEventListener("hashchange", route);

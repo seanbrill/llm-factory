@@ -507,3 +507,49 @@ button.ghost.icon-btn { padding: 6px 8px; }
 .modal-box { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 20px; width: min(520px, 100%); }
 .modal-box h3 { margin: 0 0 4px; font-size: 16px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+/* ===================================================================== */
+/* Chat look — centered column + llama-style composer                    */
+/* ===================================================================== */
+.chat-log { max-width: 768px; margin: 6px auto; width: 100%; gap: 22px; padding: 8px 4px; }
+.chat-input { max-width: 768px; margin: 0 auto; width: 100%; display: block; }
+
+/* Messages: user = bubble on the right, assistant = plain full width */
+.msg { max-width: 100%; gap: 5px; }
+.msg-user { align-self: flex-end; align-items: flex-end; max-width: 82%; }
+.msg-assistant { align-self: stretch; max-width: 100%; }
+.msg-body { white-space: normal; }
+.msg-who { display: none; }
+.msg-bridge .msg-who { display: block; font-weight: 600; color: #aab4c8; font-size: 12px; }
+.msg-user .msg-body { background: #2b2f3a; border: none; border-radius: 18px; padding: 10px 14px; }
+.msg-assistant .msg-body { background: transparent; border: none; padding: 2px; border-radius: 0; font-size: 14.5px; }
+.msg-bridge .msg-body { background: #15191f; border: 1px solid var(--border); border-radius: 12px; padding: 10px 13px; }
+
+/* Empty-state greeting */
+.chat-empty { margin: auto; text-align: center; padding: 40px 10px; }
+.greet { font-size: 30px; font-weight: 700; color: var(--text); margin-bottom: 8px; letter-spacing: .2px; }
+.greet-sub { color: var(--muted); font-size: 15px; }
+
+/* Composer (one big rounded box, à la llama-ui) */
+.composer { background: #1c1f27; border: 1px solid #2c313d; border-radius: 24px; padding: 8px 8px 8px 16px; display: flex; flex-direction: column; gap: 4px; transition: border-color .15s, box-shadow .15s; }
+.composer:focus-within { border-color: #3c4658; box-shadow: 0 0 0 3px rgba(79,140,255,.08); }
+.composer.drag { border-color: var(--accent); border-style: dashed; }
+.composer textarea { background: transparent; border: none; resize: none; padding: 8px 0 2px; max-height: 200px; width: 100%; font-size: 15px; line-height: 1.5; }
+.composer textarea:focus { outline: none; }
+.composer textarea:disabled { color: var(--muted); }
+.composer-bar { display: flex; align-items: center; gap: 8px; }
+.composer-spacer { flex: 1; }
+.composer-hint { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; max-width: 220px; }
+.composer-hint .ico { width: 13px; height: 13px; }
+.comp-icon { margin: 0; width: 34px; height: 34px; border-radius: 50%; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: #2a2e38; border: 1px solid var(--border); color: var(--text); }
+.comp-icon .ico { width: 18px; height: 18px; }
+.comp-icon:hover { background: #333947; }
+.comp-send { margin: 0; width: 36px; height: 36px; border-radius: 50%; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: var(--accent-2); border: none; color: #fff; flex: none; }
+.comp-send .ico { width: 18px; height: 18px; }
+.comp-send:hover { background: var(--accent); }
+.comp-send:disabled { opacity: .35; }
+.composer .attach-preview { margin: 0 0 2px; }
+
+/* Toast */
+.toast-pop { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(10px); background: #1d2230; border: 1px solid #3a4356; color: #e6ebf5; padding: 10px 16px; border-radius: 10px; font-size: 13px; box-shadow: 0 12px 30px rgba(0,0,0,.5); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 200; }
+.toast-pop.show { opacity: 1; transform: translateX(-50%) translateY(0); }
