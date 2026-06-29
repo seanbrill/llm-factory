@@ -150,6 +150,11 @@ func runtimeFamily(modality string) string {
 	}
 }
 
+// selfContained reports whether a family bakes its own model in the Dockerfile,
+// so there's no GGUF on disk to download/stage: tts (Piper) and python (e.g.
+// Kokoro, which pulls its own weights at build time).
+func selfContained(family string) bool { return family == "tts" || family == "python" }
+
 // ModelPath is where a catalog model's weights live (or will live) on disk.
 func (b *Builder) ModelPath(m catalog.Model) string {
 	return filepath.Join(b.ModelsDir, m.File)
@@ -306,9 +311,14 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	}
 	engine := resolveEngine(o.Engine)
 
-	// Select the runtime family by modality. llama.cpp keeps the historical
-	// Dockerfile.<compute>; other families use Dockerfile.<family>.<compute>.
+	// Select the runtime family. A model with runtime "python" routes to the
+	// PyTorch family (Dockerfile.python.<compute> + pygate) regardless of
+	// modality; otherwise the family is chosen by modality. llama.cpp keeps the
+	// historical Dockerfile.<compute>; other families use Dockerfile.<family>.<compute>.
 	family := runtimeFamily(o.Model.Mod())
+	if o.Model.Rt() == "python" {
+		family = "python"
+	}
 	dfName := "Dockerfile." + compute
 	if family != "llama" {
 		dfName = "Dockerfile." + family + "." + compute
@@ -319,10 +329,10 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		return fmt.Errorf("read %s (modality %q): %w", dockerfileSrc, o.Model.Mod(), err)
 	}
 
-	// The tts family is self-contained (its Dockerfile bakes a Piper voice), so it
-	// has no GGUF to download/stage. Every other family needs the model on disk.
+	// Self-contained families (tts, python) bake their own model, so there's no
+	// GGUF to download/stage. Every other family needs the model on disk.
 	var modelPath string
-	if family != "tts" {
+	if !selfContained(family) {
 		modelPath, err = b.EnsureModel(ctx, o.Model, log)
 		if err != nil {
 			return err
@@ -341,9 +351,9 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	if err := os.WriteFile(filepath.Join(work, "Dockerfile"), dfData, 0o644); err != nil {
 		return err
 	}
-	// Stage the model into the build context (skipped for the self-contained tts
-	// family). Log it so the (potentially slow, multi-GB) copy never looks frozen.
-	if family != "tts" {
+	// Stage the model into the build context (skipped for self-contained
+	// families). Log it so the (potentially slow, multi-GB) copy never looks frozen.
+	if !selfContained(family) {
 		var stageGB float64
 		if fi, err := os.Stat(modelPath); err == nil {
 			stageGB = float64(fi.Size()) / 1e9
@@ -426,6 +436,14 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		}
 	}
 
+	// The python family runs a PyTorch model behind the pygate shim (interpreted,
+	// not compiled). Stage its source so Dockerfile.python copies it in.
+	if family == "python" {
+		if err := stagePygate(b.BaseDir, work); err != nil {
+			return err
+		}
+	}
+
 	ref := o.Ref()
 	log(fmt.Sprintf("Building %s [%s/%s] from %s ...", ref, engine, compute, o.Model.Name))
 	buildArgs := []string{
@@ -435,6 +453,7 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		"--label", "local-llm.tool=builder",
 		"--label", "local-llm.modality=" + o.Model.Mod(),
 		"--label", "local-llm.model=" + o.Model.ID,
+		"--label", "local-llm.runtime=" + o.Model.Rt(),
 		"--label", "local-llm.compute=" + compute,
 		// Engine the image was built with — Run reads this so a podman-built image
 		// is launched with podman (and vice versa) without the UI having to track it.
@@ -1503,6 +1522,21 @@ func stageEnsemblegate(baseDir, work string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(gateDir, "go.mod"), []byte("module ensemblegate\n\ngo 1.22\n"), 0o644)
+}
+
+// stagePygate copies the pygate shim (Python, interpreted) into <work>/gate so
+// Dockerfile.python copies it in. No compile step — unlike the Go gates.
+func stagePygate(baseDir, work string) error {
+	src := filepath.Join(baseDir, "cmd", "pygate", "main.py")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read pygate source (%s): %w", src, err)
+	}
+	gateDir := filepath.Join(work, "gate")
+	if err := os.MkdirAll(gateDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(gateDir, "main.py"), data, 0o644)
 }
 
 // linkOrCopyReport hardlinks src->dst (cheap, same volume) and falls back to a

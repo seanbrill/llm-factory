@@ -60,6 +60,7 @@ COPY docker/                    /app/docker/
 COPY cmd/llmgate/               /app/cmd/llmgate/
 COPY cmd/videogate/             /app/cmd/videogate/
 COPY cmd/ensemblegate/          /app/cmd/ensemblegate/
+COPY cmd/pygate/                /app/cmd/pygate/
 
 # host.docker.internal lets the in-UI "Test" reach model containers' published
 # ports on the host. (start.{ps1,sh} adds --add-host for Linux hosts.)

@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+#
+# Python runtime family — PyTorch models with no C++/GGUF port, served by the
+# pygate shim. This build is Kokoro TTS (OpenAI-compatible /v1/audio/speech, the
+# endpoint the factory's /api/tts already calls). CPU-only torch keeps the image
+# small (~2-3 GB); Kokoro is ~82M params and runs comfortably on CPU.
+#
+# The build context (assembled by the builder) carries the pygate source at
+# gate/main.py. Unlike the Go gates there's no compile step — it's interpreted.
+FROM python:3.11-slim
+
+# espeak-ng: Kokoro's phonemizer fallback (misaki G2P). libsndfile: soundfile I/O.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        espeak-ng libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install CPU-only torch FIRST (small wheel) so Kokoro doesn't pull the multi-GB
+# CUDA build, then Kokoro + its English G2P + the HTTP server.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir "kokoro>=0.9.2" "misaki[en]" soundfile fastapi "uvicorn[standard]"
+
+WORKDIR /app
+COPY gate/main.py /app/pygate.py
+
+# Bake the Kokoro model + default voice so the image is offline-ready. `|| true`
+# lets the build succeed even if HF is briefly unreachable (it then downloads on
+# the first request instead).
+RUN python -c "from kokoro import KPipeline; p=KPipeline(lang_code='a'); list(p('warm up','af_heart'))" || true
+
+# Unused by this Dockerfile but always passed by the builder.
+ARG MODALITY=tts
+ARG INJECT_MODE=missing
+
+ENV VOICE=af_heart KOKORO_LANG=a
+EXPOSE 8080
+CMD ["uvicorn", "pygate:app", "--host", "0.0.0.0", "--port", "8080"]

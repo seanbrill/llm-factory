@@ -540,6 +540,22 @@
       "modality": "tts"
     },
     {
+      "id": "kokoro-tts",
+      "name": "Kokoro TTS 82M (Python)",
+      "repo": "hexgrad/Kokoro-82M",
+      "file": "",
+      "url": "",
+      "size_gb": 0.4,
+      "tier": "tiny",
+      "params": "82M",
+      "min_ram_gb": 2,
+      "min_vram_gb": 0,
+      "recommended": true,
+      "description": "Natural neural text-to-speech via the Python/PyTorch runtime (Kokoro). Markedly better than Piper; runs on CPU. The factory's first Python-runtime model.",
+      "modality": "tts",
+      "runtime": "python"
+    },
+    {
       "id": "wan2.2-t2v-a14b",
       "name": "Wan 2.2 T2V A14B (Q4_K_M)",
       "repo": "QuantStack/Wan2.2-T2V-A14B-GGUF",
