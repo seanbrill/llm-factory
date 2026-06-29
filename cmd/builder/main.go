@@ -21,6 +21,16 @@ import (
 )
 
 func main() {
+	// Force BuildKit for `docker build`. The daemon's integrated BuildKit works
+	// without the buildx CLI plugin (the dev factory image ships only the docker
+	// binary, so it would otherwise fall back to the legacy builder) AND shares the
+	// layer cache — without this, a model image recompiles stable-diffusion.cpp
+	// with CUDA from scratch (~15 min, all cores pegged) instead of reusing the
+	// cached layer. Inherited by every `docker` exec the builder runs.
+	if os.Getenv("DOCKER_BUILDKIT") == "" {
+		_ = os.Setenv("DOCKER_BUILDKIT", "1")
+	}
+
 	dir := flag.String("dir", ".", "project directory holding config/, models/, images/")
 	addr := flag.String("addr", "127.0.0.1:8799", "address to listen on")
 	open := flag.Bool("open", true, "open the UI in a browser on startup")

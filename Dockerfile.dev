@@ -13,7 +13,12 @@
 FROM golang:1.24-bookworm
 
 # docker CLI (talks to the mounted host daemon) — copied from the official image.
+# Include the buildx plugin too: without it `docker build` falls back to the
+# legacy builder (no BuildKit cache sharing), which recompiles stable-diffusion.cpp
+# from scratch on every video/image model build. (The prod image is the full
+# docker:27-cli, which already bundles buildx.)
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker:27-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 
 # podman remote client so the factory's "Podman" engine option works in dev too
 # (the macOS GPU/Vulkan path). Acts as a remote client via CONTAINER_HOST.
