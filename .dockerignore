@@ -6,6 +6,7 @@
 models/
 images/
 config/
+media/
 .build/
 *.gguf
 *.tar
@@ -15,3 +16,8 @@ local-llm.exe
 README.md
 docs/
 deploy/
+# New frontend source (Svelte/Vite): built separately by `vite`; the factory image
+# embeds the OUTPUT in internal/server/web, never this source or its node_modules.
+ui/
+**/node_modules/
+**/dist/

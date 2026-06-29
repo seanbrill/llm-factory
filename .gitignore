@@ -4,6 +4,10 @@
 /images/*
 !/images/.gitkeep
 
+# Generated clips/images saved by the chat (served from /api/media).
+/media/*
+!/media/.gitkeep
+
 # Temp docker build contexts.
 /.build/
 

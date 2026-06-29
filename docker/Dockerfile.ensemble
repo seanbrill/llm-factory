@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+#
+# Ensemble (orchestrated): the Conductor (ensemblegate) + a baked manifest. At run
+# time it starts/stops sibling specialist containers via the HOST engine, so it
+# ships the docker CLI and must be run with the host docker socket mounted and
+# host.docker.internal reachable — the factory's Run wires both for ensemble images:
+#
+#   docker run -d -p 8080:8080 \
+#     -v /var/run/docker.sock:/var/run/docker.sock \
+#     --add-host host.docker.internal:host-gateway <image>
+
+# ---------------------------------------------------------------------------
+# Stage 1: build the Conductor (stdlib Go, static)
+# ---------------------------------------------------------------------------
+FROM golang:1.22-bookworm AS gate
+WORKDIR /gate
+COPY gate/ ./
+RUN CGO_ENABLED=0 go build -trimpath -o /ensemblegate .
+
+# ---------------------------------------------------------------------------
+# Stage 2: runtime (Conductor + docker CLI + baked manifest)
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
+ARG INJECT_MODE=missing
+ARG MODALITY=ensemble
+ARG CTX_SIZE=0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        docker.io curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=gate /ensemblegate /usr/local/bin/ensemblegate
+COPY manifest.json /ensemble/manifest.json
+ENV PORT=8080 \
+    MANIFEST=/ensemble/manifest.json
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/ensemblegate"]

@@ -1,0 +1,59 @@
+# syntax=docker/dockerfile:1
+#
+# Video-generation runtime (stable-diffusion.cpp vid_gen) — CPU/portable build.
+# Works anywhere but is impractically slow for video; prefer Dockerfile.video.cuda
+# on an NVIDIA GPU. Same videogate shim + baked multi-file model as the CUDA image.
+
+# ---------------------------------------------------------------------------
+# Stage 1: compile stable-diffusion.cpp (CPU)
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS builder
+ARG SDCPP_REF=master
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git cmake build-essential ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git clone --recursive --depth 1 --branch "${SDCPP_REF}" \
+        https://github.com/leejet/stable-diffusion.cpp.git
+WORKDIR /src/stable-diffusion.cpp
+RUN cmake -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGGML_NATIVE=OFF \
+        -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON \
+        -DSD_BUILD_SHARED_LIBS=OFF \
+    && cmake --build build --config Release -j "$(nproc)"
+
+# ---------------------------------------------------------------------------
+# Stage 2: build the videogate shim
+# ---------------------------------------------------------------------------
+FROM golang:1.22-bookworm AS gate
+WORKDIR /gate
+COPY gate/ ./
+RUN CGO_ENABLED=0 go build -trimpath -o /videogate .
+
+# ---------------------------------------------------------------------------
+# Stage 3: runtime + baked multi-file model
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
+ARG INJECT_MODE=missing
+ARG MODALITY=video
+ARG CTX_SIZE=0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --home-dir /work vid \
+    && mkdir -p /models/extra /work && chown -R vid /work
+COPY --from=builder /src/stable-diffusion.cpp/build/bin/ /usr/local/bin/
+COPY --from=gate /videogate /usr/local/bin/videogate
+COPY model.gguf /models/model.gguf
+COPY extra/ /models/extra/
+COPY extra_files.json /models/extra_files.json
+ENV PORT=8080 \
+    MODEL_PATH=/models/model.gguf \
+    EXTRA_DIR=/models/extra \
+    EXTRA_MANIFEST=/models/extra_files.json \
+    OFFLOAD_TO_CPU=1
+EXPOSE 8080
+USER vid
+WORKDIR /work
+ENTRYPOINT ["/usr/local/bin/videogate"]

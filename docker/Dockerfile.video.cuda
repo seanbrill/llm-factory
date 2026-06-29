@@ -1,0 +1,67 @@
+# syntax=docker/dockerfile:1
+#
+# Video-generation runtime: stable-diffusion.cpp (Wan / LTX, mode vid_gen)
+# compiled against CUDA, fronted by the `videogate` shim which wraps the `sd` CLI
+# behind an HTTP POST /generate. The diffusion model, its extra weights (VAE, T5,
+# high-noise model) and a manifest are baked in.
+#
+# Run (NVIDIA):  docker run --gpus all -p 8080:8080 <image>
+#
+# NOTE: video support in stable-diffusion.cpp is recent — pin SDCPP_REF to a tag
+# that includes Wan/LTX `vid_gen`. Build is heavy (compiles sd.cpp + bakes ~15 GB
+# of Wan weights) and is meant to run on a real NVIDIA GPU.
+
+# ---------------------------------------------------------------------------
+# Stage 1: compile stable-diffusion.cpp (all binaries) with the CUDA backend
+# ---------------------------------------------------------------------------
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
+ARG SDCPP_REF=master
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git cmake build-essential ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git clone --recursive --depth 1 --branch "${SDCPP_REF}" \
+        https://github.com/leejet/stable-diffusion.cpp.git
+WORKDIR /src/stable-diffusion.cpp
+RUN cmake -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGGML_NATIVE=OFF \
+        -DSD_CUDA=ON \
+        -DSD_BUILD_SHARED_LIBS=OFF \
+    && cmake --build build --config Release -j "$(nproc)"
+
+# ---------------------------------------------------------------------------
+# Stage 2: build the videogate shim (stdlib Go, static)
+# ---------------------------------------------------------------------------
+FROM golang:1.22-bookworm AS gate
+WORKDIR /gate
+COPY gate/ ./
+RUN CGO_ENABLED=0 go build -trimpath -o /videogate .
+
+# ---------------------------------------------------------------------------
+# Stage 3: CUDA runtime + baked multi-file model
+# ---------------------------------------------------------------------------
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS runtime
+ARG INJECT_MODE=missing
+ARG MODALITY=video
+ARG CTX_SIZE=0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --home-dir /work vid \
+    && mkdir -p /models/extra /work && chown -R vid /work
+# All sd.cpp binaries (sd / sd-cli / sd-server); videogate auto-detects the CLI.
+COPY --from=builder /src/stable-diffusion.cpp/build/bin/ /usr/local/bin/
+COPY --from=gate /videogate /usr/local/bin/videogate
+COPY model.gguf /models/model.gguf
+COPY extra/ /models/extra/
+COPY extra_files.json /models/extra_files.json
+ENV PORT=8080 \
+    MODEL_PATH=/models/model.gguf \
+    EXTRA_DIR=/models/extra \
+    EXTRA_MANIFEST=/models/extra_files.json \
+    OFFLOAD_TO_CPU=1
+EXPOSE 8080
+USER vid
+WORKDIR /work
+ENTRYPOINT ["/usr/local/bin/videogate"]

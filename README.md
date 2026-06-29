@@ -241,11 +241,16 @@ Linux). See [Choosing an engine & compute](#choosing-an-engine--compute).
 cmd/builder/         entrypoint: starts the local web UI (the factory)
 cmd/llmgate/         in-container shim: supervises llama-server + injects the
                      baked init prompt (compiled inside the image at build time)
-internal/catalog/    config-driven model list (+ embedded default)
+cmd/videogate/       in-container shim for video gen: wraps the sd CLI (vid_gen)
+cmd/ensemblegate/    the Conductor: routes a request to the right specialist and
+                     starts/stops them within a VRAM budget (see docs/ENSEMBLE.md)
+internal/catalog/    config-driven model list (+ embedded default; multi-file models)
 internal/builder/    download / build / save / run / stop / list (docker|podman)
+internal/ensemble/   Ensemble model + store (multimodal super-models)
 internal/server/     HTTP API + embedded vanilla-JS UI (internal/server/web)
 internal/llm/        OpenAI-compatible client (generic Chat + typed example)
-docker/              CPU, CUDA, and Vulkan Dockerfiles (bake model.gguf + prompt + gate)
+docker/              per-runtime Dockerfiles: llama (CPU/CUDA/Vulkan), sd (image),
+                     video (Wan/LTX), whisper (STT), tts, and ensemble (Conductor)
 Dockerfile.factory   runs the factory ITSELF in a container (Docker-out-of-Docker)
 Dockerfile.dev       dev image: wgo (Go watcher) + UI served from disk
 start.* / stop.*     build + run / stop the factory container (PowerShell + bash)
@@ -267,6 +272,18 @@ GPU-class. Edit `config/models.json` to change the list.
 
 > Catalog URLs point at public HuggingFace GGUF repos. If a download 404s,
 > the repo/file name may have changed — fix the `url` in `config/models.json`.
+
+## Multimodal & Ensembles
+Beyond chat, the factory builds **vision** (VLM), **embeddings**, **image gen**
+(stable-diffusion.cpp), **speech-to-text** (whisper.cpp), **text-to-speech**
+(Piper), and **video gen** (Wan 2.2 / LTX via stable-diffusion.cpp `vid_gen`) — all
+GGUF, zero-Python.
+
+The **Ensembles** page combines your built images into one multimodal
+"super-model": a tiny **Conductor** routes each request to the right specialist and
+starts/stops them to fit your VRAM, packaged into a single runnable image. See
+[docs/ENSEMBLE.md](docs/ENSEMBLE.md). *(Video gen + Ensembles are newly built and
+pending a first GPU smoke-test.)*
 
 ## How it works / design notes
 - **Engine:** one `llama.cpp` server binary covers CPU (x86 AVX2/FMA or, on

@@ -21,7 +21,12 @@ command -v docker >/dev/null 2>&1 || { echo "Docker is required and must be runn
 
 NAME=local-llm-factory
 PORT="${PORT:-8799}"
-mkdir -p models images config
+mkdir -p models images config media
+
+# Build the Svelte UI into internal/server/web so the factory image embeds it
+# (throwaway Node container, no host Node needed).
+echo "Building UI (Svelte -> internal/server/web)..."
+docker run --rm -v "$PWD:/app" -w /app/ui node:20-alpine sh -c "npm install --no-audit --no-fund --silent && npm run build" || { echo "ERROR: UI build failed."; exit 1; }
 
 echo "Building factory image ($NAME)..."
 docker build -t "$NAME" -f Dockerfile.factory .
@@ -57,6 +62,7 @@ docker run -d --name "$NAME" \
     -v "$PWD/models:/app/models" \
     -v "$PWD/images:/app/images" \
     -v "$PWD/config:/app/config" \
+    -v "$PWD/media:/app/media" \
     --add-host host.docker.internal:host-gateway \
     ${PODMAN_ARGS[@]+"${PODMAN_ARGS[@]}"} \
     "$NAME"

@@ -23,6 +23,7 @@ import (
 
 	"github.com/yourorg/local-llm/internal/builder"
 	"github.com/yourorg/local-llm/internal/catalog"
+	"github.com/yourorg/local-llm/internal/ensemble"
 	"github.com/yourorg/local-llm/internal/llm"
 )
 
@@ -41,6 +42,12 @@ type Server struct {
 	statsMu   sync.Mutex
 	buildSecs map[string]float64 // compute -> last successful build duration (s)
 	statsPath string             // where buildSecs is persisted
+
+	personasMu sync.Mutex // guards reads/writes of config/personas.json
+
+	ens *ensemble.Store // saved Ensemble (multimodal super-model) definitions
+
+	mediaDir string // where generated clips/images are saved + served from
 }
 
 // buildState buffers an in-flight (or just-finished) build so a refreshed UI can
@@ -168,9 +175,15 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s := &Server{
 		b: b, cat: cat, mux: http.NewServeMux(), modelHost: modelHost,
 		statsPath: filepath.Join(b.BaseDir, "config", "build-stats.json"),
+		ens:       ensemble.NewStore(b.BaseDir),
+		mediaDir:  filepath.Join(b.BaseDir, "media"),
 	}
 	s.loadStats()
+	_ = os.MkdirAll(s.mediaDir, 0o755)
 	s.mux.Handle("/", web)
+	// Generated clips/images are saved here and served by stable URL so they
+	// persist across reloads (bind-mount ./media to keep them across restarts).
+	s.mux.Handle("/api/media/", http.StripPrefix("/api/media/", http.FileServer(http.Dir(s.mediaDir))))
 	s.mux.HandleFunc("/api/catalog", s.handleCatalog)
 	s.mux.HandleFunc("/api/models", s.handleModels)
 	s.mux.HandleFunc("/api/model/delete", s.handleModelDelete)
@@ -181,12 +194,18 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.mux.HandleFunc("/api/image/download", s.handleImageDownload)
 	s.mux.HandleFunc("/api/image/config", s.handleImageConfig)
 	s.mux.HandleFunc("/api/run", s.handleRun)
+	s.mux.HandleFunc("/api/personas", s.handlePersonas)
+	s.mux.HandleFunc("/api/personas/delete", s.handlePersonaDelete)
+	s.mux.HandleFunc("/api/ensembles", s.handleEnsembles)
+	s.mux.HandleFunc("/api/ensembles/delete", s.handleEnsembleDelete)
+	s.mux.HandleFunc("/api/ensemble/build", s.handleEnsembleBuild)
 	s.mux.HandleFunc("/api/containers", s.handleContainers)
 	s.mux.HandleFunc("/api/container/logs", s.handleContainerLogs)
 	s.mux.HandleFunc("/api/stop", s.handleStop)
 	s.mux.HandleFunc("/api/chat", s.handleChat)
 	s.mux.HandleFunc("/api/chat/stream", s.handleChatStream)
 	s.mux.HandleFunc("/api/image/generate", s.handleImageGenerate)
+	s.mux.HandleFunc("/api/video/generate", s.handleVideoGenerate)
 	s.mux.HandleFunc("/api/transcribe", s.handleTranscribe)
 	s.mux.HandleFunc("/api/tts", s.handleTTS)
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
@@ -524,10 +543,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	memGB, _ := strconv.ParseFloat(labels["local-llm.memory"], 64)
 	route := labels["local-llm.route"]
 	autostart := labels["local-llm.autostart"] == "true"
+	orchestrator := labels["local-llm.kind"] == "ensemble" // mounts the docker socket
 
 	id, err := s.b.Run(r.Context(), builder.RunOptions{
 		Ref: req.Ref, HostPort: req.Port, Engine: engine, Compute: compute,
-		MemoryGB: memGB, Route: route, Autostart: autostart,
+		MemoryGB: memGB, Route: route, Autostart: autostart, Orchestrator: orchestrator,
 		SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode,
 	})
 	if err != nil {
@@ -834,10 +854,70 @@ func (s *Server) handleImageGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	for i, b64 := range out.Images {
 		if !strings.HasPrefix(b64, "data:") {
-			out.Images[i] = "data:image/png;base64," + b64
+			b64 = "data:image/png;base64," + b64
+		}
+		// Persist to disk + return a stable URL (survives reload); fall back to
+		// the inline data URL if the save fails.
+		if url, err := s.saveDataURL(b64); err == nil {
+			out.Images[i] = url
+		} else {
+			out.Images[i] = b64
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"images": out.Images})
+}
+
+// handleVideoGenerate proxies a text-to-video request to a running videogate
+// (POST /generate) and returns the clip as a data URL. Video gen is very slow, so
+// it uses a generous upstream timeout.
+func (s *Server) handleVideoGenerate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	port := 8080
+	if p, ok := req["port"].(float64); ok {
+		port = int(p)
+	}
+	delete(req, "port")
+	body, _ := json.Marshal(req)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Minute)
+	defer cancel()
+	upReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.modelURL(port, "/generate"), bytes.NewReader(body))
+	upReq.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{}).Do(upReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, engineErrPayload(err))
+		return
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		writeJSON(w, resp.StatusCode, map[string]string{"error": strings.TrimSpace(string(out))})
+		return
+	}
+	// Persist the clip to disk and hand back a stable /api/media URL instead of
+	// the multi-MB data URL, so it survives a browser reload. Falls back to the
+	// raw videogate response if anything about the save fails.
+	var vr map[string]any
+	if json.Unmarshal(out, &vr) == nil {
+		if v, ok := vr["video"].(string); ok && v != "" {
+			if url, err := s.saveDataURL(v); err == nil {
+				vr["video"] = url
+			}
+		}
+		writeJSON(w, http.StatusOK, vr)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
 }
 
 // handleTranscribe proxies an uploaded audio file to a running whisper-server as

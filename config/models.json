@@ -538,6 +538,64 @@
       "recommended": true,
       "description": "Fast CPU text-to-speech; serves /v1/audio/speech. Self-contained (compute: CPU).",
       "modality": "tts"
+    },
+    {
+      "id": "wan2.2-t2v-a14b",
+      "name": "Wan 2.2 T2V A14B (Q4_K_M)",
+      "repo": "QuantStack/Wan2.2-T2V-A14B-GGUF",
+      "file": "Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf",
+      "url": "https://huggingface.co/QuantStack/Wan2.2-T2V-A14B-GGUF/resolve/main/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf?download=true",
+      "size_gb": 20.0,
+      "tier": "large",
+      "params": "A14B",
+      "min_ram_gb": 16,
+      "min_vram_gb": 8,
+      "recommended": false,
+      "description": "Text-to-video (480p) via stable-diffusion.cpp. Needs CUDA; ~6-8GB VRAM with CPU offload. NOTE: verify the four weight URLs on first build.",
+      "modality": "video",
+      "extra_files": [
+        { "file": "Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf", "url": "https://huggingface.co/QuantStack/Wan2.2-T2V-A14B-GGUF/resolve/main/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf?download=true", "role": "high_noise_diffusion" },
+        { "file": "wan_2.1_vae.safetensors", "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors?download=true", "role": "vae" },
+        { "file": "umt5-xxl-encoder-Q4_K_M.gguf", "url": "https://huggingface.co/city96/umt5-xxl-encoder-gguf/resolve/main/umt5-xxl-encoder-Q4_K_M.gguf?download=true", "role": "t5" }
+      ]
+    },
+    {
+      "id": "wan2.1-t2v-1.3b",
+      "name": "Wan 2.1 T2V 1.3B (Q4_K_M)",
+      "repo": "samuelchristlie/Wan2.1-T2V-1.3B-GGUF",
+      "file": "Wan2.1-T2V-1.3B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/samuelchristlie/Wan2.1-T2V-1.3B-GGUF/resolve/main/Wan2.1-T2V-1.3B-Q4_K_M.gguf?download=true",
+      "size_gb": 5.0,
+      "tier": "small",
+      "params": "1.3B",
+      "min_ram_gb": 8,
+      "min_vram_gb": 6,
+      "recommended": true,
+      "description": "Lightweight text-to-video (480p) via stable-diffusion.cpp — the entry-point Wan model, fits a ~12GB GPU comfortably. Diffusion model is ~1GB; the umt5 text encoder (~3.7GB) dominates the ~5GB total. Best FIRST video test before the 20GB A14B.",
+      "modality": "video",
+      "extra_files": [
+        { "file": "wan_2.1_vae.safetensors", "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors?download=true", "role": "vae" },
+        { "file": "umt5-xxl-encoder-Q4_K_M.gguf", "url": "https://huggingface.co/city96/umt5-xxl-encoder-gguf/resolve/main/umt5-xxl-encoder-Q4_K_M.gguf?download=true", "role": "t5" }
+      ]
+    },
+    {
+      "id": "wan2.2-ti2v-5b",
+      "name": "Wan 2.2 TI2V 5B (Q4_K_M)",
+      "repo": "QuantStack/Wan2.2-TI2V-5B-GGUF",
+      "file": "Wan2.2-TI2V-5B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/QuantStack/Wan2.2-TI2V-5B-GGUF/resolve/main/Wan2.2-TI2V-5B-Q4_K_M.gguf?download=true",
+      "size_gb": 8.0,
+      "tier": "mid",
+      "params": "5B",
+      "min_ram_gb": 16,
+      "min_vram_gb": 8,
+      "recommended": false,
+      "description": "Mid-tier text/image-to-video via stable-diffusion.cpp — single-model Wan 2.2 (no high/low-noise split). ~3.4GB diffusion + ~3.7GB text encoder. Needs CUDA; ~8GB VRAM with CPU offload.",
+      "modality": "video",
+      "extra_files": [
+        { "file": "Wan2.2_VAE.safetensors", "url": "https://huggingface.co/QuantStack/Wan2.2-TI2V-5B-GGUF/resolve/main/VAE/Wan2.2_VAE.safetensors?download=true", "role": "vae" },
+        { "file": "umt5-xxl-encoder-Q4_K_M.gguf", "url": "https://huggingface.co/city96/umt5-xxl-encoder-gguf/resolve/main/umt5-xxl-encoder-Q4_K_M.gguf?download=true", "role": "t5" }
+      ]
     }
   ]
 }

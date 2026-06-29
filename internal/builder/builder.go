@@ -22,12 +22,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/yourorg/local-llm/internal/catalog"
+	"github.com/yourorg/local-llm/internal/ensemble"
 )
 
 // Builder owns the project directories. New ensures they exist — this is the
@@ -136,6 +139,8 @@ func runtimeFamily(modality string) string {
 	switch modality {
 	case "image":
 		return "sd" // stable-diffusion.cpp (sd-server, /v1/images/generations)
+	case "video":
+		return "video" // stable-diffusion.cpp sd-cli (vid_gen) behind videogate
 	case "audio-stt":
 		return "whisper" // whisper.cpp (whisper-server, /inference)
 	case "tts":
@@ -190,6 +195,35 @@ func (b *Builder) EnsureMMProj(ctx context.Context, m catalog.Model, log LogFunc
 		return "", err
 	}
 	return dest, nil
+}
+
+// StagedWeight is a downloaded extra weight plus the runtime Role it fills.
+type StagedWeight struct {
+	Path string
+	File string
+	Role string
+}
+
+// EnsureExtraFiles downloads every ExtraFile a model declares (a video model's
+// VAE, T5 encoder, high-noise diffusion model) into ./models, returning their
+// on-disk paths + roles. No-op for models without extra files.
+func (b *Builder) EnsureExtraFiles(ctx context.Context, m catalog.Model, log LogFunc) ([]StagedWeight, error) {
+	out := make([]StagedWeight, 0, len(m.ExtraFiles))
+	for _, w := range m.ExtraFiles {
+		if w.File == "" || w.URL == "" {
+			return nil, fmt.Errorf("model %s has an extra_file missing file or url", m.ID)
+		}
+		dest := filepath.Join(b.ModelsDir, w.File)
+		if fi, err := os.Stat(dest); err != nil || fi.Size() == 0 {
+			if err := b.downloadTo(ctx, w.URL, dest, w.File, log); err != nil {
+				return nil, err
+			}
+		} else {
+			log(fmt.Sprintf("Extra weight already present: %s (%.2f GB)", w.File, float64(fi.Size())/1e9))
+		}
+		out = append(out, StagedWeight{Path: dest, File: w.File, Role: w.Role})
+	}
+	return out, nil
 }
 
 // downloadTo streams url -> dest atomically (via a .part file) with progress
@@ -326,6 +360,36 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		}
 	}
 
+	// The video family bakes several extra weights (VAE, T5 encoder, high-noise
+	// diffusion model). Stage each under extra/ and write a manifest the videogate
+	// reads at runtime to map files to sd-cli flags.
+	if family == "video" {
+		extras, err := b.EnsureExtraFiles(ctx, o.Model, log)
+		if err != nil {
+			return err
+		}
+		extraDir := filepath.Join(work, "extra")
+		if err := os.MkdirAll(extraDir, 0o755); err != nil {
+			return err
+		}
+		manifest := make([]map[string]string, 0, len(extras))
+		for _, w := range extras {
+			if _, _, err := linkOrCopyReport(w.Path, filepath.Join(extraDir, w.File)); err != nil {
+				return fmt.Errorf("stage extra weight %s: %w", w.File, err)
+			}
+			manifest = append(manifest, map[string]string{"file": w.File, "role": w.Role})
+			log("Staged extra weight: " + w.File)
+		}
+		mf, _ := json.Marshal(manifest)
+		if err := os.WriteFile(filepath.Join(work, "extra_files.json"), mf, 0o644); err != nil {
+			return err
+		}
+		// Stage the videogate shim source so the Dockerfile's `gate` stage compiles it.
+		if err := stageVideogate(b.BaseDir, work); err != nil {
+			return err
+		}
+	}
+
 	// The llama.cpp family fronts the model with the llmgate shim and bakes a
 	// system prompt + optional vision projector. Other families (sd/whisper/tts)
 	// run their own server directly and need none of these, so skip them.
@@ -426,6 +490,86 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	return nil
 }
 
+// BuildEnsemble assembles an Ensemble image: the Conductor (ensemblegate) plus a
+// resolved manifest. Orchestrated images run their specialists as sibling
+// containers via the host engine; embedded (mega) baking is a future path. It
+// assigns each member a host port, synthesises a conductor member for tool-calling,
+// and bakes the manifest. modelHost is where the started specialists are reachable
+// (e.g. host.docker.internal when the Ensemble runs in a container).
+func (b *Builder) BuildEnsemble(ctx context.Context, e ensemble.Ensemble, imageName, tag, engine string, exportTar bool, modelHost string, log LogFunc) (string, error) {
+	eng := resolveEngine(engine)
+	if tag == "" {
+		tag = "latest"
+	}
+	ref := imageName + ":" + tag
+
+	mani := ensemble.Manifest{Ensemble: e, ModelHost: modelHost}
+	if mani.ModelHost == "" {
+		mani.ModelHost = "host.docker.internal"
+	}
+	if mani.Engine == "" {
+		mani.Engine = eng
+	}
+	port := 8101
+	for i := range mani.Members {
+		if mani.Members[i].Port == 0 {
+			mani.Members[i].Port = port
+		}
+		port++
+	}
+	if e.Routing == "tool-calling" && e.Conductor != "" {
+		mani.Members = append(mani.Members, ensemble.Member{Tool: "_conductor", Modality: "text", Image: e.Conductor, Port: 8100, VRAMGB: 4})
+	}
+
+	work := filepath.Join(b.BuildDir, fmt.Sprintf("ens-%d", time.Now().UnixNano()))
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(work)
+	df, err := os.ReadFile(filepath.Join(b.BaseDir, "docker", "Dockerfile.ensemble"))
+	if err != nil {
+		return "", fmt.Errorf("read Dockerfile.ensemble: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "Dockerfile"), df, 0o644); err != nil {
+		return "", err
+	}
+	if err := stageEnsemblegate(b.BaseDir, work); err != nil {
+		return "", err
+	}
+	mb, _ := json.MarshalIndent(mani, "", "  ")
+	if err := os.WriteFile(filepath.Join(work, "manifest.json"), mb, 0o644); err != nil {
+		return "", err
+	}
+
+	log(fmt.Sprintf("Building ensemble %s [%s, %s mode, %d members] ...", ref, eng, e.PackageMode, len(e.Members)))
+	args := []string{
+		"build", "-t", ref,
+		"--label", "local-llm.tool=builder",
+		"--label", "local-llm.kind=ensemble",
+		"--label", "local-llm.ensemble=" + e.ID,
+		"--label", "local-llm.compute=" + e.Compute,
+		"--label", "local-llm.engine=" + eng,
+	}
+	if eng == enginePodman {
+		args = append(args, "--security-opt", "seccomp=unconfined")
+	}
+	args = append(args, work)
+	if err := runStreaming(ctx, b.BaseDir, eng, log, args...); err != nil {
+		return "", fmt.Errorf("%s build failed: %w", eng, err)
+	}
+	log("Built ensemble image: " + ref)
+
+	if exportTar {
+		safe := strings.NewReplacer("/", "_", ":", "_").Replace(ref)
+		out := filepath.Join(b.ImagesDir, safe+".tar")
+		log("Exporting to images/" + filepath.Base(out) + " ...")
+		if err := runStreaming(ctx, b.BaseDir, eng, log, "save", "-o", out, ref); err != nil {
+			return "", fmt.Errorf("%s save failed: %w", eng, err)
+		}
+	}
+	return ref, nil
+}
+
 // RunOptions configures starting a container from a built image.
 type RunOptions struct {
 	Ref       string
@@ -435,6 +579,9 @@ type RunOptions struct {
 	MemoryGB  float64 // >0 sets --memory
 	Route     string  // local URL alias (stored as a label for the proxy)
 	Autostart bool    // adds --restart unless-stopped (starts with Docker Desktop)
+	// Orchestrator mounts the host docker socket + host.docker.internal so an
+	// Ensemble's Conductor can start/stop sibling specialist containers.
+	Orchestrator bool
 	// Optional init-prompt override applied at run time (no rebuild). llmgate
 	// prefers the SYSTEM_PROMPT env over the baked file, so setting these swaps a
 	// model's behavior for a ~10s container restart instead of a recompile.
@@ -477,6 +624,12 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 		// MB so fractional GB (e.g. 4.5) is accepted by the engine.
 		args = append(args, "--memory", fmt.Sprintf("%dm", int(o.MemoryGB*1024)))
 	}
+	if o.Orchestrator {
+		// An Ensemble's Conductor manages sibling specialist containers via the host
+		// engine and reaches them on the host, so mount the socket + host gateway.
+		args = append(args, "-v", "/var/run/docker.sock:/var/run/docker.sock",
+			"--add-host", "host.docker.internal:host-gateway")
+	}
 	if o.Autostart {
 		args = append(args, "--restart", "unless-stopped")
 	}
@@ -497,8 +650,15 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 		if o.InjectMode != "" {
 			args = append(args, "-e", "INJECT_MODE="+o.InjectMode)
 		}
-		// Record that this instance overrides its baked prompt so the UI can show it.
+		// Record that this instance overrides its baked prompt so the UI can show it,
+		// plus the persona name parsed from the override ("You are FinBot…" → FinBot)
+		// as a short, comma-free label. The chat uses this to name the sender per
+		// instance — so two instances with different overrides read as different
+		// people, instead of both falling back to the port.
 		args = append(args, "--label", "local-llm.prompt_override=true")
+		if p := personaName(o.SystemPrompt); p != "" {
+			args = append(args, "--label", "local-llm.persona="+p)
+		}
 	}
 	args = append(args, o.Ref)
 
@@ -507,6 +667,29 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 		return "", fmt.Errorf("%s run: %v: %s", engine, err, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// personaName pulls a persona out of a system prompt ("You are FinBot, a terse…"
+// → "FinBot"), mirroring the frontend's extraction. Returns "" for a generic or
+// nameless prompt. Kept deliberately simple: a capitalized token after "you are"
+// (or "your name is"), trimmed of trailing punctuation.
+var personaRes = []*regexp.Regexp{
+	regexp.MustCompile(`[Yy]ou are\s+(?:called\s+)?([A-Z][A-Za-z0-9._-]{1,30})`),
+	regexp.MustCompile(`[Yy]our name is\s+([A-Z][A-Za-z0-9._-]{1,30})`),
+}
+
+func personaName(prompt string) string {
+	for _, re := range personaRes {
+		if m := re.FindStringSubmatch(prompt); m != nil {
+			n := strings.TrimRight(m[1], ".,;:!?'\"")
+			switch strings.ToLower(n) {
+			case "", "a", "an", "the", "your":
+			default:
+				return n
+			}
+		}
+	}
+	return ""
 }
 
 // Stop force-removes a container by id or name on the given engine.
@@ -542,8 +725,9 @@ func (b *Builder) Stop(ctx context.Context, engine, id string) error {
 type SysInfo struct {
 	MemGB  float64 `json:"mem_gb"`
 	CPUs   int     `json:"cpus"`
-	GPU    string  `json:"gpu"`    // "" | "vulkan" | "cuda"
-	Engine string  `json:"engine"` // engine the numbers came from
+	GPU    string  `json:"gpu"`     // "" | "vulkan" | "cuda"
+	VRAMGB float64 `json:"vram_gb"` // total GPU VRAM (GB), 0 if unknown
+	Engine string  `json:"engine"`  // engine the numbers came from
 }
 
 // SysInfo reports where models actually run. It prefers podman (the GPU path on
@@ -553,6 +737,9 @@ type SysInfo struct {
 // when it detects a GPU-capable Podman machine.
 func (b *Builder) SysInfo(ctx context.Context) SysInfo {
 	si := SysInfo{GPU: os.Getenv("FACTORY_GPU")}
+	if v, err := strconv.ParseFloat(os.Getenv("FACTORY_VRAM"), 64); err == nil {
+		si.VRAMGB = v
+	}
 	for _, engine := range candidateEngines() {
 		// podman exposes host RAM/CPU under .Host; docker at the top level.
 		out, err := engineCmd(ctx, engine, "info", "--format", "{{.Host.MemTotal}} {{.Host.NCPU}}").Output()
@@ -771,7 +958,29 @@ func (b *Builder) Images(ctx context.Context) ([]map[string]any, error) {
 			im["Engine"] = engine
 			normalizeImageFields(im)
 			if id, _ := im["ID"].(string); id != "" {
-				im["Compute"] = b.ImageCompute(ctx, engine, id)
+				// `docker images` omits labels, which left the UI unable to read an
+				// image's modality (everything showed "Chat") and other baked config.
+				// One inspect resolves all of them; populate Labels as the comma-joined
+				// "k=v,k=v" string the UI parses, and derive Compute from the same map
+				// (falling back to the dedicated lookup only if the label is absent).
+				labels, _ := b.ImageLabels(ctx, engine, id)
+				if len(labels) > 0 {
+					keys := make([]string, 0, len(labels))
+					for k := range labels {
+						keys = append(keys, k)
+					}
+					sort.Strings(keys)
+					parts := make([]string, 0, len(keys))
+					for _, k := range keys {
+						parts = append(parts, k+"="+labels[k])
+					}
+					im["Labels"] = strings.Join(parts, ",")
+				}
+				if c := labels["local-llm.compute"]; c != "" {
+					im["Compute"] = c
+				} else {
+					im["Compute"] = b.ImageCompute(ctx, engine, id)
+				}
 			}
 			all = append(all, im)
 		}
@@ -1258,6 +1467,42 @@ func stageGate(baseDir, work string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(gateDir, "go.mod"), []byte("module llmgate\n\ngo 1.22\n"), 0o644)
+}
+
+// stageVideogate copies the videogate shim source into <work>/gate so the video
+// Dockerfile's `gate` stage can compile it (same layout as stageGate).
+func stageVideogate(baseDir, work string) error {
+	src := filepath.Join(baseDir, "cmd", "videogate", "main.go")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read videogate source (%s): %w", src, err)
+	}
+	gateDir := filepath.Join(work, "gate")
+	if err := os.MkdirAll(gateDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(gateDir, "main.go"), data, 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(gateDir, "go.mod"), []byte("module videogate\n\ngo 1.22\n"), 0o644)
+}
+
+// stageEnsemblegate copies the Conductor (ensemblegate) source into <work>/gate so
+// the ensemble Dockerfile's `gate` stage can compile it.
+func stageEnsemblegate(baseDir, work string) error {
+	src := filepath.Join(baseDir, "cmd", "ensemblegate", "main.go")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read ensemblegate source (%s): %w", src, err)
+	}
+	gateDir := filepath.Join(work, "gate")
+	if err := os.MkdirAll(gateDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(gateDir, "main.go"), data, 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(gateDir, "go.mod"), []byte("module ensemblegate\n\ngo 1.22\n"), 0o644)
 }
 
 // linkOrCopyReport hardlinks src->dst (cheap, same volume) and falls back to a

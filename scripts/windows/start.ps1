@@ -17,7 +17,12 @@
 
 param([int]$Port = 8799)
 
-Set-Location -Path (Join-Path $PSScriptRoot '..\..')
+# Docker's build context and the bind-mount paths are repo-relative, so the body
+# runs from the repo root. We use Push/Pop (not Set-Location) so invoking this
+# from scripts\windows leaves the caller's directory unchanged. The finally below
+# restores it on every exit path, including the `exit 1` early-returns.
+Push-Location -Path (Join-Path $PSScriptRoot '..\..')
+try {
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Write-Host "ERROR: Docker is required and must be running." -ForegroundColor Red
@@ -25,7 +30,13 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 }
 
 $name = "local-llm-factory"
-New-Item -ItemType Directory -Force -Path .\models, .\images, .\config | Out-Null
+New-Item -ItemType Directory -Force -Path .\models, .\images, .\config, .\media | Out-Null
+
+# Build the Svelte UI into internal/server/web so the factory image embeds the
+# latest UI. Runs in a throwaway Node container, so no host Node is required.
+Write-Host "Building UI (Svelte -> internal/server/web)..." -ForegroundColor Cyan
+docker run --rm -v "$($PWD.Path):/app" -w /app/ui node:20-alpine sh -c "npm install --no-audit --no-fund --silent && npm run build"
+if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: UI build failed." -ForegroundColor Red; exit 1 }
 
 Write-Host "Building factory image ($name)..." -ForegroundColor Cyan
 docker build -t $name -f Dockerfile.factory .
@@ -46,6 +57,26 @@ if (Get-Command podman -ErrorAction SilentlyContinue) {
     }
 }
 
+# GPU hint for the UI's "fits your system" badges. On Windows the GPU path is
+# Docker + CUDA (NVIDIA), so when an NVIDIA GPU is present we tell the factory to
+# rate models for GPU. This only sets the UI hint (read as FACTORY_GPU in the
+# container) - the model images themselves get `--gpus all` from the builder when
+# Compute = CUDA. Best-effort: a detection hiccup must not abort startup, so the
+# nvidia-smi failure is swallowed and we check $LASTEXITCODE rather than throwing.
+$gpuArgs = @()
+if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+    & nvidia-smi -L 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        $gpuArgs = @("-e", "FACTORY_GPU=cuda")
+        # Also pass total VRAM (GB) so the UI can flag models that won't fit.
+        $vramMiB = (& nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1)
+        $vramGB = 0; [double]::TryParse(($vramMiB -replace '[^\d.]', ''), [ref]$vramGB) | Out-Null
+        $vramGB = [math]::Round($vramGB / 1024, 1)
+        if ($vramGB -gt 0) { $gpuArgs += @("-e", "FACTORY_VRAM=$vramGB") }
+        Write-Host "NVIDIA GPU detected ($vramGB GB) - models rated for CUDA GPU." -ForegroundColor Cyan
+    }
+}
+
 Write-Host "Starting factory container..." -ForegroundColor Cyan
 docker run -d --name $name `
     -p "$($Port):8799" `
@@ -54,7 +85,9 @@ docker run -d --name $name `
     -v "$($PWD.Path)\models:/app/models" `
     -v "$($PWD.Path)\images:/app/images" `
     -v "$($PWD.Path)\config:/app/config" `
+    -v "$($PWD.Path)\media:/app/media" `
     --add-host host.docker.internal:host-gateway `
+    $gpuArgs `
     $podmanArgs `
     $name
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: failed to start factory container." -ForegroundColor Red; exit 1 }
@@ -62,3 +95,7 @@ if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: failed to start factory container.
 Write-Host "local-llm factory is running at http://localhost:$Port" -ForegroundColor Green
 Write-Host "Logs:  docker logs -f $name"
 Write-Host "Stop:  .\stop.ps1"
+
+} finally {
+    Pop-Location   # restore the caller's directory regardless of how we exit
+}

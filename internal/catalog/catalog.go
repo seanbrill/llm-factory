@@ -36,9 +36,22 @@ type Model struct {
 	// when empty. MMProjFile/MMProjURL carry a vision projector for VLM models,
 	// which bake a 2nd GGUF alongside the model and pass llama-server --mmproj.
 	// This is the keystone every later modality (vision/embedding/audio) reuses.
-	Modality   string `json:"modality,omitempty"`    // text|code|reasoning|vision|embedding|audio-stt|tts (default text)
+	Modality   string `json:"modality,omitempty"`    // text|code|reasoning|vision|embedding|audio-stt|tts|image|video (default text)
 	MMProjFile string `json:"mmproj_file,omitempty"` // vision projector filename (VLMs)
 	MMProjURL  string `json:"mmproj_url,omitempty"`  // download URL for the projector
+	// ExtraFiles are additional weights a model needs beyond File — a video model
+	// (Wan/LTX) bakes a VAE, a T5 text encoder, and a second (high-noise) diffusion
+	// model alongside the main one. Each is downloaded into ./models and baked; the
+	// runtime maps each file's Role to its CLI flag.
+	ExtraFiles []WeightFile `json:"extra_files,omitempty"`
+}
+
+// WeightFile is one extra weight a model needs, with the Role the runtime uses to
+// map it to a flag (e.g. "vae", "t5", "high_noise_diffusion").
+type WeightFile struct {
+	File string `json:"file"`
+	URL  string `json:"url"`
+	Role string `json:"role,omitempty"`
 }
 
 // Mod returns the model's modality, defaulting to "text" when unset.

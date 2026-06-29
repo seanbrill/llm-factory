@@ -6,9 +6,10 @@
 # daemon (Docker-out-of-Docker): run it with the host docker socket mounted
 # (`-v /var/run/docker.sock:/var/run/docker.sock`). Use start.{ps1,sh}.
 #
-# At runtime the factory reads two things from disk (besides the embedded UI):
-#   docker/Dockerfile.{cpu,cuda,vulkan}   and   cmd/llmgate/main.go
-# so both are copied into the image.
+# At runtime the factory reads, from disk (besides the embedded UI), the
+# Dockerfiles under docker/ and the gate shim sources it stages into each model
+# image's build context: cmd/llmgate (text), cmd/videogate (video),
+# cmd/ensemblegate (Conductor). All are copied into the image below.
 #
 # The image also bundles a Podman *remote* client so the factory can drive a host
 # Podman machine in addition to Docker — that's the macOS GPU path (a libkrun
@@ -57,6 +58,8 @@ RUN set -eux; \
 COPY --from=build /factory      /usr/local/bin/factory
 COPY docker/                    /app/docker/
 COPY cmd/llmgate/               /app/cmd/llmgate/
+COPY cmd/videogate/             /app/cmd/videogate/
+COPY cmd/ensemblegate/          /app/cmd/ensemblegate/
 
 # host.docker.internal lets the in-UI "Test" reach model containers' published
 # ports on the host. (start.{ps1,sh} adds --add-host for Linux hosts.)

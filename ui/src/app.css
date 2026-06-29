@@ -1,0 +1,113 @@
+/* Global theme + base element styles. Everything component-specific lives in the
+   component's own scoped <style>. Ported from the vanilla style.css :root + base. */
+:root {
+  --bg: #0f1115;
+  --card: #181b22;
+  --border: #272b35;
+  --text: #e6e8ee;
+  --muted: #9aa3b2;
+  --accent: #4f8cff;
+  --accent-2: #2b6bff;
+  --ok: #3fb950;
+  --err: #f85149;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+h1 {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: 0.3px;
+}
+h2 {
+  margin: 0 0 14px;
+  font-size: 16px;
+}
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+input,
+select,
+textarea {
+  background: #0c0e13;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font: inherit;
+  width: 100%;
+}
+textarea {
+  resize: vertical;
+}
+button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 16px;
+  font: inherit;
+  cursor: pointer;
+  background: #20242e;
+  color: var(--text);
+}
+button:hover {
+  border-color: var(--accent);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+button.primary {
+  background: var(--accent-2);
+  border-color: var(--accent-2);
+  color: #fff;
+}
+button.primary:hover {
+  background: var(--accent);
+}
+button.ghost {
+  background: transparent;
+  padding: 5px 10px;
+  font-size: 13px;
+}
+button.small {
+  padding: 5px 10px;
+  font-size: 13px;
+}
+button.danger {
+  color: #ffb3ad;
+}
+button.danger:hover {
+  border-color: var(--err);
+  background: #2a1416;
+}
+.ico {
+  flex: none;
+  vertical-align: middle;
+}
+.hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.empty {
+  color: var(--muted);
+  padding: 10px;
+  font-size: 13px;
+}

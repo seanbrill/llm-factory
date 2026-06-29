@@ -18,6 +18,20 @@ NAME=local-llm-factory-dev
 PORT="${PORT:-8799}"
 mkdir -p models images config
 
+echo "Building UI (Svelte -> internal/server/web)..."
+docker run --rm -v "$PWD:/app" -w /app/ui node:20-alpine sh -c "npm install --no-audit --no-fund --silent && npm run build" || { echo "ERROR: UI build failed."; exit 1; }
+
+# UI hot-reload: a background `vite build --watch` rebuilds internal/server/web on
+# every ui/src edit; the dev container serves it from disk, so just refresh the
+# browser (the Go backend hot-reloads separately via wgo). CHOKIDAR_USEPOLLING is
+# required so edits are seen across Docker Desktop bind mounts (same reason wgo
+# uses -poll). Named so stop.sh removes it; reuses node_modules from the build above.
+docker rm -f local-llm-ui-watch >/dev/null 2>&1 || true
+docker run -d --name local-llm-ui-watch -e CHOKIDAR_USEPOLLING=true \
+    -v "$PWD:/app" -w /app/ui node:20-alpine \
+    sh -c "npm run build -- --watch" >/dev/null
+echo "UI watch on: edit ui/src/* -> auto-rebuild -> refresh the browser."
+
 echo "Building dev image ($NAME)..."
 docker build -t "$NAME" -f Dockerfile.dev .
 
@@ -47,6 +61,6 @@ docker run -d --name "$NAME" \
     "$NAME"
 
 echo "Dev factory running at http://localhost:$PORT (hot-reload on)"
-echo "  UI:      edit internal/server/web/* -> refresh the browser"
+echo "  UI:      edit ui/src/* -> auto-rebuild (vite watch) -> refresh the browser"
 echo "  Backend: edit *.go -> auto rebuild/restart (watch: docker logs -f $NAME)"
 echo "Stop:  ./stop.sh"
