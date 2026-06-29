@@ -43,11 +43,15 @@ async def speech(req: Request):
     body = await req.json()
     text = (body.get("input") or "").strip()
     voice = body.get("voice") or VOICE
+    try:
+        speed = float(body.get("speed") or 1.0)
+    except (TypeError, ValueError):
+        speed = 1.0
     if not text:
         return Response('{"error":"empty input"}', status_code=400, media_type="application/json")
     try:
         chunks = []
-        for _gs, _ps, audio in pipe()(text, voice=voice):
+        for _gs, _ps, audio in pipe()(text, voice=voice, speed=speed):
             a = audio.detach().cpu().numpy() if hasattr(audio, "detach") else np.asarray(audio)
             chunks.append(a.astype(np.float32))
         if not chunks:

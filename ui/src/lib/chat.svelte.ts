@@ -37,6 +37,16 @@ export interface Tab {
   // Video-gen frame count (Wan plays ~16fps, so frames/16 ≈ seconds). Must be
   // 4k+1 for the Wan VAE's temporal compression (17,33,49,65,81).
   vidFrames?: number;
+  // Media output settings (the per-modality control panel). All optional —
+  // gen functions fall back to sensible defaults via ??.
+  negative?: string;          // image + video negative prompt
+  imgRes?: number;            // image square px (512/768/1024)
+  imgSteps?: number;          // image sampling steps
+  vidRes?: string;            // video "WxH"
+  vidSteps?: number;          // video sampling steps
+  ttsVoice?: string;          // tts voice id
+  ttsSpeed?: number;          // tts speed multiplier
+  mediaSeed?: number | null;  // image/video seed (null/empty = random)
 }
 export interface Running { port: number; name: string; modality: string; ref: string; }
 
@@ -203,7 +213,11 @@ async function genImage(tab: Tab, prompt: string) {
   const idx = tab.msgs.push({ role: "assistant", kind: "image", content: "", pending: { at: Date.now(), eta: 75000, label: "Generating image…" } }) - 1;
   tab.busy = true;
   try {
-    const data = await post<{ images?: string[] }>("/api/image/generate", { port: tab.port, prompt, steps: 8, cfg_scale: 1.5, width: 512, height: 512, seed: -1 });
+    const res = tab.imgRes ?? 512;
+    const data = await post<{ images?: string[] }>("/api/image/generate", {
+      port: tab.port, prompt, negative_prompt: tab.negative?.trim() || undefined,
+      steps: tab.imgSteps ?? 8, cfg_scale: 1.5, width: res, height: res, seed: tab.mediaSeed ?? -1,
+    });
     tab.msgs[idx] = data.images?.length
       ? { role: "assistant", kind: "image", content: "", images: data.images }
       : { role: "assistant", kind: "text", content: "(no image returned)" };
@@ -220,7 +234,11 @@ async function genVideo(tab: Tab, prompt: string) {
   const idx = tab.msgs.push({ role: "assistant", kind: "video", content: "", pending: { at: Date.now(), eta, label: `Generating ~${secs}s video…` } }) - 1;
   tab.busy = true;
   try {
-    const data = await post<{ video?: string }>("/api/video/generate", { port: tab.port, prompt, height: 480, width: 832, frames, seed: 0 });
+    const [w, h] = (tab.vidRes ?? "832x480").split("x").map(Number);
+    const data = await post<{ video?: string }>("/api/video/generate", {
+      port: tab.port, prompt, negative: tab.negative?.trim() || undefined,
+      width: w || 832, height: h || 480, frames, steps: tab.vidSteps ?? 10, seed: tab.mediaSeed ?? 0,
+    });
     tab.msgs[idx] = data.video
       ? { role: "assistant", kind: "video", content: "", video: data.video }
       : { role: "assistant", kind: "text", content: "(no video returned)" };
@@ -248,7 +266,7 @@ async function speak(tab: Tab, text: string) {
   const idx = tab.msgs.push({ role: "assistant", kind: "audio", content: "Synthesizing…" }) - 1;
   tab.busy = true;
   try {
-    const res = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ port: tab.port, text }) });
+    const res = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ port: tab.port, text, voice: tab.ttsVoice || undefined, speed: tab.ttsSpeed ?? 1 }) });
     if (!res.ok) { let m = res.statusText; try { m = JSON.parse(await res.text()).error || m; } catch { /* */ } throw new Error(m); }
     tab.msgs[idx] = { role: "assistant", kind: "audio", content: "", audio: URL.createObjectURL(await res.blob()), autoplay: true };
   } catch (e) {
@@ -334,6 +352,8 @@ export function save() {
       const tabs = chat.tabs.map((t) => ({
         id: t.id, port: t.port, modality: t.modality, name: t.name, system: t.system || "",
         bridge: !!t.bridge, temp: t.temp, topP: t.topP, seed: t.seed, vidFrames: t.vidFrames,
+        negative: t.negative, imgRes: t.imgRes, imgSteps: t.imgSteps, vidRes: t.vidRes,
+        vidSteps: t.vidSteps, ttsVoice: t.ttsVoice, ttsSpeed: t.ttsSpeed, mediaSeed: t.mediaSeed,
         // video/images are now small /api/media URLs (not data URLs), so they
         // persist fine and the clip reloads after a restart or container kill.
         msgs: (t.msgs || []).map((m) => ({ role: m.role, content: m.content || "", kind: m.kind, video: m.video, images: m.images, bridgeFrom: m.bridgeFrom, bridgeSide: m.bridgeSide, bridgeScene: m.bridgeScene, error: m.error })).slice(-300),

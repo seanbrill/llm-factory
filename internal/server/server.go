@@ -1010,8 +1010,10 @@ func (s *Server) handleTTS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Port int    `json:"port"`
-		Text string `json:"text"`
+		Port  int     `json:"port"`
+		Text  string  `json:"text"`
+		Voice string  `json:"voice"`
+		Speed float64 `json:"speed"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1021,7 +1023,16 @@ func (s *Server) handleTTS(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty text"})
 		return
 	}
-	body, _ := json.Marshal(map[string]string{"input": req.Text})
+	// Pass voice/speed through to the TTS server (honored by pygate/Kokoro;
+	// harmless to a server that ignores them).
+	up := map[string]any{"input": req.Text}
+	if req.Voice != "" {
+		up["voice"] = req.Voice
+	}
+	if req.Speed > 0 {
+		up["speed"] = req.Speed
+	}
+	body, _ := json.Marshal(up)
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
 	upReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.modelURL(req.Port, "/v1/audio/speech"), bytes.NewReader(body))

@@ -179,6 +179,49 @@
       </details>
     {/if}
 
+    {#if tab && !tab.bridge && (tab.modality === "image" || tab.modality === "video" || tab.modality === "tts")}
+      {@const t = tab}
+      <details class="settings"><summary>Output settings</summary>
+        <div class="sgrid">
+          {#if t.modality === "image"}
+            <label>Resolution
+              <select value={String(t.imgRes ?? 512)} onchange={(e) => (t.imgRes = parseInt((e.currentTarget as HTMLSelectElement).value, 10))}>
+                <option value="512">512 × 512</option><option value="768">768 × 768</option><option value="1024">1024 × 1024</option>
+              </select>
+            </label>
+            <label>Steps <input type="number" min="1" max="50" value={t.imgSteps ?? 8} oninput={(e) => (t.imgSteps = parseInt((e.currentTarget as HTMLInputElement).value, 10) || 8)} /></label>
+          {/if}
+          {#if t.modality === "video"}
+            <label>Resolution
+              <select value={t.vidRes ?? "832x480"} onchange={(e) => (t.vidRes = (e.currentTarget as HTMLSelectElement).value)}>
+                <option value="832x480">832 × 480 (480p)</option><option value="512x512">512 × 512</option><option value="1280x720">1280 × 720 (720p)</option>
+              </select>
+            </label>
+            <label>Steps <input type="number" min="1" max="30" value={t.vidSteps ?? 10} oninput={(e) => (t.vidSteps = parseInt((e.currentTarget as HTMLInputElement).value, 10) || 10)} /></label>
+          {/if}
+          {#if t.modality === "image" || t.modality === "video"}
+            <label class="sfull">Negative prompt <input type="text" value={t.negative ?? ""} oninput={(e) => (t.negative = (e.currentTarget as HTMLInputElement).value)} placeholder="things to avoid (e.g. blurry, text, watermark)" /></label>
+            <label>Seed <input type="number" placeholder="random" value={t.mediaSeed ?? ""} oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value.trim(); t.mediaSeed = v === "" ? null : parseInt(v, 10) || 0; }} /></label>
+          {/if}
+          {#if t.modality === "tts"}
+            <label>Voice
+              <select value={t.ttsVoice ?? "af_heart"} onchange={(e) => (t.ttsVoice = (e.currentTarget as HTMLSelectElement).value)}>
+                <option value="af_heart">Heart — US female</option>
+                <option value="af_bella">Bella — US female</option>
+                <option value="am_adam">Adam — US male</option>
+                <option value="am_michael">Michael — US male</option>
+                <option value="bf_emma">Emma — UK female</option>
+                <option value="bm_george">George — UK male</option>
+              </select>
+            </label>
+            <label>Speed <span class="sval">{(t.ttsSpeed ?? 1).toFixed(1)}×</span>
+              <input class="slider" type="range" min="0.5" max="2" step="0.1" value={t.ttsSpeed ?? 1} oninput={(e) => (t.ttsSpeed = parseFloat((e.currentTarget as HTMLInputElement).value))} />
+            </label>
+          {/if}
+        </div>
+      </details>
+    {/if}
+
     <div class="log" bind:this={logEl}>
       {#if !tab || (!tab.msgs.length && !tab.busy)}
         <div class="empty-chat"><div class="greet">Hello there</div><div class="greet-sub">{tab && tab.port ? `You're chatting with ${tab.name}.` : "Run a model from the Images page, then come back here."}</div></div>
@@ -278,7 +321,9 @@
   .sys, .settings { margin-top: 10px; }
   .sys summary, .settings summary { cursor: pointer; color: var(--muted); font-size: 13px; }
   .sys textarea { margin-top: 8px; }
-  .sgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 24px; margin-top: 12px; }
+  .sgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 24px; margin-top: 12px; }
+  .sgrid > label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+  .sgrid > label.sfull { grid-column: 1 / -1; }
   .seed { grid-column: 1 / -1; }
   .sfield { display: flex; flex-direction: column; gap: 8px; }
   .shead { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); }
