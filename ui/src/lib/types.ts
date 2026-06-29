@@ -90,3 +90,23 @@ export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
 }
+
+export interface RunningModel {
+  name: string;
+  model_id: string;
+  compute: string;
+  vram_gb: number;
+  ram_gb: number;
+}
+// Live resource picture from /api/resources. Committed = footprints of the
+// containers the factory manages; usage outside the factory isn't visible.
+export interface ResourceBudget {
+  gpu: string;
+  total_vram_gb: number;
+  total_ram_gb: number;
+  committed_vram_gb: number;
+  committed_ram_gb: number;
+  free_vram_gb: number;
+  free_ram_gb: number;
+  running: RunningModel[] | null;
+}

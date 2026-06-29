@@ -1,13 +1,14 @@
 // Typed app stores — replace the vanilla globals (SYSINFO, CATALOG, …). Components
 // subscribe instead of reading a module-level `let`.
 import { writable } from "svelte/store";
-import type { Model, SysInfo, Persona, Ensemble } from "./types";
+import type { Model, SysInfo, Persona, Ensemble, ResourceBudget } from "./types";
 import { api } from "./api";
 
 export const sysinfo = writable<SysInfo | null>(null);
 export const catalog = writable<Model[]>([]);
 export const personas = writable<Persona[]>([]);
 export const ensembles = writable<Ensemble[]>([]);
+export const resources = writable<ResourceBudget | null>(null);
 
 // Set by Images "use as template"; consumed by the Build page to clone an image.
 export const buildTemplate = writable<{ ref: string; engine: string } | null>(null);
@@ -38,6 +39,13 @@ export async function loadEnsembles() {
     ensembles.set((await api<{ ensembles: Ensemble[] }>("/api/ensembles")).ensembles ?? []);
   } catch {
     ensembles.set([]);
+  }
+}
+export async function loadResources() {
+  try {
+    resources.set(await api<ResourceBudget>("/api/resources"));
+  } catch {
+    resources.set(null);
   }
 }
 

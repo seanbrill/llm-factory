@@ -211,6 +211,7 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
 	s.mux.HandleFunc("/readyz", s.handleReadyz)
 	s.mux.HandleFunc("/api/sysinfo", s.handleSysInfo)
+	s.mux.HandleFunc("/api/resources", s.handleResources)
 	return s, nil
 }
 
@@ -522,6 +523,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		// llmgate uses these instead of the baked prompt for this instance.
 		SystemPrompt string `json:"system_prompt"`
 		InjectMode   string `json:"inject_mode"`
+		// Force bypasses the resource guardrail ("Run anyway").
+		Force bool `json:"force"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -544,6 +547,19 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	route := labels["local-llm.route"]
 	autostart := labels["local-llm.autostart"] == "true"
 	orchestrator := labels["local-llm.kind"] == "ensemble" // mounts the docker socket
+
+	// Resource guardrail: refuse to start a model that would over-subscribe VRAM
+	// or RAM given what's already running (a crash risk), unless the caller forces
+	// it ("Run anyway"). 409 + a structured payload so the UI can offer the choice.
+	if !req.Force {
+		if msg, code := s.runFits(r.Context(), labels["local-llm.model"], compute); msg != "" {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": msg, "code": code, "needs_force": true,
+				"budget": s.resourceBudget(r.Context()),
+			})
+			return
+		}
+	}
 
 	id, err := s.b.Run(r.Context(), builder.RunOptions{
 		Ref: req.Ref, HostPort: req.Port, Engine: engine, Compute: compute,

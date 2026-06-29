@@ -41,7 +41,7 @@ if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: UI build failed." -ForegroundColor
 # bind mounts (the same reason Dockerfile.dev runs wgo with -poll). The watch
 # container is named so stop.ps1 removes it; reuse node_modules from the build above.
 docker rm -f local-llm-ui-watch 2>$null | Out-Null
-docker run -d --name local-llm-ui-watch -e CHOKIDAR_USEPOLLING=true `
+docker run -d --name local-llm-ui-watch -e CHOKIDAR_USEPOLLING=true -e VITE_WATCH=1 `
     -v "$($PWD.Path):/app" -w /app/ui node:20-alpine `
     sh -c "npm run build -- --watch" | Out-Null
 Write-Host "UI watch on: edit ui/src/* -> auto-rebuild -> refresh the browser." -ForegroundColor Cyan

@@ -1,6 +1,13 @@
 // Typed fetch client + SSE stream helper for the Go API. Mirrors the vanilla
 // app's api()/streamChat() but with types and one place for error handling.
 
+// ApiError carries the HTTP status + parsed body so callers can react to
+// structured responses (e.g. the run guardrail's 409 + { code, needs_force }).
+export interface ApiError extends Error {
+  status: number;
+  data: any;
+}
+
 export async function api<T = any>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
   const text = await res.text();
@@ -11,7 +18,10 @@ export async function api<T = any>(path: string, init?: RequestInit): Promise<T>
     data = { error: text };
   }
   if (!res.ok) {
-    throw new Error(data?.error || res.statusText);
+    const err = new Error(data?.error || res.statusText) as ApiError;
+    err.status = res.status;
+    err.data = data;
+    throw err;
   }
   return data as T;
 }

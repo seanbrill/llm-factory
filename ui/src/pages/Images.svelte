@@ -2,9 +2,9 @@
   import Icon from "../components/Icon.svelte";
   import Modal from "../components/Modal.svelte";
   import ModalityBadge from "../components/ModalityBadge.svelte";
-  import { api, post, labelVal } from "../lib/api";
+  import { api, post, labelVal, type ApiError } from "../lib/api";
   import { imageRef, containerRef, containerPort, isRunning, computeBadge, engineBadge } from "../lib/util";
-  import { catalog, personas, buildTemplate, toast } from "../lib/stores";
+  import { catalog, personas, buildTemplate, toast, loadResources } from "../lib/stores";
   import { modMeta } from "../lib/icons";
   import type { ImageInfo, ContainerInfo } from "../lib/types";
 
@@ -82,11 +82,25 @@
     if (runPrompt.trim()) body.system_prompt = runPrompt.trim();
     if (runAlways) body.inject_mode = "always";
     runOpen = false;
+    await doRun(body);
+  }
+  // Runs, and on the resource guardrail (409 + needs_force) offers to start anyway.
+  async function doRun(body: Record<string, unknown>) {
     try {
       await post("/api/run", body);
-      if (runPrompt.trim()) toast(`Running ${runRef} on :${runPort} with a custom prompt.`);
+      if ((body.system_prompt as string)?.trim()) toast(`Running ${runRef} on :${runPort} with a custom prompt.`);
+      loadResources();
       setTimeout(load, 600);
-    } catch (e) { alert("Run failed: " + (e as Error).message); }
+    } catch (e) {
+      const err = e as ApiError;
+      if (err.status === 409 && err.data?.needs_force) {
+        if (confirm(`⚠ ${err.message}\n\nStart it anyway? It may crash if the system runs out of memory.`)) {
+          await doRun({ ...body, force: true });
+        }
+        return;
+      }
+      alert("Run failed: " + err.message);
+    }
   }
 
   $effect(() => { load(); });
