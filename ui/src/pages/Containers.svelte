@@ -1,15 +1,13 @@
 <script lang="ts">
   import Icon from "../components/Icon.svelte";
+  import ResourceBar from "../components/ResourceBar.svelte";
   import { api, post } from "../lib/api";
-  import { resources, loadResources } from "../lib/stores";
+  import { loadResources } from "../lib/stores";
   import type { ContainerInfo } from "../lib/types";
 
   let rows = $state<ContainerInfo[]>([]);
   let loading = $state(true);
   let error = $state("");
-
-  const pct = (used: number, total: number) => (total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0);
-  const tone = (p: number) => (p >= 90 ? "hot" : p >= 70 ? "warm" : "ok");
 
   // A generation token guards against overlapping reloads painting stale rows.
   let gen = 0;
@@ -66,24 +64,7 @@
     <button class="ghost icon-btn" onclick={load} title="Refresh"><Icon name="refresh" /></button>
   </div>
 
-  {#if $resources}
-    {@const r = $resources}
-    {@const vp = pct(r.committed_vram_gb, r.total_vram_gb)}
-    {@const mp = pct(r.committed_ram_gb, r.total_ram_gb)}
-    <div class="budget">
-      {#if r.gpu && r.total_vram_gb > 0}
-        <div class="gauge">
-          <div class="ghead"><span><Icon name="gpu" size={14} /> VRAM</span><span class="gval">{r.committed_vram_gb.toFixed(1)} / {r.total_vram_gb.toFixed(0)} GB · {r.free_vram_gb.toFixed(1)} free</span></div>
-          <div class="track"><div class="fill {tone(vp)}" style="width:{vp}%"></div></div>
-        </div>
-      {/if}
-      <div class="gauge">
-        <div class="ghead"><span><Icon name="cpu" size={14} /> RAM</span><span class="gval">{r.committed_ram_gb.toFixed(1)} / {r.total_ram_gb.toFixed(0)} GB · {r.free_ram_gb.toFixed(1)} free</span></div>
-        <div class="track"><div class="fill {tone(mp)}" style="width:{mp}%"></div></div>
-      </div>
-    </div>
-    <p class="bnote">Estimated from the models this factory runs. Anything using the GPU/RAM outside the factory (e.g. a model you started by hand) isn't counted, so "free" is an upper bound.</p>
-  {/if}
+  <ResourceBar />
 
   {#if loading && !rows.length}
     <div class="empty"><span class="spinner"></span> Loading…</div>
@@ -118,17 +99,6 @@
 </div>
 
 <style>
-  .budget { display: flex; gap: 18px; flex-wrap: wrap; margin: 14px 0 6px; }
-  .gauge { flex: 1; min-width: 220px; }
-  .ghead { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--muted); margin-bottom: 5px; }
-  .ghead :global(.ico) { vertical-align: -2px; margin-right: 4px; }
-  .gval { font-variant-numeric: tabular-nums; }
-  .track { height: 9px; background: #0c0e13; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
-  .fill { height: 100%; border-radius: 999px; transition: width 0.3s; }
-  .fill.ok { background: #46c969; }
-  .fill.warm { background: #e3b341; }
-  .fill.hot { background: #f0683c; }
-  .bnote { font-size: 11px; color: var(--muted); margin: 8px 0 0; line-height: 1.5; }
   table { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 14px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
   th { color: var(--muted); font-weight: 600; }

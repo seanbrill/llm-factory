@@ -2,6 +2,7 @@
   import Icon from "../components/Icon.svelte";
   import Modal from "../components/Modal.svelte";
   import ModalityBadge from "../components/ModalityBadge.svelte";
+  import ResourceBar from "../components/ResourceBar.svelte";
   import { api, post, labelVal, type ApiError } from "../lib/api";
   import { imageRef, containerRef, containerPort, isRunning, computeBadge, engineBadge } from "../lib/util";
   import { catalog, personas, buildTemplate, toast, loadResources } from "../lib/stores";
@@ -67,8 +68,15 @@
   let runPrompt = $state("");
   let runAlways = $state(false);
 
-  function openRun(ref: string, engine: string, port: number) {
-    runRef = ref; runEngine = engine; runPort = port;
+  // Lowest free host port from 8080 up, skipping ports our containers already use.
+  function nextFreePort(start = 8080): number {
+    const used = new Set(conts.map((c) => parseInt(containerPort(c), 10)).filter((p) => p > 0));
+    let p = start;
+    while (used.has(p)) p++;
+    return p;
+  }
+  function openRun(ref: string, engine: string) {
+    runRef = ref; runEngine = engine; runPort = nextFreePort();
     runPersona = ""; runPrompt = ""; runAlways = false;
     runOpen = true;
   }
@@ -111,7 +119,9 @@
     <h2>Built images</h2>
     <button class="ghost" onclick={load} title="Refresh"><Icon name="refresh" /></button>
   </div>
-  <p class="hint">Click an image name to load its settings into the Build form. Click <b>Run</b> to choose a port and optionally apply a persona or one-off prompt.</p>
+  <p class="hint">Click an image name to load its settings into the Build form. Click <b>Run</b> to start it — you'll pick the port and (optionally) a persona or one-off prompt there.</p>
+
+  <ResourceBar />
 
   {#if loading && !imgs.length}
     <div class="empty"><span class="spinner"></span> Loading…</div>
@@ -121,26 +131,27 @@
     <div class="empty">No images built yet.</div>
   {:else}
     <table>
-      <thead><tr><th>Image</th><th>Tag</th><th>Engine</th><th>Compute</th><th>Size</th><th>Status</th><th>Port</th><th class="r">Actions</th></tr></thead>
+      <thead><tr><th>Image</th><th>Tag</th><th>Engine</th><th>Compute</th><th>Size</th><th>Status</th><th class="r">Actions</th></tr></thead>
       <tbody>
-        {#each imgs as im, i (im.ID)}
+        {#each imgs as im (im.ID)}
           {@const r = imageRef(im)}
           {@const up = runningFor(r.ref)}
           {@const eng = im.Engine || "docker"}
           <tr>
             <td>
-              <a href="#build" onclick={(e) => { e.preventDefault(); useAsTemplate(r.ref, eng); }} class="link">{r.name}</a>
-              <br /><ModalityBadge mod={modalityOf(im)} />
+              <div class="img-name">
+                <a href="#build" onclick={(e) => { e.preventDefault(); useAsTemplate(r.ref, eng); }} class="link">{r.name}</a>
+                <ModalityBadge mod={modalityOf(im)} />
+              </div>
             </td>
             <td>{r.tag}</td>
             <td>{engineBadge(eng)}</td>
             <td>{computeBadge(im.Compute)}</td>
             <td>{im.Size || ""}</td>
-            <td>{#if up}<span class="run">● running</span>{:else}—{/if}</td>
-            <td><input class="port" type="number" value={up ? containerPort(up) : 8080 + i} /></td>
+            <td>{#if up}<span class="run">● running :{containerPort(up)}</span>{:else}<span class="muted">idle</span>{/if}</td>
             <td class="r">
               <div class="actions">
-                <button class="small primary" onclick={(e) => openRun(r.ref, eng, parseInt((e.currentTarget.closest('tr')!.querySelector('.port') as HTMLInputElement).value, 10))}><Icon name="play" size={14} /> Run</button>
+                <button class="small primary" onclick={() => openRun(r.ref, eng)}><Icon name="play" size={14} /> Run</button>
                 <button class="small" onclick={() => download(r.ref, eng)} title="Download as .tar"><Icon name="download" /></button>
                 <button class="small danger" onclick={() => del(r.ref, eng)} title="Delete image + .tar"><Icon name="trash" /></button>
               </div>
@@ -178,8 +189,9 @@
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
   th { color: var(--muted); font-weight: 600; }
   th.r, td.r { text-align: right; }
-  .run { color: var(--ok); font-weight: 600; }
-  .port { width: 84px; height: 34px; padding: 5px 8px; }
+  .run { color: var(--ok); font-weight: 600; white-space: nowrap; }
+  .muted { color: var(--muted); }
+  .img-name { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .actions { display: inline-flex; gap: 6px; justify-content: flex-end; }
   .actions button { height: 34px; display: inline-flex; align-items: center; gap: 5px; }
   .link { cursor: pointer; }
