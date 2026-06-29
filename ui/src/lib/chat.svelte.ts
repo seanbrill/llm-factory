@@ -20,6 +20,7 @@ export interface Msg {
   // Present while a media generation is in flight — drives the progress ring.
   // `at` = start ms, `eta` = expected duration ms (for the % estimate), `label`.
   pending?: { at: number; eta: number; label: string };
+  autoplay?: boolean; // fresh TTS audio plays on arrival (not on reload)
 }
 export interface Tab {
   id: number;
@@ -229,26 +230,30 @@ async function genVideo(tab: Tab, prompt: string) {
 }
 async function transcribe(tab: Tab, file: File) {
   tab.msgs.push({ role: "user", kind: "audio", content: file.name, audio: URL.createObjectURL(file) });
-  const ph: Msg = { role: "assistant", content: "Transcribing…" };
-  tab.msgs.push(ph); tab.busy = true;
+  const idx = tab.msgs.push({ role: "assistant", content: "Transcribing…" }) - 1;
+  tab.busy = true;
   try {
     const fd = new FormData(); fd.append("file", file); fd.append("port", String(tab.port));
     const res = await fetch("/api/transcribe", { method: "POST", body: fd });
     if (!res.ok) { let m = res.statusText; try { m = JSON.parse(await res.text()).error || m; } catch { /* */ } throw new Error(m); }
-    ph.content = (await res.json()).text || "(no speech detected)";
-  } catch (e) { ph.content = "⚠ " + (e as Error).message; ph.error = true; }
-  finally { tab.busy = false; save(); }
+    tab.msgs[idx] = { role: "assistant", content: (await res.json()).text || "(no speech detected)" };
+  } catch (e) {
+    tab.msgs[idx] = { role: "assistant", content: "⚠ " + (e as Error).message, error: true };
+  } finally { tab.busy = false; save(); }
 }
 async function speak(tab: Tab, text: string) {
   tab.msgs.push({ role: "user", content: text });
-  const ph: Msg = { role: "assistant", kind: "audio", content: "Synthesizing…" };
-  tab.msgs.push(ph); tab.busy = true;
+  // Reassign through the array index (reactive) rather than mutating a captured
+  // ref, and mark it autoplay so the speech plays as soon as it arrives.
+  const idx = tab.msgs.push({ role: "assistant", kind: "audio", content: "Synthesizing…" }) - 1;
+  tab.busy = true;
   try {
     const res = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ port: tab.port, text }) });
     if (!res.ok) { let m = res.statusText; try { m = JSON.parse(await res.text()).error || m; } catch { /* */ } throw new Error(m); }
-    ph.content = ""; ph.audio = URL.createObjectURL(await res.blob());
-  } catch (e) { ph.kind = "text"; ph.content = "⚠ " + (e as Error).message; ph.error = true; }
-  finally { tab.busy = false; save(); }
+    tab.msgs[idx] = { role: "assistant", kind: "audio", content: "", audio: URL.createObjectURL(await res.blob()), autoplay: true };
+  } catch (e) {
+    tab.msgs[idx] = { role: "assistant", kind: "text", content: "⚠ " + (e as Error).message, error: true };
+  } finally { tab.busy = false; save(); }
 }
 
 // ---- bridge ---------------------------------------------------------------

@@ -50,7 +50,7 @@
     let html = "";
     if (m.kind === "image" && m.images?.length) html = m.images.map((s) => `<img class="chat-img" src="${s}" alt="" />`).join("");
     else if (m.kind === "video" && m.video) html = `<video class="chat-video" controls loop playsinline src="${m.video}"></video>`;
-    else if (m.kind === "audio" && m.audio) html = `<audio controls src="${m.audio}"></audio>` + (m.content ? `<div class="audio-cap">${escapeHtml(m.content)}</div>` : "");
+    else if (m.kind === "audio" && m.audio) html = `<audio controls${m.autoplay ? " autoplay" : ""} src="${m.audio}"></audio>` + (m.content ? `<div class="audio-cap">${escapeHtml(m.content)}</div>` : "");
     else if ((m.kind === "image" || m.kind === "video" || m.kind === "audio") && !m.content) html = `<span class="media-lost">${m.kind} not retained after reload — regenerate to view</span>`;
     else if (m.role === "assistant") html = renderAssistant(m.content || "");
     else {
