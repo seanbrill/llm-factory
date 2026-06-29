@@ -45,5 +45,12 @@ export function hwPerf(m: Model, sys: SysInfo | null): { cpu: string; gpu: strin
     const vcap = sys?.vram_gb || cap;
     gpu = capByFit(gpu, m.min_vram_gb || gb, vcap);
   }
+
+  // Python/PyTorch (fp16) models have no GGUF quant and no clean CPU offload:
+  // CPU is impractical except for tiny ones, and VRAM is a hard floor (capByFit
+  // already returns "impossible" when it won't fit — no offload to lean on).
+  if ((m.runtime ?? "cpp") === "python") {
+    cpu = gb <= 2 ? worse(cpu, "poor") : "impossible";
+  }
   return { cpu, gpu };
 }

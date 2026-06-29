@@ -34,9 +34,9 @@ func (s *Server) modelByID(id string) *catalog.Model {
 // RAM (min_ram_gb). On CPU there's no VRAM and the weights live in RAM. Unknown
 // models get a conservative 4 GB default so the guardrail still does something.
 func (s *Server) footprint(modelID, compute string) Footprint {
-	size, ram, vram := 4.0, 4.0, 4.0
+	size, ram, vram, runtime := 4.0, 4.0, 4.0, "cpp"
 	if m := s.modelByID(modelID); m != nil {
-		size, ram, vram = m.SizeGB, m.MinRAMGB, m.MinVRAMGB
+		size, ram, vram, runtime = m.SizeGB, m.MinRAMGB, m.MinVRAMGB, m.Rt()
 	}
 	if ram <= 0 {
 		ram = size
@@ -45,7 +45,12 @@ func (s *Server) footprint(modelID, compute string) Footprint {
 		return Footprint{VRAMGB: 0, RAMGB: ram} // CPU: no VRAM, weights in RAM
 	}
 	if vram <= 0 {
+		// cpp (GGUF) keeps the quantized weights in VRAM (~size); a python/fp16
+		// model is unquantized and needs roughly double its on-disk GGUF-equivalent.
 		vram = size
+		if runtime == "python" {
+			vram = size * 2
+		}
 	}
 	return Footprint{VRAMGB: vram, RAMGB: ram}
 }

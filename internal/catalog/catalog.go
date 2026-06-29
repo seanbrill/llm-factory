@@ -44,6 +44,12 @@ type Model struct {
 	// model alongside the main one. Each is downloaded into ./models and baked; the
 	// runtime maps each file's Role to its CLI flag.
 	ExtraFiles []WeightFile `json:"extra_files,omitempty"`
+	// Runtime selects the inference engine family: "cpp" (default) = our
+	// llama.cpp / stable-diffusion.cpp GGUF stack (quantized, CPU-offloadable,
+	// tiny images); "python" = a PyTorch/ComfyUI image (fp16, hard VRAM floor,
+	// big image) for models with no C++/GGUF port. Drives the Dockerfile choice,
+	// the resource footprint, and the "fits your hardware" rating.
+	Runtime string `json:"runtime,omitempty"` // cpp (default) | python
 }
 
 // WeightFile is one extra weight a model needs, with the Role the runtime uses to
@@ -60,6 +66,14 @@ func (m Model) Mod() string {
 		return "text"
 	}
 	return m.Modality
+}
+
+// Rt returns the model's runtime family, defaulting to "cpp" when unset.
+func (m Model) Rt() string {
+	if m.Runtime == "" {
+		return "cpp"
+	}
+	return m.Runtime
 }
 
 // Catalog is the loaded set of models plus the path it came from.

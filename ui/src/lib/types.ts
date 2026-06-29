@@ -24,6 +24,7 @@ export interface Model {
   mmproj_file?: string;
   mmproj_url?: string;
   extra_files?: WeightFile[];
+  runtime?: "cpp" | "python"; // default cpp (GGUF); python = PyTorch/ComfyUI
 }
 
 export interface SysInfo {
