@@ -201,6 +201,7 @@
     <div class="detail">
       <div class="dhead">
         <ModalityBadge mod={s.modality ?? "text"} />
+        {#if s.runtime === "python"}<span class="badge rt-py" title="Runs on the Python/PyTorch runtime — bigger image, no quantization, a hard VRAM floor (can't CPU-offload like GGUF).">Python runtime</span>{/if}
         {#if s.recommended}<span class="badge rec-b"><Icon name="star" size={12} /> Recommended</span>{/if}
         <span class="dperf">
           <span class="perf lbl-perf perf-{perf.cpu}" title={`CPU — ${PERF_LABEL[perf.cpu]}: ${tip("perf:" + perf.cpu)}`}><Icon name="cpu" size={13} /> CPU</span>
@@ -374,6 +375,7 @@
   .detail { margin: 0 0 10px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: #12151c; }
   .dhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
   .badge.rec-b { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: #e3b341; border: 1px solid #4a3c15; background: #241f10; border-radius: 999px; padding: 2px 9px; }
+  .badge.rt-py { display: inline-flex; align-items: center; font-size: 11.5px; color: #c4b8ff; border: 1px solid #3a3470; background: #1a1830; border-radius: 999px; padding: 2px 9px; }
   .dperf { margin-left: auto; display: inline-flex; gap: 6px; }
   .dspec { color: var(--text); font-size: 13px; }
   .dvis { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 7px; }

@@ -7,6 +7,8 @@
   let loading = $state(true);
   let error = $state("");
 
+  const totalGB = $derived(models.reduce((s, m) => s + (m.on_disk_gb || 0), 0));
+
   async function load() {
     loading = true;
     try {
@@ -36,10 +38,11 @@
 <div class="card">
   <div class="row-between">
     <h2>Downloaded model files</h2>
-    <button class="ghost" onclick={load} title="Refresh"><Icon name="refresh" /></button>
+    <button class="ghost icon-btn" onclick={load} title="Refresh"><Icon name="refresh" /></button>
   </div>
+  <p class="hint">Weights downloaded on build, kept in <code>./models</code> and reused across builds. Deleting one frees disk; a future build re-downloads it.{#if models.length} <b>{models.length} file{models.length === 1 ? "" : "s"} · {totalGB.toFixed(2)} GB on disk.</b>{/if}</p>
   {#if loading}
-    <div class="empty">Loading…</div>
+    <div class="empty"><span class="spinner"></span> Loading…</div>
   {:else if error}
     <div class="empty">{error}</div>
   {:else if !models.length}
@@ -69,4 +72,7 @@
   th { color: var(--muted); font-weight: 600; }
   th.r, td.r { text-align: right; }
   code { background: #0c0e13; padding: 1px 5px; border-radius: 4px; }
+  .icon-btn { padding: 6px 8px; display: inline-flex; align-items: center; justify-content: center; }
+  .spinner { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; margin-right: 7px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
