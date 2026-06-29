@@ -603,7 +603,7 @@
       "size_gb": 8.0,
       "tier": "mid",
       "params": "5B",
-      "min_ram_gb": 16,
+      "min_ram_gb": 12,
       "min_vram_gb": 8,
       "recommended": false,
       "description": "Mid-tier text/image-to-video via stable-diffusion.cpp — single-model Wan 2.2 (no high/low-noise split). ~3.4GB diffusion + ~3.7GB text encoder. Needs CUDA; ~8GB VRAM with CPU offload.",
