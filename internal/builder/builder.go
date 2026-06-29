@@ -784,6 +784,44 @@ func (b *Builder) SysInfo(ctx context.Context) SysInfo {
 	return si
 }
 
+// GPUUsedGB returns the GLOBAL VRAM in use (and total), in GB, by running
+// nvidia-smi in a throwaway --gpus container — the factory itself has no GPU, so
+// it can't query directly, but this sees ALL processes' VRAM (including models
+// run outside the factory). ok=false when there's no GPU or the query fails (the
+// caller then falls back to the factory-managed estimate). nvidia-smi is injected
+// by the NVIDIA container runtime, so any glibc image with --gpus works; we use a
+// CUDA runtime image (already present from CUDA model builds).
+func (b *Builder) GPUUsedGB(ctx context.Context) (used, total float64, ok bool) {
+	if os.Getenv("FACTORY_GPU") != "cuda" {
+		return 0, 0, false
+	}
+	img := os.Getenv("GPU_QUERY_IMAGE")
+	if img == "" {
+		img = "nvidia/cuda:12.4.1-runtime-ubuntu22.04"
+	}
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := engineCmd(cctx, proxyEngine(), "run", "--rm", "--gpus", "all", "--entrypoint", "nvidia-smi",
+		img, "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits").Output()
+	if err != nil {
+		return 0, 0, false
+	}
+	line := strings.TrimSpace(string(out))
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i] // first GPU
+	}
+	parts := strings.Split(line, ",")
+	if len(parts) < 2 {
+		return 0, 0, false
+	}
+	u, e1 := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	t, e2 := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	if e1 != nil || e2 != nil || t <= 0 {
+		return 0, 0, false
+	}
+	return u / 1024, t / 1024, true // MiB -> GB
+}
+
 // EngineVersions probes each installed engine's server version. An empty value
 // means the engine is present but unreachable (e.g. the Podman machine/socket is
 // down) — which is exactly the state that surfaces as "exit status 125" in normal

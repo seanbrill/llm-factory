@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,18 +67,70 @@ type RunningModel struct {
 }
 
 // ResourceBudget is the live resource picture used for run guardrails + the UI.
-// Committed = summed footprints of the model containers THIS factory manages;
-// GPU/RAM used by processes outside the factory (e.g. a model run by hand) isn't
-// visible here, so Free is an upper bound — the UI notes that.
+// Used/Free are GLOBAL (the whole machine): VRAM from nvidia-smi, RAM from
+// /proc/meminfo, so models run OUTSIDE the factory count too. Committed is the
+// factory-managed subset (for the per-model breakdown). GlobalVRAM/GlobalRAM say
+// whether Used is a real measurement (true) or fell back to the estimate (false).
 type ResourceBudget struct {
 	GPU             string         `json:"gpu"`
 	TotalVRAMGB     float64        `json:"total_vram_gb"`
 	TotalRAMGB      float64        `json:"total_ram_gb"`
-	CommittedVRAMGB float64        `json:"committed_vram_gb"`
-	CommittedRAMGB  float64        `json:"committed_ram_gb"`
+	UsedVRAMGB      float64        `json:"used_vram_gb"`
+	UsedRAMGB       float64        `json:"used_ram_gb"`
 	FreeVRAMGB      float64        `json:"free_vram_gb"`
 	FreeRAMGB       float64        `json:"free_ram_gb"`
+	CommittedVRAMGB float64        `json:"committed_vram_gb"`
+	CommittedRAMGB  float64        `json:"committed_ram_gb"`
+	GlobalVRAM      bool           `json:"global_vram"`
+	GlobalRAM       bool           `json:"global_ram"`
 	Running         []RunningModel `json:"running"`
+}
+
+// procRAMUsedGB reads global RAM usage from /proc/meminfo. Inside a container
+// this reflects the host/VM (memory isn't namespaced), so it captures RAM used
+// by everything — including processes outside the factory.
+func procRAMUsedGB() (used, total float64, ok bool) {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, 0, false
+	}
+	var totalKB, availKB float64
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		v, _ := strconv.ParseFloat(f[1], 64) // value is in kB
+		switch f[0] {
+		case "MemTotal:":
+			totalKB = v
+		case "MemAvailable:":
+			availKB = v
+		}
+	}
+	if totalKB <= 0 {
+		return 0, 0, false
+	}
+	return (totalKB - availKB) / 1e6, totalKB / 1e6, true // kB -> GB
+}
+
+// gpuUsed returns global VRAM used (GB), cached ~6s since the nvidia-smi query
+// spins up a throwaway container.
+func (s *Server) gpuUsedGB(ctx context.Context) (used, total float64, ok bool) {
+	s.gpuMu.Lock()
+	if s.gpuOK && time.Since(s.gpuAt) < 6*time.Second {
+		u, t := s.gpuUsed, s.gpuTotal
+		s.gpuMu.Unlock()
+		return u, t, true
+	}
+	s.gpuMu.Unlock()
+	u, t, k := s.b.GPUUsedGB(ctx)
+	if k {
+		s.gpuMu.Lock()
+		s.gpuUsed, s.gpuTotal, s.gpuOK, s.gpuAt = u, t, true, time.Now()
+		s.gpuMu.Unlock()
+	}
+	return u, t, k
 }
 
 // cLabel reads a key from a container row's docker-style "k=v,k=v" Labels string.
@@ -101,6 +155,8 @@ func cRunning(c map[string]any) bool {
 func (s *Server) resourceBudget(ctx context.Context) ResourceBudget {
 	si := s.b.SysInfo(ctx)
 	b := ResourceBudget{GPU: si.GPU, TotalVRAMGB: si.VRAMGB, TotalRAMGB: si.MemGB}
+
+	// Factory-managed footprints (the per-model breakdown + the estimate fallback).
 	cs, _ := s.b.Containers(ctx)
 	for _, c := range cs {
 		if !cRunning(c) {
@@ -117,8 +173,28 @@ func (s *Server) resourceBudget(ctx context.Context) ResourceBudget {
 			VRAMGB: fp.VRAMGB, RAMGB: fp.RAMGB,
 		})
 	}
-	b.FreeVRAMGB = si.VRAMGB - b.CommittedVRAMGB
-	b.FreeRAMGB = si.MemGB - b.CommittedRAMGB
+
+	// GLOBAL usage (whole machine) is the source of truth for Used/Free so the
+	// guardrail accounts for anything running outside the factory. Fall back to the
+	// committed estimate when a real measurement isn't available.
+	if uv, tv, ok := s.gpuUsedGB(ctx); ok {
+		b.UsedVRAMGB, b.GlobalVRAM = uv, true
+		if tv > 0 {
+			b.TotalVRAMGB = tv
+		}
+	} else {
+		b.UsedVRAMGB = b.CommittedVRAMGB
+	}
+	if ur, tr, ok := procRAMUsedGB(); ok {
+		b.UsedRAMGB, b.GlobalRAM = ur, true
+		if tr > 0 {
+			b.TotalRAMGB = tr
+		}
+	} else {
+		b.UsedRAMGB = b.CommittedRAMGB
+	}
+	b.FreeVRAMGB = b.TotalVRAMGB - b.UsedVRAMGB
+	b.FreeRAMGB = b.TotalRAMGB - b.UsedRAMGB
 	return b
 }
 
@@ -130,21 +206,14 @@ func (s *Server) runFits(ctx context.Context, modelID, compute string) (msg, cod
 	b := s.resourceBudget(ctx)
 	gpu := compute == "cuda" || compute == "vulkan"
 	if gpu && b.TotalVRAMGB > 0 && fp.VRAMGB > b.FreeVRAMGB+0.25 {
-		return fmt.Sprintf("Needs ~%.1f GB VRAM but only %.1f of %.1f GB is free (%.1f GB committed by %d running model%s). Stop a model, or run this one on CPU.",
-			fp.VRAMGB, b.FreeVRAMGB, b.TotalVRAMGB, b.CommittedVRAMGB, len(b.Running), plural(len(b.Running))), "insufficient_vram"
+		return fmt.Sprintf("Needs ~%.1f GB VRAM but only %.1f of %.1f GB is free (%.1f GB in use). Stop a model, free up the GPU, or run this one on CPU.",
+			fp.VRAMGB, b.FreeVRAMGB, b.TotalVRAMGB, b.UsedVRAMGB), "insufficient_vram"
 	}
 	if b.TotalRAMGB > 0 && fp.RAMGB > b.FreeRAMGB+0.5 {
-		return fmt.Sprintf("Needs ~%.1f GB RAM but only %.1f of %.1f GB is free (%.1f GB committed). Stop a model first.",
-			fp.RAMGB, b.FreeRAMGB, b.TotalRAMGB, b.CommittedRAMGB), "insufficient_ram"
+		return fmt.Sprintf("Needs ~%.1f GB RAM but only %.1f of %.1f GB is free (%.1f GB in use). Free up memory first.",
+			fp.RAMGB, b.FreeRAMGB, b.TotalRAMGB, b.UsedRAMGB), "insufficient_ram"
 	}
 	return "", ""
-}
-
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
 }
 
 // handleResources returns the live VRAM/RAM budget so the UI can show usage and

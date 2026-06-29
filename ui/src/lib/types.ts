@@ -99,15 +99,21 @@ export interface RunningModel {
   vram_gb: number;
   ram_gb: number;
 }
-// Live resource picture from /api/resources. Committed = footprints of the
-// containers the factory manages; usage outside the factory isn't visible.
+// Live resource picture from /api/resources. used_*/free_* are GLOBAL (whole
+// machine: VRAM via nvidia-smi, RAM via /proc/meminfo) so usage outside the
+// factory counts. committed_* is the factory-managed subset. global_* say whether
+// the used figure is a real measurement (true) or fell back to the estimate.
 export interface ResourceBudget {
   gpu: string;
   total_vram_gb: number;
   total_ram_gb: number;
-  committed_vram_gb: number;
-  committed_ram_gb: number;
+  used_vram_gb: number;
+  used_ram_gb: number;
   free_vram_gb: number;
   free_ram_gb: number;
+  committed_vram_gb: number;
+  committed_ram_gb: number;
+  global_vram: boolean;
+  global_ram: boolean;
   running: RunningModel[] | null;
 }

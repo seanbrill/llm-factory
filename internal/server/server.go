@@ -48,6 +48,14 @@ type Server struct {
 	ens *ensemble.Store // saved Ensemble (multimodal super-model) definitions
 
 	mediaDir string // where generated clips/images are saved + served from
+
+	// Cached global GPU VRAM usage (nvidia-smi via a throwaway container is slow,
+	// so we cache for a few seconds across /api/resources polls).
+	gpuMu    sync.Mutex
+	gpuUsed  float64
+	gpuTotal float64
+	gpuOK    bool
+	gpuAt    time.Time
 }
 
 // buildState buffers an in-flight (or just-finished) build so a refreshed UI can
