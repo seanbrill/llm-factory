@@ -83,7 +83,29 @@ type ResourceBudget struct {
 	CommittedRAMGB  float64        `json:"committed_ram_gb"`
 	GlobalVRAM      bool           `json:"global_vram"`
 	GlobalRAM       bool           `json:"global_ram"`
-	Running         []RunningModel `json:"running"`
+	// CPU is global too: 1-min load average from /proc/loadavg vs core count.
+	CPUs       int     `json:"cpus"`
+	CPULoad1   float64 `json:"cpu_load1"`
+	CPUUsedPct float64 `json:"cpu_used_pct"`
+	Running    []RunningModel `json:"running"`
+}
+
+// procCPU reads the 1-min load average from /proc/loadavg (host/VM, not
+// namespaced — so it reflects ALL processes' CPU pressure).
+func procCPU() (load1 float64, ok bool) {
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return 0, false
+	}
+	f := strings.Fields(string(data))
+	if len(f) < 1 {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(f[0], 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 // procRAMUsedGB reads global RAM usage from /proc/meminfo. Inside a container
@@ -195,6 +217,17 @@ func (s *Server) resourceBudget(ctx context.Context) ResourceBudget {
 	}
 	b.FreeVRAMGB = b.TotalVRAMGB - b.UsedVRAMGB
 	b.FreeRAMGB = b.TotalRAMGB - b.UsedRAMGB
+
+	// Global CPU pressure (1-min load vs cores).
+	b.CPUs = si.CPUs
+	if l, ok := procCPU(); ok && si.CPUs > 0 {
+		b.CPULoad1 = l
+		if p := l / float64(si.CPUs) * 100; p > 100 {
+			b.CPUUsedPct = 100
+		} else {
+			b.CPUUsedPct = p
+		}
+	}
 	return b
 }
 
@@ -212,6 +245,12 @@ func (s *Server) runFits(ctx context.Context, modelID, compute string) (msg, cod
 	if b.TotalRAMGB > 0 && fp.RAMGB > b.FreeRAMGB+0.5 {
 		return fmt.Sprintf("Needs ~%.1f GB RAM but only %.1f of %.1f GB is free (%.1f GB in use). Free up memory first.",
 			fp.RAMGB, b.FreeRAMGB, b.TotalRAMGB, b.UsedRAMGB), "insufficient_ram"
+	}
+	// CPU saturation: a CPU-run model maxes the cores, so starting one onto an
+	// already-busy CPU makes the whole machine lag (won't crash, but unusable).
+	if !gpu && b.CPUs > 0 && b.CPUUsedPct >= 85 {
+		return fmt.Sprintf("The CPU is already ~%.0f%% busy (load %.1f / %d cores). Running this on CPU will make the system lag — free up CPU first, or use GPU.",
+			b.CPUUsedPct, b.CPULoad1, b.CPUs), "cpu_saturated"
 	}
 	return "", ""
 }

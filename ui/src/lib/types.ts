@@ -115,5 +115,8 @@ export interface ResourceBudget {
   committed_ram_gb: number;
   global_vram: boolean;
   global_ram: boolean;
+  cpus: number;
+  cpu_load1: number;
+  cpu_used_pct: number;
   running: RunningModel[] | null;
 }

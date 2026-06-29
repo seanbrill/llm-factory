@@ -23,9 +23,15 @@
       </div>
     {/if}
     <div class="gauge">
-      <div class="ghead"><span><Icon name="cpu" size={14} /> RAM {#if !r.global_ram}<span class="est">est.</span>{/if}</span><span class="gval">{r.used_ram_gb.toFixed(1)} / {r.total_ram_gb.toFixed(0)} GB · {r.free_ram_gb.toFixed(1)} free</span></div>
+      <div class="ghead"><span><Icon name="layers" size={14} /> RAM {#if !r.global_ram}<span class="est">est.</span>{/if}</span><span class="gval">{r.used_ram_gb.toFixed(1)} / {r.total_ram_gb.toFixed(0)} GB · {r.free_ram_gb.toFixed(1)} free</span></div>
       <div class="track"><div class="fill {tone(mp)}" style="width:{mp}%"></div></div>
     </div>
+    {#if r.cpus > 0}
+      <div class="gauge">
+        <div class="ghead"><span><Icon name="cpu" size={14} /> CPU</span><span class="gval">{r.cpu_used_pct.toFixed(0)}% · load {r.cpu_load1.toFixed(1)} / {r.cpus}</span></div>
+        <div class="track"><div class="fill {tone(r.cpu_used_pct)}" style="width:{Math.min(100, r.cpu_used_pct)}%"></div></div>
+      </div>
+    {/if}
   </div>
   <p class="bnote">
     {#if r.global_vram || r.global_ram}Live whole-machine usage (counts everything, not just the factory).{:else}Estimated from the factory's own models — live usage couldn't be read, so this is an upper bound.{/if}
