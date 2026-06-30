@@ -220,6 +220,7 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.mux.HandleFunc("/readyz", s.handleReadyz)
 	s.mux.HandleFunc("/api/sysinfo", s.handleSysInfo)
 	s.mux.HandleFunc("/api/resources", s.handleResources)
+	s.mux.HandleFunc("/api/system/reclaim", s.handleReclaimMemory)
 	return s, nil
 }
 

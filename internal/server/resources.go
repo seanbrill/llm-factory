@@ -262,3 +262,31 @@ func (s *Server) handleResources(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	writeJSON(w, http.StatusOK, s.resourceBudget(ctx))
 }
+
+// handleReclaimMemory drops the Docker/WSL2 VM's page cache so it returns memory
+// to the host, without stopping any containers. Returns RAM freed (best-effort).
+func (s *Server) handleReclaimMemory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+	defer cancel()
+	beforeUsed, _, _ := procRAMUsedGB()
+	if err := s.b.ReclaimMemory(ctx); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	time.Sleep(700 * time.Millisecond) // let the kernel settle
+	afterUsed, total, _ := procRAMUsedGB()
+	freed := beforeUsed - afterUsed
+	if freed < 0 {
+		freed = 0
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"freed_gb":     freed,
+		"used_gb":      afterUsed,
+		"total_ram_gb": total,
+		"budget":       s.resourceBudget(ctx),
+	})
+}

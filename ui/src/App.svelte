@@ -9,6 +9,7 @@
   import Ensembles from "./pages/Ensembles.svelte";
   import Build from "./pages/Build.svelte";
   import Chat from "./pages/Chat.svelte";
+  import Settings from "./pages/Settings.svelte";
   import { route, pageDef } from "./lib/router";
   import { loadSysInfo, loadCatalog, loadPersonas, loadEnsembles } from "./lib/stores";
 
@@ -41,6 +42,8 @@
         <Ensembles />
       {:else if $route === "chat"}
         <Chat />
+      {:else if $route === "settings"}
+        <Settings />
       {:else if $route === "help"}
         <Help />
       {:else}

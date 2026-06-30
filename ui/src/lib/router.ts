@@ -11,6 +11,7 @@ export const PAGES: PageDef[] = [
   { id: "personas", title: "Personas", sub: "Named system prompts you can bake into a build or apply when running an image.", icon: "persona", label: "Personas" },
   { id: "ensembles", title: "Ensembles", sub: "Combine built images into one multimodal super-model with a Conductor that routes between them.", icon: "nodes", label: "Ensembles" },
   { id: "chat", title: "Chat", sub: "Talk to a running model in your browser.", icon: "chat", label: "Chat" },
+  { id: "settings", title: "Settings", sub: "System resources and maintenance.", icon: "sliders", label: "Settings" },
   { id: "help", title: "Help & concepts", sub: "How the factory works, in plain language.", icon: "help", label: "Help" },
 ];
 

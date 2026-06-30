@@ -822,6 +822,26 @@ func (b *Builder) GPUUsedGB(ctx context.Context) (used, total float64, ok bool) 
 	return u / 1024, t / 1024, true // MiB -> GB
 }
 
+// ReclaimMemory drops the host VM's Linux page cache via a privileged throwaway
+// container (which shares the VM kernel — on Docker Desktop that's the WSL2 /
+// LinuxKit VM). This frees memory the VM holds as cache and hands back to the
+// host WITHOUT stopping any containers. For a full release, the user restarts the
+// VM (wsl --shutdown) — but that stops everything, so we don't do it here.
+func (b *Builder) ReclaimMemory(ctx context.Context) error {
+	img := os.Getenv("RECLAIM_IMAGE")
+	if img == "" {
+		img = "alpine"
+	}
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := engineCmd(cctx, proxyEngine(), "run", "--rm", "--privileged", img,
+		"sh", "-c", "sync; echo 3 > /proc/sys/vm/drop_caches").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("reclaim: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // EngineVersions probes each installed engine's server version. An empty value
 // means the engine is present but unreachable (e.g. the Podman machine/socket is
 // down) — which is exactly the state that surfaces as "exit status 125" in normal
