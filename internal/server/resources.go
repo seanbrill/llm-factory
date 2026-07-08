@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourorg/local-llm/internal/catalog"
+	"github.com/seanbrill/local-llm/internal/catalog"
 )
 
 // Footprint estimates the VRAM/RAM a model occupies when running on a compute

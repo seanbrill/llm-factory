@@ -15,9 +15,9 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/yourorg/local-llm/internal/builder"
-	"github.com/yourorg/local-llm/internal/catalog"
-	"github.com/yourorg/local-llm/internal/server"
+	"github.com/seanbrill/local-llm/internal/builder"
+	"github.com/seanbrill/local-llm/internal/catalog"
+	"github.com/seanbrill/local-llm/internal/server"
 )
 
 func main() {

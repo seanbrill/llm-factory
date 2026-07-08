@@ -29,8 +29,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourorg/local-llm/internal/catalog"
-	"github.com/yourorg/local-llm/internal/ensemble"
+	"github.com/seanbrill/local-llm/internal/catalog"
+	"github.com/seanbrill/local-llm/internal/ensemble"
 )
 
 // Builder owns the project directories. New ensures they exist — this is the

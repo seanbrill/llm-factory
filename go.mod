@@ -1,3 +1,3 @@
-module github.com/yourorg/local-llm
+module github.com/seanbrill/local-llm
 
 go 1.22

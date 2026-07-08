@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourorg/local-llm/internal/ensemble"
+	"github.com/seanbrill/local-llm/internal/ensemble"
 )
 
 // handleEnsembles serves GET (list) and POST (create/update).

@@ -21,10 +21,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourorg/local-llm/internal/builder"
-	"github.com/yourorg/local-llm/internal/catalog"
-	"github.com/yourorg/local-llm/internal/ensemble"
-	"github.com/yourorg/local-llm/internal/llm"
+	"github.com/seanbrill/local-llm/internal/builder"
+	"github.com/seanbrill/local-llm/internal/catalog"
+	"github.com/seanbrill/local-llm/internal/ensemble"
+	"github.com/seanbrill/local-llm/internal/llm"
 )
 
 //go:embed web
