@@ -1279,7 +1279,14 @@ func (b *Builder) Containers(ctx context.Context) ([]map[string]any, error) {
 	var firstErr error
 	anyOK := false
 	for _, engine := range candidateEngines() {
-		cs, err := dockerJSONLines(ctx, engine, "ps", "-a", "--filter", "label=local-llm.tool=runtime", "--format", "{{json .}}")
+		// Filter on local-llm.model (present on every model container, inherited
+		// from the image) rather than tool=runtime. A container the factory ran
+		// gets tool=runtime as an override, but a model container started by hand
+		// (or by another tool) keeps only the image's tool=builder — yet it is
+		// still a running model the user wants to see and manage. The build step is
+		// `docker build` (ephemeral, no container) and the proxy is caddy with no
+		// model label, so neither is caught by this filter.
+		cs, err := dockerJSONLines(ctx, engine, "ps", "-a", "--filter", "label=local-llm.model", "--format", "{{json .}}")
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err

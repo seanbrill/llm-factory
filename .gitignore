@@ -24,3 +24,8 @@
 
 # Agent scratch/temp files.
 /scratchpad/
+
+# stray build artifacts
+/ensemblegate
+/builder
+/llmgate
