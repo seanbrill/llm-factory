@@ -104,17 +104,45 @@ func resolveEngine(engine string) string {
 	return engineDocker
 }
 
-// engineCmd builds an *exec.Cmd for the chosen engine.
+// engineExtraDirs are common CLI install locations a service / non-login PATH
+// often omits. Podman Desktop on macOS installs its client under /opt/podman/bin,
+// which launchd and non-login shells don't have on PATH — yet the factory must
+// still find it, because on macOS the GPU model containers run on Podman. Mirrors
+// protoTree's host-side engine discovery.
+var engineExtraDirs = []string{"/opt/podman/bin", "/usr/local/bin", "/opt/homebrew/bin"}
+
+// lookEngine resolves an engine name to an absolute binary path, checking PATH
+// first and then engineExtraDirs. Returns (path, true) when found, or (name,
+// false) so callers can both run it and test availability with one call.
+func lookEngine(engine string) (string, bool) {
+	name := resolveEngine(engine)
+	if p, err := exec.LookPath(name); err == nil {
+		return p, true
+	}
+	for _, dir := range engineExtraDirs {
+		cand := filepath.Join(dir, name)
+		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+			return cand, true
+		}
+	}
+	return name, false
+}
+
+// engineCmd builds an *exec.Cmd for the chosen engine, resolving its binary
+// through PATH + the common install dirs so Podman off a service PATH still runs.
 func engineCmd(ctx context.Context, engine string, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, resolveEngine(engine), args...)
+	bin, _ := lookEngine(engine)
+	return exec.CommandContext(ctx, bin, args...)
 }
 
 // candidateEngines returns the installed engines (docker first), used when a
-// listing should span both. Falls back to docker so callers always try something.
+// listing should span both. Resolves through PATH + the common install dirs, so
+// Podman at /opt/podman/bin is discovered even when it isn't on the process PATH.
+// Falls back to docker so callers always try something.
 func candidateEngines() []string {
 	var out []string
 	for _, e := range []string{engineDocker, enginePodman} {
-		if _, err := exec.LookPath(e); err == nil {
+		if _, ok := lookEngine(e); ok {
 			out = append(out, e)
 		}
 	}
