@@ -8,6 +8,7 @@ import type { ContainerInfo, ImageInfo, Model } from "./types";
 export interface Msg {
   role: "user" | "assistant" | "system";
   content: string;
+  reasoning?: string; // a reasoning model's thinking (delta.reasoning_content)
   kind?: string;
   image?: string;
   images?: string[];
@@ -195,12 +196,19 @@ export async function send(text: string, pendingImage?: string, pendingFile?: Fi
 
 async function sendStream(tab: Tab) {
   const messages = buildMessages(tab);
-  const asst: Msg = { role: "assistant", content: "" };
-  tab.msgs.push(asst);
+  // Mutate THROUGH the $state proxy (tab.msgs[idx]), not a raw local ref — a
+  // raw-ref mutation is missed by the deep proxy, so the message would only paint
+  // at stream end. This way tokens (content AND a reasoning model's thinking)
+  // render live as they arrive.
+  const idx = tab.msgs.push({ role: "assistant", content: "" }) - 1;
+  const asst = tab.msgs[idx];
   tab.busy = true;
   try {
-    await streamChat(tab.port, messages, (d) => { asst.content += d; }, undefined, tabSampling(tab));
-    if (!asst.content) asst.content = "(empty response)";
+    await streamChat(tab.port, messages, (d, kind) => {
+      if (kind === "reasoning") asst.reasoning = (asst.reasoning ?? "") + d;
+      else asst.content += d;
+    }, undefined, tabSampling(tab));
+    if (!asst.content && !asst.reasoning) asst.content = "(empty response)";
   } catch (e) { asst.content += (asst.content ? "\n\n" : "") + "⚠ " + (e as Error).message; asst.error = true; }
   finally { tab.busy = false; save(); }
 }

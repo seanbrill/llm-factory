@@ -41,6 +41,12 @@
   });
 
   interface Bubble { scene?: boolean; cls: string; who: string; showWho: boolean; html: string; }
+  // A reasoning model's thinking, in a collapsible block. Open while there's no
+  // answer yet (so the user sees it's working), collapsed once the answer arrives.
+  function renderReasoning(r?: string, hasContent = false): string {
+    if (!r) return "";
+    return `<details class="think"${hasContent ? "" : " open"}><summary>💭 Thinking</summary><div class="think-body">${escapeHtml(r)}</div></details>`;
+  }
   function bubble(m: Msg, t: Tab | null): Bubble {
     if (m.bridgeScene) return { scene: true, cls: "", who: "", showWho: false, html: escapeHtml(m.content || "") };
     const isBridge = !!m.bridgeFrom;
@@ -52,7 +58,7 @@
     else if (m.kind === "video" && m.video) html = `<video class="chat-video" controls loop playsinline src="${m.video}"></video>`;
     else if (m.kind === "audio" && m.audio) html = `<audio controls${m.autoplay ? " autoplay" : ""} src="${m.audio}"></audio>` + (m.content ? `<div class="audio-cap">${escapeHtml(m.content)}</div>` : "");
     else if ((m.kind === "image" || m.kind === "video" || m.kind === "audio") && !m.content) html = `<span class="media-lost">${m.kind} not retained after reload — regenerate to view</span>`;
-    else if (m.role === "assistant") html = renderAssistant(m.content || "");
+    else if (m.role === "assistant") html = renderReasoning(m.reasoning, !!m.content) + renderAssistant(m.content || "");
     else {
       if (m.image) html += `<img class="chat-img sm" src="${m.image}" alt="" />`;
       html += `<div class="user-text">${escapeHtml(m.content || "").replace(/\n/g, "<br>")}</div>`;

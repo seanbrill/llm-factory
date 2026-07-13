@@ -48,7 +48,7 @@ export interface StreamOpts {
 export async function streamChat(
   port: number,
   messages: unknown[],
-  onDelta: (s: string) => void,
+  onDelta: (s: string, kind?: "content" | "reasoning") => void,
   signal?: AbortSignal,
   opts?: StreamOpts,
 ): Promise<void> {
@@ -83,8 +83,12 @@ export async function streamChat(
       const d = line.slice(5).trim();
       if (d === "[DONE]") return;
       try {
-        const tok = JSON.parse(d).choices?.[0]?.delta?.content;
-        if (tok) onDelta(tok);
+        // Reasoning models (e.g. Qwen3 via llama.cpp with a reasoning format) stream
+        // their thinking as delta.reasoning_content and the answer as delta.content —
+        // handle both, or a reasoning model looks like it never replied.
+        const delta = JSON.parse(d).choices?.[0]?.delta;
+        if (delta?.reasoning_content) onDelta(delta.reasoning_content, "reasoning");
+        if (delta?.content) onDelta(delta.content, "content");
       } catch {
         /* ignore partial */
       }
