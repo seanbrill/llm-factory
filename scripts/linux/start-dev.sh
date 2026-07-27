@@ -57,7 +57,7 @@ docker run -d --name "$NAME" \
     -v "$PWD:/app" \
     -v local-llm-gocache:/root/.cache/go-build \
     --add-host host.docker.internal:host-gateway \
-    "${PODMAN_ARGS[@]}" \
+    ${PODMAN_ARGS[@]+"${PODMAN_ARGS[@]}"} \
     "$NAME"
 
 echo "Dev factory running at http://localhost:$PORT (hot-reload on)"
