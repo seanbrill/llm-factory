@@ -41,6 +41,7 @@ RUN set -eux; \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
         -DLLAMA_CURL=OFF \
+        -DLLAMA_BUILD_UI=OFF -DLLAMA_BUILD_WEBUI=OFF \
         -DGGML_NATIVE=OFF \
         ${ARCH_FLAGS} \
     && cmake --build build --config Release -j "$(nproc)" --target llama-server

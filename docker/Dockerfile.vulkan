@@ -43,10 +43,16 @@ RUN dnf install -y \
 WORKDIR /src
 RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/llama.cpp.git
 WORKDIR /src/llama.cpp
+# Skip the bundled server WebUI (LLAMA_BUILD_UI; LLAMA_BUILD_WEBUI is its alias): a
+# --depth 1 clone reports build-number 1, so the UI-asset provisioner requests a
+# nonexistent "b1" HF bucket, the download fails, and the "latest" fallback is
+# schema-mismatched (missing loading.html) — which aborts the llama-server build.
+# We serve over the OpenAI API, never llama.cpp's own WebUI.
 RUN cmake -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
         -DLLAMA_CURL=OFF \
+        -DLLAMA_BUILD_UI=OFF -DLLAMA_BUILD_WEBUI=OFF \
         -DGGML_NATIVE=OFF \
         -DGGML_VULKAN=ON \
     && cmake --build build --config Release -j "$(nproc)" --target llama-server
