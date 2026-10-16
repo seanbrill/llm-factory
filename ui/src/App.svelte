@@ -11,10 +11,11 @@
   import Chat from "./pages/Chat.svelte";
   import Settings from "./pages/Settings.svelte";
   import { route, pageDef } from "./lib/router";
-  import { loadSysInfo, loadCatalog, loadPersonas, loadEnsembles } from "./lib/stores";
+  import { loadSysInfo, loadVersion, loadCatalog, loadPersonas, loadEnsembles } from "./lib/stores";
 
   // Initial loads (the API is unchanged from the vanilla app).
   loadSysInfo();
+  loadVersion();
   loadCatalog();
   loadPersonas();
   loadEnsembles();

@@ -1,10 +1,12 @@
 // Typed app stores — replace the vanilla globals (SYSINFO, CATALOG, …). Components
 // subscribe instead of reading a module-level `let`.
 import { writable } from "svelte/store";
-import type { Model, SysInfo, Persona, Ensemble, ResourceBudget } from "./types";
+import type { Model, SysInfo, Persona, Ensemble, ResourceBudget, VersionInfo } from "./types";
 import { api } from "./api";
 
 export const sysinfo = writable<SysInfo | null>(null);
+// The factory build this page was loaded from (see Sidebar for the update check).
+export const appVersion = writable<VersionInfo | null>(null);
 export const catalog = writable<Model[]>([]);
 export const personas = writable<Persona[]>([]);
 export const ensembles = writable<Ensemble[]>([]);
@@ -18,6 +20,13 @@ export async function loadSysInfo() {
     sysinfo.set(await api<SysInfo>("/api/sysinfo"));
   } catch {
     sysinfo.set(null);
+  }
+}
+export async function loadVersion() {
+  try {
+    appVersion.set(await api<VersionInfo>("/api/version"));
+  } catch {
+    appVersion.set(null);
   }
 }
 export async function loadCatalog() {

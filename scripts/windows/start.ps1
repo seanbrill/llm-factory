@@ -32,14 +32,18 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 $name = "local-llm-factory"
 New-Item -ItemType Directory -Force -Path .\models, .\images, .\config, .\media | Out-Null
 
+# Stamp the build with its version (shown in the UI sidebar). Computed before
+# the UI build so "-dirty" reflects only your own local edits.
+. (Join-Path $PSScriptRoot 'version.ps1')
+
 # Build the Svelte UI into internal/server/web so the factory image embeds the
 # latest UI. Runs in a throwaway Node container, so no host Node is required.
 Write-Host "Building UI (Svelte -> internal/server/web)..." -ForegroundColor Cyan
 docker run --rm -v "$($PWD.Path):/app" -w /app/ui node:20-alpine sh -c "npm install --no-audit --no-fund --silent && npm run build"
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: UI build failed." -ForegroundColor Red; exit 1 }
 
-Write-Host "Building factory image ($name)..." -ForegroundColor Cyan
-docker build -t $name -f Dockerfile.factory .
+Write-Host "Building factory image ($name) v$FactoryVersion ($FactoryCommit)..." -ForegroundColor Cyan
+docker build --build-arg "FACTORY_VERSION=$FactoryVersion" --build-arg "FACTORY_COMMIT=$FactoryCommit" -t $name -f Dockerfile.factory .
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: factory image build failed." -ForegroundColor Red; exit 1 }
 
 # Remove any previous instance (guarded so we never `docker rm` a missing container).

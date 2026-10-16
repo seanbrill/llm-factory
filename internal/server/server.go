@@ -25,6 +25,7 @@ import (
 	"github.com/seanbrill/local-llm/internal/catalog"
 	"github.com/seanbrill/local-llm/internal/ensemble"
 	"github.com/seanbrill/local-llm/internal/llm"
+	"github.com/seanbrill/local-llm/internal/version"
 )
 
 //go:embed web
@@ -219,6 +220,7 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
 	s.mux.HandleFunc("/readyz", s.handleReadyz)
 	s.mux.HandleFunc("/api/sysinfo", s.handleSysInfo)
+	s.mux.HandleFunc("/api/version", s.handleVersion)
 	s.mux.HandleFunc("/api/resources", s.handleResources)
 	s.mux.HandleFunc("/api/system/reclaim", s.handleReclaimMemory)
 	return s, nil
@@ -353,6 +355,12 @@ func (s *Server) handleSysInfo(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 	defer cancel()
 	writeJSON(w, http.StatusOK, s.b.SysInfo(ctx))
+}
+
+// handleVersion reports which build is running (shown in the sidebar) so two
+// machines can confirm they run the same code.
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, version.Get())
 }
 
 // handleHealthz is a liveness probe: the factory process is up. Always 200.

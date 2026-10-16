@@ -18,8 +18,9 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) { Write-Error "Go is re
 $port = if ($env:PORT) { $env:PORT } else { "8799" }
 New-Item -ItemType Directory -Force -Path models, images, config | Out-Null
 
-Write-Host "Building factory (native)..."
-go build -o local-llm.exe ./cmd/builder   # UI is embedded from internal/server/web (committed)
+. (Join-Path $PSScriptRoot 'version.ps1')   # build identity shown in the UI sidebar
+Write-Host "Building factory (native) v$FactoryVersion ($FactoryCommit)..."
+go build -ldflags $FactoryLdflags -o local-llm.exe ./cmd/builder   # UI is embedded from internal/server/web (committed)
 
 if (Get-Command podman -ErrorAction SilentlyContinue) {
   Write-Host "podman: $(podman --version)"

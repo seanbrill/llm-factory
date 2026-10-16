@@ -25,11 +25,15 @@ mkdir -p models images config media
 
 # Build the Svelte UI into internal/server/web so the factory image embeds it
 # (throwaway Node container, no host Node needed).
+# Stamp the build with its version (shown in the UI sidebar). Computed before
+# the UI build so "-dirty" reflects only your own local edits.
+. scripts/version.sh
 echo "Building UI (Svelte -> internal/server/web)..."
 docker run --rm -v "$PWD:/app" -w /app/ui node:20-alpine sh -c "npm install --no-audit --no-fund --silent && npm run build" || { echo "ERROR: UI build failed."; exit 1; }
 
-echo "Building factory image ($NAME)..."
-docker build -t "$NAME" -f Dockerfile.factory .
+echo "Building factory image ($NAME) v$FACTORY_VERSION ($FACTORY_COMMIT)..."
+docker build --build-arg "FACTORY_VERSION=$FACTORY_VERSION" --build-arg "FACTORY_COMMIT=$FACTORY_COMMIT" \
+  -t "$NAME" -f Dockerfile.factory .
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 

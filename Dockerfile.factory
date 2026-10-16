@@ -22,7 +22,13 @@
 FROM golang:1.22-bookworm AS build
 WORKDIR /src
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" -o /factory ./cmd/builder
+# Build identity, computed on the host by scripts/version.{sh,ps1} (the build
+# context has no .git) and shown in the UI sidebar.
+ARG FACTORY_VERSION=dev
+ARG FACTORY_COMMIT=
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+      -ldflags "-s -w -X github.com/seanbrill/local-llm/internal/version.Version=${FACTORY_VERSION} -X github.com/seanbrill/local-llm/internal/version.Commit=${FACTORY_COMMIT}" \
+      -o /factory ./cmd/builder
 
 # ----------------------------------------------------------------------------
 # Stage 2: docker CLI base (talks to the mounted host daemon)

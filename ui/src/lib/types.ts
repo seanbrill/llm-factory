@@ -24,9 +24,15 @@ export interface Model {
   mmproj_file?: string;
   mmproj_url?: string;
   extra_files?: WeightFile[];
-  runtime?: "cpp" | "python"; // default cpp (GGUF); python = PyTorch/ComfyUI
+  runtime?: "cpp" | "python" | "audiocpp"; // default cpp (GGUF); python = PyTorch; audiocpp = audio.cpp
   computes?: string[];        // compute targets this model's runtime can be built for
   legacy?: boolean;           // superseded; hidden in the Build picker by default
+}
+
+// Build identity from /api/version (stamped by the start scripts).
+export interface VersionInfo {
+  version: string; // e.g. "1.0.33" (VERSION major.minor + commit count), "dev" if unstamped
+  commit: string;  // short SHA, "-dirty" when built with local edits
 }
 
 export interface SysInfo {

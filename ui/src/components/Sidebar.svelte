@@ -1,13 +1,32 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import { PAGES, route } from "../lib/router";
-  import { sysinfo } from "../lib/stores";
+  import { sysinfo, appVersion } from "../lib/stores";
+  import { api } from "../lib/api";
+  import type { VersionInfo } from "../lib/types";
 
   let collapsed = $state(localStorage.getItem("llmfactory.nav.collapsed") === "1");
   function toggle() {
     collapsed = !collapsed;
     localStorage.setItem("llmfactory.nav.collapsed", collapsed ? "1" : "0");
   }
+
+  // An open tab keeps running the UI it loaded, even after the factory restarts
+  // on newer code. Re-check the running build on focus (and every minute) and
+  // offer a reload when it no longer matches the one this page came from.
+  let latest = $state<VersionInfo | null>(null);
+  async function recheck() {
+    try { latest = await api<VersionInfo>("/api/version"); } catch { /* factory restarting */ }
+  }
+  $effect(() => {
+    const timer = setInterval(recheck, 60_000);
+    window.addEventListener("focus", recheck);
+    return () => { clearInterval(timer); window.removeEventListener("focus", recheck); };
+  });
+  const stale = $derived(
+    !!$appVersion && !!latest && (latest.version !== $appVersion.version || latest.commit !== $appVersion.commit),
+  );
+  const verLabel = (v: VersionInfo) => (v.version === "dev" ? "dev build" : "v" + v.version);
 
   let sysText = $derived.by(() => {
     const s = $sysinfo;
@@ -34,6 +53,16 @@
   </nav>
   <div class="foot">
     <div class="sys-pill"><Icon name="cpu" size={14} /> <span>{sysText}</span></div>
+    {#if stale && latest}
+      <button class="ver-new" onclick={() => location.reload()} title="The factory was restarted on a newer build; this page is still the old one.">
+        <Icon name="refresh" size={13} /><span>Updated to {verLabel(latest)} — reload</span>
+      </button>
+    {/if}
+    {#if $appVersion}
+      <div class="ver" title="Factory build: compare this across machines to confirm they run the same code">
+        {verLabel($appVersion)}<span class="ver-commit">{#if $appVersion.commit} · {$appVersion.commit}{/if}</span>
+      </div>
+    {/if}
     <button class="nav-toggle" onclick={toggle}>
       <Icon name="chevronsLeft" size={15} /><span>Collapse</span>
     </button>
@@ -88,6 +117,14 @@
   }
   .sys-pill :global(.ico) { color: var(--accent); }
   .sidebar.collapsed .sys-pill span { display: none; }
+  .ver { margin-top: 7px; text-align: center; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .sidebar.collapsed .ver-commit { display: none; }
+  .ver-new {
+    margin-top: 8px; width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    background: #1c2740; border: 1px solid #33508f; color: #cdd8f2; padding: 6px; border-radius: 8px; font-size: 11.5px;
+  }
+  .ver-new:hover { border-color: var(--accent); color: #fff; }
+  .sidebar.collapsed .ver-new span { display: none; }
   .nav-toggle {
     margin: 8px 0 0; width: 100%; display: inline-flex; align-items: center; justify-content: center;
     gap: 6px; background: transparent; border: 1px solid var(--border); color: var(--muted);

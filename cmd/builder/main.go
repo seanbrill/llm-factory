@@ -18,6 +18,7 @@ import (
 	"github.com/seanbrill/local-llm/internal/builder"
 	"github.com/seanbrill/local-llm/internal/catalog"
 	"github.com/seanbrill/local-llm/internal/server"
+	"github.com/seanbrill/local-llm/internal/version"
 )
 
 func main() {
@@ -60,6 +61,8 @@ func main() {
 	}
 
 	url := "http://" + *addr
+	v := version.Get()
+	log.Printf("local-llm factory v%s (%s)", v.Version, v.Commit)
 	log.Printf("local-llm builder UI:  %s", url)
 	log.Printf("  models:  %s", b.ModelsDir)
 	log.Printf("  images:  %s", b.ImagesDir)
