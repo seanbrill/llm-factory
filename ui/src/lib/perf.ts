@@ -26,7 +26,10 @@ export function hwPerf(m: Model, sys: SysInfo | null): { cpu: string; gpu: strin
   const hasGPU = !!sys?.gpu;
 
   let cpu: string;
-  if (mod === "tts" || mod === "embedding") cpu = "excellent";
+  // TTS models are small and built for CPU; only the bigger ones (Qwen3-TTS)
+  // get noticeably slow there.
+  if (mod === "tts") cpu = gb <= 0.5 ? "excellent" : gb <= 1.5 ? "good" : "fair";
+  else if (mod === "embedding") cpu = "excellent";
   else if (mod === "audio-stt") cpu = gb > 1 ? "good" : "excellent";
   else if (mod === "image") cpu = gb > 3 ? "poor" : "warning";
   else if (mod === "video") cpu = "impossible";
@@ -47,10 +50,11 @@ export function hwPerf(m: Model, sys: SysInfo | null): { cpu: string; gpu: strin
   }
 
   // Python/PyTorch (fp16) models have no GGUF quant and no clean CPU offload:
-  // CPU is impractical except for tiny ones, and VRAM is a hard floor (capByFit
-  // already returns "impossible" when it won't fit — no offload to lean on).
+  // CPU is impractical except for tiny ones — a sub-1 GB model like Kokoro runs
+  // fine there (the factory's Python image is CPU-only) — and VRAM is a hard
+  // floor (capByFit already returns "impossible" when it won't fit).
   if ((m.runtime ?? "cpp") === "python") {
-    cpu = gb <= 2 ? worse(cpu, "poor") : "impossible";
+    cpu = gb <= 1 ? worse(cpu, "good") : gb <= 2 ? worse(cpu, "poor") : "impossible";
   }
   return { cpu, gpu };
 }

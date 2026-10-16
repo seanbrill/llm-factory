@@ -7,6 +7,7 @@
   import { renderAssistant, escapeHtml } from "../lib/markdown";
   import { modMeta } from "../lib/icons";
   import { isStreamMod } from "../lib/util";
+  import { imageDefaults, ttsSpec } from "../lib/meta";
   import { catalog, toast } from "../lib/stores";
   import * as C from "../lib/chat.svelte";
   import { chat, type Msg, type Tab } from "../lib/chat.svelte";
@@ -84,7 +85,7 @@
   function onTarget(e: Event) {
     const t = tab; if (!t || t.bridge) return;
     const r = chat.running.find((x) => x.port === parseInt((e.currentTarget as HTMLSelectElement).value, 10));
-    if (r) { t.port = r.port; t.modality = r.modality; t.name = r.name; }
+    if (r) { t.port = r.port; t.modality = r.modality; t.model = r.model; t.name = r.name; }
   }
   function openBridge() {
     const cands = chat.running.filter((r) => isStreamMod(r.modality));
@@ -195,7 +196,7 @@
                 <option value="512">512 × 512</option><option value="768">768 × 768</option><option value="1024">1024 × 1024</option>
               </select>
             </label>
-            <label>Steps <input type="number" min="1" max="50" value={t.imgSteps ?? 8} oninput={(e) => (t.imgSteps = parseInt((e.currentTarget as HTMLInputElement).value, 10) || 8)} /></label>
+            <label>Steps <input type="number" min="1" max="50" value={t.imgSteps ?? imageDefaults(t.model).steps} oninput={(e) => (t.imgSteps = parseInt((e.currentTarget as HTMLInputElement).value, 10) || imageDefaults(t.model).steps)} /></label>
           {/if}
           {#if t.modality === "video"}
             <label>Resolution
@@ -210,19 +211,23 @@
             <label>Seed <input type="number" placeholder="random" value={t.mediaSeed ?? ""} oninput={(e) => { const v = (e.currentTarget as HTMLInputElement).value.trim(); t.mediaSeed = v === "" ? null : parseInt(v, 10) || 0; }} /></label>
           {/if}
           {#if t.modality === "tts"}
-            <label>Voice
-              <select value={t.ttsVoice ?? "af_heart"} onchange={(e) => (t.ttsVoice = (e.currentTarget as HTMLSelectElement).value)}>
-                <option value="af_heart">Heart — US female</option>
-                <option value="af_bella">Bella — US female</option>
-                <option value="am_adam">Adam — US male</option>
-                <option value="am_michael">Michael — US male</option>
-                <option value="bf_emma">Emma — UK female</option>
-                <option value="bm_george">George — UK male</option>
-              </select>
-            </label>
-            <label>Speed <span class="sval">{(t.ttsSpeed ?? 1).toFixed(1)}×</span>
-              <input class="slider" type="range" min="0.5" max="2" step="0.1" value={t.ttsSpeed ?? 1} oninput={(e) => (t.ttsSpeed = parseFloat((e.currentTarget as HTMLInputElement).value))} />
-            </label>
+            {@const spec = ttsSpec(t.model)}
+            {#if spec.voices.length}
+              {@const cur = spec.voices.some(([v]) => v === t.ttsVoice) ? t.ttsVoice : spec.voices[0][0]}
+              <label>Voice
+                <select value={cur} onchange={(e) => (t.ttsVoice = (e.currentTarget as HTMLSelectElement).value)}>
+                  {#each spec.voices as [id, label] (id)}<option value={id}>{label}</option>{/each}
+                </select>
+              </label>
+            {/if}
+            {#if spec.speed}
+              <label>Speed <span class="sval">{(t.ttsSpeed ?? 1).toFixed(1)}×</span>
+                <input class="slider" type="range" min="0.5" max="2" step="0.1" value={t.ttsSpeed ?? 1} oninput={(e) => (t.ttsSpeed = parseFloat((e.currentTarget as HTMLInputElement).value))} />
+              </label>
+            {/if}
+            {#if spec.style}
+              <label class="sfull">Style <input type="text" value={t.ttsStyle ?? ""} oninput={(e) => (t.ttsStyle = (e.currentTarget as HTMLInputElement).value)} placeholder="how to say it, e.g. excited, whispering, slow and calm" /></label>
+            {/if}
           {/if}
         </div>
       </details>

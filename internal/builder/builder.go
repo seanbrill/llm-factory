@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -178,6 +179,56 @@ func runtimeFamily(modality string) string {
 	}
 }
 
+// modelFamily is the runtime family that serves a model. A model with runtime
+// "python" routes to the PyTorch family (Dockerfile.python.<compute> + pygate),
+// and "audiocpp" to audio.cpp (Dockerfile.audiocpp.<compute>), regardless of
+// modality; otherwise the family is chosen by modality.
+func modelFamily(m catalog.Model) string {
+	switch m.Rt() {
+	case "python", "audiocpp":
+		return m.Rt()
+	}
+	return runtimeFamily(m.Mod())
+}
+
+// dockerfileName is the Dockerfile for a runtime family + compute. llama.cpp
+// keeps the historical Dockerfile.<compute>; other families use
+// Dockerfile.<family>.<compute>.
+func dockerfileName(family, compute string) string {
+	if family == "llama" {
+		return "Dockerfile." + compute
+	}
+	return "Dockerfile." + family + "." + compute
+}
+
+// Computes lists the compute targets a model can be built for — the ones its
+// runtime family ships a Dockerfile for. Not every family has every variant:
+// Piper TTS is CPU-only, stable-diffusion.cpp image gen is Vulkan-only, etc.
+func (b *Builder) Computes(m catalog.Model) []string {
+	family := modelFamily(m)
+	out := []string{}
+	for _, c := range []string{"cpu", "cuda", "vulkan"} {
+		if _, err := os.Stat(filepath.Join(b.BaseDir, "docker", dockerfileName(family, c))); err == nil {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// resolveCompute returns the compute a model will actually be built for. When
+// its family has no variant for the requested one, fall back to CPU (that image
+// runs anywhere); with no CPU variant either, fail naming the ones that exist.
+func (b *Builder) resolveCompute(m catalog.Model, compute string) (string, error) {
+	have := b.Computes(m)
+	if len(have) == 0 || slices.Contains(have, compute) {
+		return compute, nil // nothing on disk => let the Dockerfile read report it
+	}
+	if !slices.Contains(have, "cpu") {
+		return "", fmt.Errorf("%s has no %s build (available: %s)", m.Name, compute, strings.Join(have, ", "))
+	}
+	return "cpu", nil
+}
+
 // selfContained reports whether a family bakes its own model in the Dockerfile,
 // so there's no GGUF on disk to download/stage: tts (Piper) and python (e.g.
 // Kokoro, which pulls its own weights at build time).
@@ -235,6 +286,15 @@ type StagedWeight struct {
 	Path string
 	File string
 	Role string
+	As   string // name inside the image, when it differs from File
+}
+
+// ImageName is the weight's filename inside the image.
+func (w StagedWeight) ImageName() string {
+	if w.As != "" {
+		return w.As
+	}
+	return w.File
 }
 
 // EnsureExtraFiles downloads every ExtraFile a model declares (a video model's
@@ -254,9 +314,91 @@ func (b *Builder) EnsureExtraFiles(ctx context.Context, m catalog.Model, log Log
 		} else {
 			log(fmt.Sprintf("Extra weight already present: %s (%.2f GB)", w.File, float64(fi.Size())/1e9))
 		}
-		out = append(out, StagedWeight{Path: dest, File: w.File, Role: w.Role})
+		out = append(out, StagedWeight{Path: dest, File: w.File, Role: w.Role, As: w.As})
 	}
 	return out, nil
+}
+
+// stageExtraWeights downloads a model's extra weights and links them into
+// <work>/extra. The directory always exists (with a placeholder, so an image
+// model with no extras still satisfies the Dockerfile's COPY extra/).
+func (b *Builder) stageExtraWeights(ctx context.Context, m catalog.Model, work string, log LogFunc) ([]StagedWeight, error) {
+	extras, err := b.EnsureExtraFiles(ctx, m, log)
+	if err != nil {
+		return nil, err
+	}
+	extraDir := filepath.Join(work, "extra")
+	if err := os.MkdirAll(extraDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(extraDir, ".keep"), nil, 0o644); err != nil {
+		return nil, err
+	}
+	for _, w := range extras {
+		if _, _, err := linkOrCopyReport(w.Path, filepath.Join(extraDir, w.ImageName())); err != nil {
+			return nil, fmt.Errorf("stage extra weight %s: %w", w.File, err)
+		}
+		log("Staged extra weight: " + w.File)
+	}
+	return extras, nil
+}
+
+// sdRoleFlags maps an image model's extra-weight role to its sd-server flag.
+var sdRoleFlags = map[string]string{
+	"vae":    "--vae",
+	"llm":    "--llm", // LLM text encoder (Qwen3 for Z-Image / FLUX.2 klein)
+	"t5":     "--t5xxl",
+	"t5xxl":  "--t5xxl",
+	"clip_l": "--clip_l",
+	"clip_g": "--clip_g",
+}
+
+// sdServerArgs returns the sd-server model flags for a baked image model. With
+// no extras the model is a full checkpoint (-m); otherwise model.gguf is the
+// standalone diffusion model and each extra goes under the flag its role names.
+func sdServerArgs(extras []StagedWeight) ([]string, error) {
+	if len(extras) == 0 {
+		return []string{"-m", "/models/model.gguf"}, nil
+	}
+	args := []string{"--diffusion-model", "/models/model.gguf"}
+	for _, w := range extras {
+		flag, ok := sdRoleFlags[w.Role]
+		if !ok {
+			return nil, fmt.Errorf("extra weight %s has role %q, which image models don't support", w.File, w.Role)
+		}
+		args = append(args, flag, "/models/extra/"+w.ImageName())
+	}
+	return args, nil
+}
+
+// audioCppServerConfig is the audio.cpp server config baked into an audiocpp
+// image. Its one model has id "tts" (the id the ensemble Conductor sends), and
+// the default voice answers both requests that name no voice and the preset
+// "default" (also what the Conductor sends).
+func audioCppServerConfig(m catalog.Model) ([]byte, error) {
+	ac := m.AudioCpp
+	if ac == nil || ac.Family == "" {
+		return nil, fmt.Errorf("model %s uses runtime audiocpp but sets no audiocpp.family", m.ID)
+	}
+	if m.Mod() != "tts" {
+		return nil, fmt.Errorf("model %s: the audiocpp runtime only serves tts models here, not %q", m.ID, m.Mod())
+	}
+	model := map[string]any{
+		"id": "tts", "family": ac.Family, "path": "/models/model.gguf",
+		"task": "tts", "mode": "offline",
+	}
+	if len(ac.LoadOptions) > 0 {
+		model["load_options"] = ac.LoadOptions
+	}
+	if ac.DefaultVoice != "" {
+		voice := map[string]string{"voice_id": ac.DefaultVoice}
+		model["default_voice_preset"] = voice
+		model["voice_presets"] = map[string]any{"default": voice}
+	}
+	return json.MarshalIndent(map[string]any{
+		"host": "0.0.0.0", "port": 8080, "backend": "cpu", "threads": 4,
+		"lazy_load": false, "ui": false, "models": []any{model},
+	}, "", "  ")
 }
 
 // downloadTo streams url -> dest atomically (via a .part file) with progress
@@ -339,19 +481,18 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	}
 	engine := resolveEngine(o.Engine)
 
-	// Select the runtime family. A model with runtime "python" routes to the
-	// PyTorch family (Dockerfile.python.<compute> + pygate) regardless of
-	// modality; otherwise the family is chosen by modality. llama.cpp keeps the
-	// historical Dockerfile.<compute>; other families use Dockerfile.<family>.<compute>.
-	family := runtimeFamily(o.Model.Mod())
-	if o.Model.Rt() == "python" {
-		family = "python"
+	// Select the runtime family, and the compute variant it actually ships (a
+	// GPU request for a CPU-only runtime such as Piper TTS builds the CPU image).
+	family := modelFamily(o.Model)
+	resolved, err := b.resolveCompute(o.Model, compute)
+	if err != nil {
+		return err
 	}
-	dfName := "Dockerfile." + compute
-	if family != "llama" {
-		dfName = "Dockerfile." + family + "." + compute
+	if resolved != compute {
+		log(fmt.Sprintf("%s has no %s build — building the %s image instead.", o.Model.Name, compute, resolved))
+		compute = resolved
 	}
-	dockerfileSrc := filepath.Join(b.BaseDir, "docker", dfName)
+	dockerfileSrc := filepath.Join(b.BaseDir, "docker", dockerfileName(family, compute))
 	dfData, err := os.ReadFile(dockerfileSrc)
 	if err != nil {
 		return fmt.Errorf("read %s (modality %q): %w", dockerfileSrc, o.Model.Mod(), err)
@@ -402,21 +543,13 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	// diffusion model). Stage each under extra/ and write a manifest the videogate
 	// reads at runtime to map files to sd-cli flags.
 	if family == "video" {
-		extras, err := b.EnsureExtraFiles(ctx, o.Model, log)
+		extras, err := b.stageExtraWeights(ctx, o.Model, work, log)
 		if err != nil {
-			return err
-		}
-		extraDir := filepath.Join(work, "extra")
-		if err := os.MkdirAll(extraDir, 0o755); err != nil {
 			return err
 		}
 		manifest := make([]map[string]string, 0, len(extras))
 		for _, w := range extras {
-			if _, _, err := linkOrCopyReport(w.Path, filepath.Join(extraDir, w.File)); err != nil {
-				return fmt.Errorf("stage extra weight %s: %w", w.File, err)
-			}
-			manifest = append(manifest, map[string]string{"file": w.File, "role": w.Role})
-			log("Staged extra weight: " + w.File)
+			manifest = append(manifest, map[string]string{"file": w.ImageName(), "role": w.Role})
 		}
 		mf, _ := json.Marshal(manifest)
 		if err := os.WriteFile(filepath.Join(work, "extra_files.json"), mf, 0o644); err != nil {
@@ -424,6 +557,40 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		}
 		// Stage the videogate shim source so the Dockerfile's `gate` stage compiles it.
 		if err := stageVideogate(b.BaseDir, work); err != nil {
+			return err
+		}
+	}
+
+	// Image models: a single-file checkpoint (SDXL, SD 1.5) loads with -m, while
+	// newer ones (Z-Image, FLUX.2, Qwen-Image) split into a diffusion model plus a
+	// VAE and an LLM text encoder. Bake any extra weights and write the sd-server
+	// model flags to sd_args, which the image's entrypoint passes through.
+	if family == "sd" {
+		extras, err := b.stageExtraWeights(ctx, o.Model, work, log)
+		if err != nil {
+			return err
+		}
+		args, err := sdServerArgs(extras)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(work, "sd_args"), []byte(strings.Join(args, "\n")+"\n"), 0o644); err != nil {
+			return err
+		}
+	}
+
+	// audio.cpp serves the model from a baked config file. Extra weights (Pocket
+	// TTS voice states) land in /models/embeddings, beside the model, where the
+	// runtime looks voices up by name.
+	if family == "audiocpp" {
+		if _, err := b.stageExtraWeights(ctx, o.Model, work, log); err != nil {
+			return err
+		}
+		cfg, err := audioCppServerConfig(o.Model)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(work, "audiocpp.json"), cfg, 0o644); err != nil {
 			return err
 		}
 	}

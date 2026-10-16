@@ -250,7 +250,8 @@ internal/ensemble/   Ensemble model + store (multimodal super-models)
 internal/server/     HTTP API + embedded vanilla-JS UI (internal/server/web)
 internal/llm/        OpenAI-compatible client (generic Chat + typed example)
 docker/              per-runtime Dockerfiles: llama (CPU/CUDA/Vulkan), sd (image),
-                     video (Wan/LTX), whisper (STT), tts, and ensemble (Conductor)
+                     video (Wan/LTX), whisper (STT), tts (Piper), audiocpp (Pocket
+                     TTS / Qwen3-TTS via audio.cpp), and ensemble (Conductor)
 Dockerfile.factory   runs the factory ITSELF in a container (Docker-out-of-Docker)
 Dockerfile.dev       dev image: wgo (Go watcher) + UI served from disk
 start.* / stop.*     build + run / stop the factory container (PowerShell + bash)
@@ -260,15 +261,22 @@ deploy/              OPTIONAL ECS/Fargate task definition for later cloud deploy
 ```
 
 ## Curated models
-Hand-picked GGUF (Q4_K_M) models that run well locally, from tiny CPU-friendly to
-GPU-class. Edit `config/models.json` to change the list.
+Hand-picked GGUF (mostly Q4_K_M) models that run well locally, from tiny CPU-friendly to
+GPU-class. Edit `config/models.json` to change the list. Chat models (refreshed Oct 2026):
 
 | Tier | Model | ~Size | Notes |
 |---|---|---|---|
-| tiny | Llama 3.2 1B, Qwen2.5 1.5B | 0.8–1.0 GB | Fast on any CPU |
-| small | **Qwen2.5 3B** ★, Llama 3.2 3B, Phi-3.5-mini | 2.0–2.4 GB | CPU sweet spot |
-| mid | Mistral 7B v0.3, Qwen2.5 7B, Llama 3.1 8B | 4.4–4.9 GB | GPU or beefy CPU |
-| large | Qwen2.5 14B | ~9.0 GB | Wants ≥12 GB VRAM |
+| tiny | Qwen3.5 2B | 1.3 GB | Fast on any CPU; thinks before answering |
+| small | **Qwen3.5 4B** ★, Gemma 4 E2B | 2.7–3.1 GB | CPU sweet spot |
+| mid | **Qwen3.5 9B** ★, Gemma 4 E4B | 5.0–5.7 GB | GPU or beefy CPU |
+| large | **Gemma 4 12B** ★, gpt-oss 20B, Qwen3.8 27B, Gemma 4 26B-A4B / 31B | 7–18 GB | 12B wants ≥10 GB VRAM; the rest want 16–24 GB |
+
+The catalog also covers code (Devstral Small 2, Qwen3 Coder), vision (Qwen3.5 /
+Gemma 4 with their projectors, MiniCPM-V 4.6), embeddings (EmbeddingGemma, BGE-M3,
+Qwen3 Embedding), image (Z-Image Turbo, FLUX.2 klein 4B, SDXL Turbo), text-to-speech (Pocket TTS,
+Qwen3-TTS, Kokoro, Piper), speech-to-text and video. Superseded models are kept with
+`"legacy": true`, so images built from them still resolve; the Build page hides them
+behind **Older models**.
 
 > Catalog URLs point at public HuggingFace GGUF repos. If a download 404s,
 > the repo/file name may have changed — fix the `url` in `config/models.json`.
@@ -276,8 +284,9 @@ GPU-class. Edit `config/models.json` to change the list.
 ## Multimodal & Ensembles
 Beyond chat, the factory builds **vision** (VLM), **embeddings**, **image gen**
 (stable-diffusion.cpp), **speech-to-text** (whisper.cpp), **text-to-speech**
-(Piper), and **video gen** (Wan 2.2 / LTX via stable-diffusion.cpp `vid_gen`) — all
-GGUF, zero-Python.
+(Piper, plus Pocket TTS / Qwen3-TTS on audio.cpp; Kokoro on the Python runtime), and
+**video gen** (Wan 2.2 / LTX via stable-diffusion.cpp `vid_gen`) — GGUF, and zero-Python
+apart from Kokoro.
 
 The **Ensembles** page combines your built images into one multimodal
 "super-model": a tiny **Conductor** routes each request to the right specialist and

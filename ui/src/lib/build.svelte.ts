@@ -15,6 +15,7 @@ export const build = $state({
   filterMod: "",
   filterTags: [] as string[],
   maxSize: 0,
+  showLegacy: false,
   pickerOpen: false,
   selected: null as Model | null,
   nameTouched: false,
@@ -41,8 +42,18 @@ export const build = $state({
 let timer: ReturnType<typeof setInterval> | undefined;
 let offset = 0;
 
+// The compute the selected model will actually build for. build.compute is the
+// user's pick, kept as-is so it comes back when they switch models; a runtime
+// that doesn't ship it (Piper TTS is CPU-only, image gen Vulkan-only) uses CPU,
+// else whichever variant it does have.
+export function effectiveCompute(): string {
+  const have = build.selected?.computes;
+  if (!have?.length || have.includes(build.compute)) return build.compute;
+  return have.includes("cpu") ? "cpu" : have[0];
+}
+
 export function ctxSize(): number {
-  if (build.ctxTier === "auto") return ctxDefaultFor(build.compute);
+  if (build.ctxTier === "auto") return ctxDefaultFor(effectiveCompute());
   if (build.ctxTier === "max") return 0; // server resolves
   return parseInt(build.ctxTier, 10) || 0;
 }
@@ -89,7 +100,7 @@ export async function startBuild() {
   offset = 0;
   const body = {
     model_id: build.selected.id, image_name: build.imageName, tag: build.tag,
-    engine: build.engine, compute: build.compute, system_prompt: build.systemPrompt,
+    engine: build.engine, compute: effectiveCompute(), system_prompt: build.systemPrompt,
     inject_mode: build.injectMode, ctx_size: ctxSize(), memory_gb: parseFloat(build.memTier) || 0,
     route: build.route, autostart: build.autostart,
   };

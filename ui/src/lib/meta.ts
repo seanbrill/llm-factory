@@ -523,7 +523,7 @@ export const META: Record<string, ModelMeta> = {
       "long-context"
     ],
     "summary": "Strong multilingual retriever balancing quality and broad language coverage.",
-    "weakness": "Largest of the three, so slower and heavier than the compact alternatives.",
+    "weakness": "Heavier than EmbeddingGemma, and trails the 4B Qwen embedder on accuracy.",
     "ratings": {
       "Retrieval": 83,
       "Multilingual": 86,
@@ -636,6 +636,437 @@ export const META: Record<string, ModelMeta> = {
       "Speed": 92,
       "Languages": 30
     }
+  },
+  "kokoro-tts": {
+    "strengths": [
+      "voice-quality",
+      "lightweight",
+      "fast"
+    ],
+    "summary": "Natural-sounding neural TTS in an 82M model, with several preset English voices and adjustable speed.",
+    "weakness": "Preset voices only (no cloning); this build speaks English and ships as a larger Python-runtime image.",
+    "ratings": {
+      "Voice quality": 86,
+      "Naturalness": 84,
+      "Speed": 78,
+      "Languages": 45
+    }
+  },
+  "z-image-turbo": {
+    "strengths": [
+      "photorealism",
+      "image-quality",
+      "prompt-adherence"
+    ],
+    "summary": "Photorealistic 6B image model that follows prompts closely and renders legible text, in 8 steps.",
+    "weakness": "Slower per image than SDXL Turbo, and needs ~8 GB VRAM with its text encoder.",
+    "ratings": {
+      "Image quality": 92,
+      "Prompt adherence": 90,
+      "Speed": 72,
+      "Versatility": 84
+    }
+  },
+  "flux.2-klein-4b": {
+    "strengths": [
+      "prompt-adherence",
+      "image-quality",
+      "fast"
+    ],
+    "summary": "Small distilled FLUX.2 with strong composition and styles in just 4 steps.",
+    "weakness": "Text in images is less reliable than Z-Image Turbo (it can misspell words).",
+    "ratings": {
+      "Image quality": 86,
+      "Prompt adherence": 84,
+      "Speed": 80,
+      "Versatility": 84
+    }
+  },
+  "pocket-tts-en": {
+    "strengths": [
+      "voice-quality",
+      "fast",
+      "lightweight"
+    ],
+    "summary": "Small CPU-first neural TTS with 26 built-in voices that runs faster than real time without a GPU.",
+    "weakness": "This build speaks English only; no speed control.",
+    "ratings": {
+      "Voice quality": 82,
+      "Naturalness": 80,
+      "Speed": 90,
+      "Languages": 48
+    }
+  },
+  "qwen3-tts-1.7b": {
+    "strengths": [
+      "voice-quality",
+      "multilingual"
+    ],
+    "summary": "Expressive multilingual TTS whose 9 speakers follow style instructions such as \"excited\" or \"whispering\".",
+    "weakness": "Much slower than Pocket TTS or Kokoro on CPU; really wants a GPU.",
+    "ratings": {
+      "Voice quality": 90,
+      "Naturalness": 90,
+      "Speed": 35,
+      "Languages": 80
+    }
+  },
+  "qwen3.5-2b": {
+    "strengths": [
+      "lightweight",
+      "multilingual",
+      "reasoning"
+    ],
+    "summary": "Tiny hybrid-thinking model that reasons better than its size suggests, with a 262K context window.",
+    "weakness": "Over-thinks simple questions by default and has thin world knowledge.",
+    "ratings": {
+      "Reasoning": 60,
+      "Coding": 48,
+      "Math": 62,
+      "Knowledge": 42,
+      "Writing": 54,
+      "Instruction": 64,
+      "Multilingual": 64
+    }
+  },
+  "qwen3.5-4b": {
+    "strengths": [
+      "reasoning",
+      "multilingual",
+      "instruction-following",
+      "long-context"
+    ],
+    "summary": "Strong small all-rounder with hybrid thinking and a 262K context window.",
+    "weakness": "Knowledge depth and coding trail the 9B; thinking adds latency.",
+    "ratings": {
+      "Reasoning": 76,
+      "Coding": 66,
+      "Math": 80,
+      "Knowledge": 58,
+      "Writing": 66,
+      "Instruction": 80,
+      "Multilingual": 76
+    }
+  },
+  "gemma-4-e2b": {
+    "strengths": [
+      "fast",
+      "lightweight",
+      "multilingual"
+    ],
+    "summary": "Efficient on-device model with natural writing and wide language coverage.",
+    "weakness": "Limited reasoning depth and knowledge versus 4B+ models.",
+    "ratings": {
+      "Reasoning": 62,
+      "Coding": 54,
+      "Math": 64,
+      "Knowledge": 50,
+      "Writing": 68,
+      "Instruction": 72,
+      "Multilingual": 76
+    }
+  },
+  "gemma-4-e4b": {
+    "strengths": [
+      "multilingual",
+      "creative-writing",
+      "instruction-following",
+      "fast"
+    ],
+    "summary": "Polished small generalist with strong writing and multilingual quality for its footprint.",
+    "weakness": "Trails Qwen3.5 9B and Gemma 4 12B on hard reasoning and code.",
+    "ratings": {
+      "Reasoning": 72,
+      "Coding": 64,
+      "Math": 74,
+      "Knowledge": 62,
+      "Writing": 76,
+      "Instruction": 80,
+      "Multilingual": 82
+    }
+  },
+  "qwen3.5-9b": {
+    "strengths": [
+      "reasoning",
+      "math",
+      "multilingual",
+      "long-context"
+    ],
+    "summary": "Mid-size hybrid-thinking generalist that Qwen reports ahead of last year's 30B-class models on reasoning and knowledge tests.",
+    "weakness": "Thinking by default makes first answers slower; writing is serviceable rather than polished.",
+    "ratings": {
+      "Reasoning": 84,
+      "Coding": 76,
+      "Math": 86,
+      "Knowledge": 72,
+      "Writing": 72,
+      "Instruction": 86,
+      "Multilingual": 82
+    }
+  },
+  "gemma-4-12b": {
+    "strengths": [
+      "reasoning",
+      "creative-writing",
+      "multilingual",
+      "long-context"
+    ],
+    "summary": "Well-rounded 12B with strong writing, multilingual quality and much-improved reasoning over Gemma 3.",
+    "weakness": "Coding and agentic tool use trail Qwen3.8 and Devstral.",
+    "ratings": {
+      "Reasoning": 84,
+      "Coding": 80,
+      "Math": 86,
+      "Knowledge": 78,
+      "Writing": 84,
+      "Instruction": 86,
+      "Multilingual": 88
+    }
+  },
+  "gemma-4-26b-a4b": {
+    "strengths": [
+      "reasoning",
+      "knowledge",
+      "multilingual",
+      "fast"
+    ],
+    "summary": "MoE that delivers near-flagship Gemma 4 quality with only ~4B parameters active per token.",
+    "weakness": "Still needs memory for all 26B weights despite the small active count.",
+    "ratings": {
+      "Reasoning": 88,
+      "Coding": 84,
+      "Math": 88,
+      "Knowledge": 82,
+      "Writing": 84,
+      "Instruction": 88,
+      "Multilingual": 88
+    }
+  },
+  "gemma-4-31b": {
+    "strengths": [
+      "knowledge",
+      "reasoning",
+      "creative-writing",
+      "multilingual"
+    ],
+    "summary": "Google's flagship open dense model: broad knowledge, excellent writing and strong reasoning.",
+    "weakness": "Large and slower than the MoE options; wants a 24 GB GPU.",
+    "ratings": {
+      "Reasoning": 90,
+      "Coding": 86,
+      "Math": 90,
+      "Knowledge": 86,
+      "Writing": 88,
+      "Instruction": 90,
+      "Multilingual": 90
+    }
+  },
+  "qwen3.6-35b-a3b": {
+    "strengths": [
+      "agentic",
+      "coding",
+      "reasoning",
+      "fast"
+    ],
+    "summary": "Fast MoE generalist (3B active) with strong coding and agentic skills at high token rates.",
+    "weakness": "Needs ~28 GB of memory for its full weights; writing trails Gemma 4.",
+    "ratings": {
+      "Reasoning": 87,
+      "Coding": 86,
+      "Math": 88,
+      "Knowledge": 78,
+      "Writing": 76,
+      "Instruction": 86,
+      "Multilingual": 82
+    }
+  },
+  "devstral-small-2-24b": {
+    "strengths": [
+      "coding",
+      "agentic",
+      "long-context",
+      "instruction-following"
+    ],
+    "summary": "Agentic coding specialist built for repo-wide edits, tool calls and coding-agent workflows.",
+    "weakness": "Less capable as a general chat or writing model; no thinking mode.",
+    "ratings": {
+      "Reasoning": 76,
+      "Coding": 89,
+      "Math": 68,
+      "Knowledge": 70,
+      "Writing": 66,
+      "Instruction": 86,
+      "Multilingual": 66
+    }
+  },
+  "gpt-oss-20b": {
+    "strengths": [
+      "reasoning",
+      "math",
+      "agentic",
+      "structured-output"
+    ],
+    "summary": "OpenAI's open reasoning MoE with adjustable effort; excellent math and tool calling for its size.",
+    "weakness": "Mostly English-focused with thinner world knowledge; terse writing.",
+    "ratings": {
+      "Reasoning": 86,
+      "Coding": 82,
+      "Math": 90,
+      "Knowledge": 70,
+      "Writing": 64,
+      "Instruction": 84,
+      "Multilingual": 60
+    }
+  },
+  "qwen3.8-27b": {
+    "strengths": [
+      "reasoning",
+      "coding",
+      "agentic",
+      "long-context"
+    ],
+    "summary": "Qwen's newest open model: deep step-by-step reasoning plus top-tier local coding and agent performance.",
+    "weakness": "Slow at its default (xhigh) reasoning effort; needs a 24 GB GPU.",
+    "ratings": {
+      "Reasoning": 94,
+      "Coding": 93,
+      "Math": 94,
+      "Knowledge": 82,
+      "Writing": 80,
+      "Instruction": 90,
+      "Multilingual": 84
+    }
+  },
+  "minicpm-v-4.6": {
+    "strengths": [
+      "vision",
+      "lightweight",
+      "ocr"
+    ],
+    "summary": "Tiny VLM that reads images and documents on CPU-only machines.",
+    "weakness": "Shallow reasoning and knowledge; best for simple describe-and-read tasks.",
+    "ratings": {
+      "Reasoning": 46,
+      "Vision": 68,
+      "OCR": 70,
+      "Knowledge": 38,
+      "Writing": 48,
+      "Multilingual": 58
+    }
+  },
+  "qwen3.5-4b-vision": {
+    "strengths": [
+      "vision",
+      "ocr",
+      "multilingual"
+    ],
+    "summary": "Small natively multimodal model that handles screenshots, documents and charts.",
+    "weakness": "Less reliable visual reasoning than the 9B; thinking adds latency.",
+    "ratings": {
+      "Reasoning": 74,
+      "Vision": 80,
+      "OCR": 80,
+      "Knowledge": 58,
+      "Writing": 64,
+      "Multilingual": 74
+    }
+  },
+  "gemma-4-e4b-vision": {
+    "strengths": [
+      "vision",
+      "multilingual",
+      "fast"
+    ],
+    "summary": "On-device multimodal model for everyday photo and chart understanding.",
+    "weakness": "Dense documents and fine print trail the Qwen3.5 vision models.",
+    "ratings": {
+      "Reasoning": 70,
+      "Vision": 78,
+      "OCR": 74,
+      "Knowledge": 62,
+      "Writing": 74,
+      "Multilingual": 80
+    }
+  },
+  "qwen3.5-9b-vision": {
+    "strengths": [
+      "vision",
+      "ocr",
+      "reasoning",
+      "structured-output"
+    ],
+    "summary": "Strongest mid-size local VLM: documents, charts, visual math and multi-image reasoning.",
+    "weakness": "Thinking by default slows simple captioning.",
+    "ratings": {
+      "Reasoning": 84,
+      "Vision": 88,
+      "OCR": 88,
+      "Knowledge": 72,
+      "Writing": 72,
+      "Multilingual": 82
+    }
+  },
+  "gemma-4-12b-vision": {
+    "strengths": [
+      "vision",
+      "ocr",
+      "reasoning",
+      "multilingual"
+    ],
+    "summary": "Strong general VLM with big gains over Gemma 3 on documents and visual math.",
+    "weakness": "Heavier than Qwen3.5 9B for similar vision quality.",
+    "ratings": {
+      "Reasoning": 84,
+      "Vision": 87,
+      "OCR": 86,
+      "Knowledge": 78,
+      "Writing": 82,
+      "Multilingual": 86
+    }
+  },
+  "embeddinggemma-300m": {
+    "strengths": [
+      "retrieval",
+      "multilingual",
+      "lightweight",
+      "fast"
+    ],
+    "summary": "Compact multilingual embedder from Google with top quality for its size and Matryoshka output sizes.",
+    "weakness": "2K-token input limit; trails the 4B Qwen embedder on absolute accuracy.",
+    "ratings": {
+      "Retrieval": 84,
+      "Multilingual": 84,
+      "Efficiency": 90
+    }
+  },
+  "bge-m3": {
+    "strengths": [
+      "retrieval",
+      "multilingual",
+      "long-context"
+    ],
+    "summary": "Battle-tested multilingual retriever with 8K-token inputs and a permissive MIT licence.",
+    "weakness": "Older (2024) and outscored by EmbeddingGemma and the Qwen3 embedders on recent benchmarks.",
+    "ratings": {
+      "Retrieval": 80,
+      "Multilingual": 86,
+      "Efficiency": 70
+    }
+  },
+  "qwen3-embedding-4b": {
+    "strengths": [
+      "retrieval",
+      "multilingual",
+      "long-context",
+      "coding"
+    ],
+    "summary": "High-accuracy multilingual and code retrieval with 32K-token inputs and task instructions.",
+    "weakness": "Much heavier and slower than the sub-1B embedders.",
+    "ratings": {
+      "Retrieval": 90,
+      "Multilingual": 90,
+      "Efficiency": 38
+    }
   }
 };
 
@@ -683,7 +1114,7 @@ export const GLOSSARY: Record<string, string> = {
   "mod:embedding": "Turns text into vectors for search, RAG and similarity. It is not a chatbot — it returns numbers, not replies.",
   "mod:image": "GENERATES images from a text prompt. It cannot view or understand images you upload.",
   "mod:audio-stt": "Transcribes spoken audio into text (Whisper).",
-  "mod:tts": "Speaks text aloud as audio (Piper). Runs on CPU only here.",
+  "mod:tts": "Speaks text aloud as audio (Piper, Kokoro, Pocket TTS or Qwen3-TTS). Runs on CPU only here.",
   // Capability categories (the progress bars).
   "cat:Reasoning": "Multi-step logic, breaking problems down, and drawing sound conclusions.",
   "cat:Coding": "Writing, completing and debugging code across programming languages.",
@@ -742,6 +1173,9 @@ export const tip = (key: string): string => GLOSSARY[key] ?? "";
 // Native context window per family (prefix match, longest first). Display-only;
 // the image actually serves at the chosen ctx tier.
 const CONTEXT: [string, string][] = [
+  ["qwen3.5", "262K"], ["qwen3.6", "262K"], ["qwen3.8", "262K"], ["gemma-4-e", "128K"],
+  ["gemma-4", "256K"], ["gpt-oss", "128K"], ["devstral", "256K"], ["embeddinggemma", "2K"],
+  ["bge-m3", "8K"],
   ["qwen3-coder", "256K"], ["qwen3-embedding", "32K"], ["qwen3", "32K–128K"],
   ["qwen2.5-coder", "32K–128K"], ["qwen2.5-vl", "32K–128K"], ["qwen2.5", "32K–128K"],
   ["gemma-3", "128K"], ["llama-3.2", "128K"], ["llama-3.1", "128K"],
@@ -758,6 +1192,8 @@ export function contextFor(id: string): string {
 export interface VisualSpec { res?: string; length?: string; note?: string }
 const VISUAL: Record<string, VisualSpec> = {
   // image gen
+  "z-image-turbo": { res: "512–1024px", note: "8-step turbo; renders legible text" },
+  "flux.2-klein-4b": { res: "512–1024px", note: "4-step distilled" },
   "sdxl-turbo": { res: "512×512", note: "1–4 step turbo" },
   "sdxl-base": { res: "1024×1024" },
   "sd-1.5": { res: "512×512" },
@@ -776,6 +1212,43 @@ const VISUAL_BY_MOD: Record<string, VisualSpec> = {
   video: { res: "480–720p", length: "few-second clip" },
   vision: { note: "Understands images you send it — does not generate them" },
 };
+// Voice controls per TTS model: built-in voices (first = the model's default),
+// and whether it accepts a speed multiplier or a style instruction. audio.cpp
+// rejects a speed it doesn't support, so the slider only shows where it works.
+export interface TtsSpec { voices: [string, string][]; speed: boolean; style: boolean }
+const POCKET_VOICES = ["alba", "anna", "azelma", "bill_boerst", "caro_davy", "charles", "cosette", "eponine",
+  "estelle", "eve", "fantine", "george", "giovanni", "jane", "javert", "jean", "juergen", "lola", "marius",
+  "mary", "michael", "paul", "peter_yearsley", "rafael", "stuart_bell", "vera"];
+const titleCase = (v: string) => v.split("_").map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+const TTS: Record<string, TtsSpec> = {
+  "kokoro-tts": {
+    voices: [["af_heart", "Heart — US female"], ["af_bella", "Bella — US female"], ["am_adam", "Adam — US male"],
+      ["am_michael", "Michael — US male"], ["bf_emma", "Emma — UK female"], ["bm_george", "George — UK male"]],
+    speed: true, style: false,
+  },
+  "pocket-tts-en": { voices: POCKET_VOICES.map((v) => [v, titleCase(v)]), speed: false, style: false },
+  "qwen3-tts-1.7b": {
+    voices: [["Ryan", "Ryan — English male, energetic"], ["Aiden", "Aiden — English male, cheerful"],
+      ["Vivian", "Vivian — Chinese female, bright"], ["Serena", "Serena — Chinese female, soft"],
+      ["Uncle_Fu", "Uncle Fu — Chinese male, deep"], ["Dylan", "Dylan — Beijing dialect male"],
+      ["Eric", "Eric — Sichuan dialect male"], ["Ono_Anna", "Ono Anna — Japanese female"],
+      ["Sohee", "Sohee — Korean female"]],
+    speed: false, style: true,
+  },
+  "piper-en-us": { voices: [], speed: false, style: false },
+};
+// Unknown TTS images keep the old behaviour: no voice list, speed slider shown.
+export const ttsSpec = (id?: string): TtsSpec => TTS[id ?? ""] ?? { voices: [], speed: true, style: false };
+
+// Image sampling defaults per model. Distilled models (Z-Image Turbo, FLUX.2
+// klein) want CFG 1 — a higher CFG doubles the work for no visible gain — and
+// klein needs only 4 steps. Anything else keeps the SDXL-Turbo-tuned defaults.
+const IMAGE_DEFAULTS: Record<string, { steps: number; cfg: number }> = {
+  "z-image-turbo": { steps: 8, cfg: 1 },
+  "flux.2-klein-4b": { steps: 4, cfg: 1 },
+};
+export const imageDefaults = (id?: string) => IMAGE_DEFAULTS[id ?? ""] ?? { steps: 8, cfg: 1.5 };
+
 export function visualSpec(id: string, mod: string | undefined): VisualSpec | null {
   if (mod !== "image" && mod !== "video" && mod !== "vision") return null;
   return VISUAL[id] ?? VISUAL_BY_MOD[mod] ?? null;

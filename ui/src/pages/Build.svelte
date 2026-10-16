@@ -6,9 +6,9 @@
   import { catalog, sysinfo, personas, buildTemplate } from "../lib/stores";
   import { modMeta } from "../lib/icons";
   import { hwPerf, PERF_LABEL } from "../lib/perf";
-  import { ctxDefaultFor, fmtTokens } from "../lib/util";
+  import { COMPUTE_BADGE, ctxDefaultFor, fmtTokens } from "../lib/util";
   import { META, TAG_LIST, dimsFor, catIcon, tip, contextFor, visualSpec } from "../lib/meta";
-  import { build, startBuild, attachIfRunning } from "../lib/build.svelte";
+  import { build, startBuild, attachIfRunning, effectiveCompute } from "../lib/build.svelte";
   import type { Model } from "../lib/types";
 
   // Page state lives in the `build` store (lib/build.svelte.ts) so it — and the
@@ -16,13 +16,17 @@
   // DOM ref for log auto-scroll is component-local.
   let logEl = $state<HTMLPreElement>();
 
-  const mods = $derived([...new Set($catalog.map((m) => m.modality ?? "text"))]);
-  // Only show strength chips that some catalog model actually carries.
+  // Superseded (legacy) models stay in the catalog so existing images resolve,
+  // but the picker only lists them on request.
+  const legacyCount = $derived($catalog.filter((m) => m.legacy).length);
+  const pool = $derived(build.showLegacy ? $catalog : $catalog.filter((m) => !m.legacy));
+  const mods = $derived([...new Set(pool.map((m) => m.modality ?? "text"))]);
+  // Only show strength chips that some listed model actually carries.
   const tagsAvail = $derived(
-    TAG_LIST.filter((t) => $catalog.some((m) => (META[m.id]?.strengths ?? []).includes(t))),
+    TAG_LIST.filter((t) => pool.some((m) => (META[m.id]?.strengths ?? []).includes(t))),
   );
   const filtered = $derived(
-    $catalog.filter((m) => {
+    pool.filter((m) => {
       const mod = m.modality ?? "text";
       if (build.filterMod && mod !== build.filterMod) return false;
       if (build.maxSize && (m.size_gb || 0) > build.maxSize) return false;
@@ -65,7 +69,11 @@
     if (!attached && $catalog.length) { attached = true; attachIfRunning($catalog); }
   });
 
-  const ctxAutoLabel = $derived(`Auto — recommended (${fmtTokens(ctxDefaultFor(build.compute))})`);
+  // What this model builds for: the user's pick unless its runtime lacks that variant.
+  const compute = $derived(effectiveCompute());
+  const canBuild = (c: string) => !build.selected?.computes?.length || build.selected.computes.includes(c);
+
+  const ctxAutoLabel = $derived(`Auto — recommended (${fmtTokens(ctxDefaultFor(compute))})`);
   const memMaxLabel = $derived(
     $sysinfo?.mem_gb ? `Max for your system (${Math.floor($sysinfo.mem_gb)} GB)` : "Max for your system",
   );
@@ -74,7 +82,7 @@
   const vramWarn = $derived.by(() => {
     const s = $sysinfo;
     const sel = build.selected;
-    if (!sel || !s?.vram_gb || (build.compute !== "cuda" && build.compute !== "vulkan")) return "";
+    if (!sel || !s?.vram_gb || (compute !== "cuda" && compute !== "vulkan")) return "";
     const need = sel.min_vram_gb || sel.size_gb || 0;
     if (need > s.vram_gb + 0.5)
       return `⚠ ${sel.name} wants ~${need} GB VRAM but you have ${s.vram_gb} GB — it'll offload to CPU and run slowly. A smaller model/quant fits better.`;
@@ -142,14 +150,14 @@
           <div class="search">
             <Icon name="search" />
             <!-- svelte-ignore a11y_autofocus -->
-            <input placeholder={`Search ${$catalog.length} models…`} bind:value={build.q} autofocus />
+            <input placeholder={`Search ${pool.length} models…`} bind:value={build.q} autofocus />
           </div>
           <div class="chips">
             <button class="chip" class:on={!build.filterMod} onclick={() => (build.filterMod = "")}>All</button>
             {#each mods as m (m)}
               <button class="chip" class:on={build.filterMod === m} title={tip("mod:" + m)} onclick={() => (build.filterMod = build.filterMod === m ? "" : m)}>
                 <Icon name={modMeta(m).icon} size={13} /> {modMeta(m).label}
-                <span class="fn">{$catalog.filter((x) => (x.modality ?? "text") === m).length}</span>
+                <span class="fn">{pool.filter((x) => (x.modality ?? "text") === m).length}</span>
               </button>
             {/each}
           </div>
@@ -165,7 +173,10 @@
             {#each [0, 2, 4, 8, 16] as sz (sz)}
               <button class="chip sm" class:on={build.maxSize === sz} onclick={() => (build.maxSize = sz)}>{sz === 0 ? "any" : `≤ ${sz} GB`}</button>
             {/each}
-            <span class="count">{filtered.length} of {$catalog.length}</span>
+            {#if legacyCount}
+              <button class="chip sm" class:on={build.showLegacy} title="Superseded models, kept so images built from them still work" onclick={() => (build.showLegacy = !build.showLegacy)}>Older models ({legacyCount})</button>
+            {/if}
+            <span class="count">{filtered.length} of {pool.length}</span>
           </div>
           <ul class="list">
             {#each filtered as m (m.id)}
@@ -201,6 +212,7 @@
     <div class="detail">
       <div class="dhead">
         <ModalityBadge mod={s.modality ?? "text"} />
+        {#if s.legacy}<span class="badge legacy-b" title="Superseded by a newer model in the catalog. Kept so images built from it and its downloaded weights still work.">Legacy</span>{/if}
         {#if s.runtime === "python"}<span class="badge rt-py" title="Runs on the Python/PyTorch runtime — bigger image, no quantization, a hard VRAM floor (can't CPU-offload like GGUF).">Python runtime</span>{/if}
         {#if s.recommended}<span class="badge rec-b"><Icon name="star" size={12} /> Recommended</span>{/if}
         <span class="dperf">
@@ -247,10 +259,10 @@
       <select bind:value={build.engine}><option value="docker">Docker</option><option value="podman">Podman</option></select>
     </label>
     <label>Compute
-      <select bind:value={build.compute}>
-        <option value="cpu">CPU (portable)</option>
-        <option value="cuda">NVIDIA GPU (CUDA)</option>
-        <option value="vulkan">GPU — Vulkan / Apple Metal</option>
+      <select value={compute} onchange={(e) => (build.compute = e.currentTarget.value)}>
+        {#each [["cpu", "CPU (portable)"], ["cuda", "NVIDIA GPU (CUDA)"], ["vulkan", "GPU — Vulkan / Apple Metal"]] as [c, label] (c)}
+          <option value={c} disabled={!canBuild(c)}>{label}{canBuild(c) ? "" : " — not available for this model"}</option>
+        {/each}
       </select>
     </label>
     <label>Image name
@@ -258,6 +270,9 @@
     </label>
     <label>Tag <input bind:value={build.tag} /></label>
   </div>
+  {#if build.selected && compute !== build.compute}
+    <p class="hint">{build.selected.name} has no {COMPUTE_BADGE[build.compute] ?? build.compute} build — it will be built for {COMPUTE_BADGE[compute] ?? compute}.</p>
+  {/if}
   {#if vramWarn}<p class="hint warn">{vramWarn}</p>{/if}
 
   <label class="lbl-blk">Initialization prompt (optional) — baked in to specialize startup
@@ -375,6 +390,7 @@
   .detail { margin: 0 0 10px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: #12151c; }
   .dhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
   .badge.rec-b { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: #e3b341; border: 1px solid #4a3c15; background: #241f10; border-radius: 999px; padding: 2px 9px; }
+  .badge.legacy-b { display: inline-flex; align-items: center; font-size: 11.5px; color: #9aa4b5; border: 1px solid #3a4150; background: #181c24; border-radius: 999px; padding: 2px 9px; }
   .badge.rt-py { display: inline-flex; align-items: center; font-size: 11.5px; color: #c4b8ff; border: 1px solid #3a3470; background: #1a1830; border-radius: 999px; padding: 2px 9px; }
   .dperf { margin-left: auto; display: inline-flex; gap: 6px; }
   .dspec { color: var(--text); font-size: 13px; }

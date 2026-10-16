@@ -2,6 +2,7 @@
 // from the vanilla app into a Svelte 5 rune module so components share reactivity.
 import { api, post, streamChat, labelVal, type StreamOpts } from "./api";
 import { modMeta } from "./icons";
+import { imageDefaults, ttsSpec } from "./meta";
 import { isStreamMod } from "./util";
 import type { ContainerInfo, ImageInfo, Model } from "./types";
 
@@ -27,6 +28,7 @@ export interface Tab {
   id: number;
   port: number;
   modality: string;
+  model?: string;             // catalog model id (from the image's local-llm.model label)
   name: string;
   system: string;
   msgs: Msg[];
@@ -47,9 +49,10 @@ export interface Tab {
   vidSteps?: number;          // video sampling steps
   ttsVoice?: string;          // tts voice id
   ttsSpeed?: number;          // tts speed multiplier
+  ttsStyle?: string;          // tts style/emotion instruction (models that take one)
   mediaSeed?: number | null;  // image/video seed (null/empty = random)
 }
-export interface Running { port: number; name: string; modality: string; ref: string; }
+export interface Running { port: number; name: string; modality: string; model: string; ref: string; }
 
 export const chat = $state({
   tabs: [] as Tab[],
@@ -125,12 +128,12 @@ export async function refreshTargets() {
     const name = labelVal(c.Labels, "local-llm.persona")
       || personaName(labelVal(c.Labels, "local-llm.system_prompt"))
       || nameByRef[ref] || c.Names || "model:" + port;
-    return { port, name, modality: mod, ref };
+    return { port, name, modality: mod, model: labelVal(c.Labels, "local-llm.model"), ref };
   });
   for (const tab of chat.tabs) {
     if (tab.bridge) continue;
     const r = chat.running.find((x) => x.port === tab.port);
-    if (r) { tab.modality = r.modality; tab.name = r.name; }
+    if (r) { tab.modality = r.modality; tab.model = r.model; tab.name = r.name; }
   }
   if (!chat.tabs.length && chat.running.length) newTab(chat.running[0].port);
   save();
@@ -139,7 +142,7 @@ export async function refreshTargets() {
 export function newTab(port: number) {
   const r = chat.running.find((x) => x.port === port) ?? chat.running[0];
   const tab: Tab = {
-    id: ++tabSeq, port: r ? r.port : 0, modality: r ? r.modality : "text",
+    id: ++tabSeq, port: r ? r.port : 0, modality: r ? r.modality : "text", model: r?.model,
     name: r ? r.name : "(no model)", system: "", msgs: [], busy: false, temp: 0.4, topP: 0.95, seed: null, vidFrames: 33,
   };
   chat.tabs.push(tab);
@@ -222,9 +225,10 @@ async function genImage(tab: Tab, prompt: string) {
   tab.busy = true;
   try {
     const res = tab.imgRes ?? 512;
+    const def = imageDefaults(tab.model);
     const data = await post<{ images?: string[] }>("/api/image/generate", {
       port: tab.port, prompt, negative_prompt: tab.negative?.trim() || undefined,
-      steps: tab.imgSteps ?? 8, cfg_scale: 1.5, width: res, height: res, seed: tab.mediaSeed ?? -1,
+      steps: tab.imgSteps ?? def.steps, cfg_scale: def.cfg, width: res, height: res, seed: tab.mediaSeed ?? -1,
     });
     tab.msgs[idx] = data.images?.length
       ? { role: "assistant", kind: "image", content: "", images: data.images }
@@ -274,7 +278,16 @@ async function speak(tab: Tab, text: string) {
   const idx = tab.msgs.push({ role: "assistant", kind: "audio", content: "Synthesizing…" }) - 1;
   tab.busy = true;
   try {
-    const res = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ port: tab.port, text, voice: tab.ttsVoice || undefined, speed: tab.ttsSpeed ?? 1 }) });
+    // Only send controls this model accepts: a voice from its own list (a voice
+    // picked for another model would be rejected), speed, and a style prompt.
+    const spec = ttsSpec(tab.model);
+    const voice = spec.voices.some(([v]) => v === tab.ttsVoice) ? tab.ttsVoice : undefined;
+    const body = {
+      port: tab.port, text, voice,
+      speed: spec.speed ? tab.ttsSpeed ?? 1 : undefined,
+      instructions: spec.style ? tab.ttsStyle?.trim() || undefined : undefined,
+    };
+    const res = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!res.ok) { let m = res.statusText; try { m = JSON.parse(await res.text()).error || m; } catch { /* */ } throw new Error(m); }
     tab.msgs[idx] = { role: "assistant", kind: "audio", content: "", audio: URL.createObjectURL(await res.blob()), autoplay: true };
   } catch (e) {
@@ -361,7 +374,7 @@ export function save() {
         id: t.id, port: t.port, modality: t.modality, name: t.name, system: t.system || "",
         bridge: !!t.bridge, temp: t.temp, topP: t.topP, seed: t.seed, vidFrames: t.vidFrames,
         negative: t.negative, imgRes: t.imgRes, imgSteps: t.imgSteps, vidRes: t.vidRes,
-        vidSteps: t.vidSteps, ttsVoice: t.ttsVoice, ttsSpeed: t.ttsSpeed, mediaSeed: t.mediaSeed,
+        vidSteps: t.vidSteps, ttsVoice: t.ttsVoice, ttsSpeed: t.ttsSpeed, ttsStyle: t.ttsStyle, mediaSeed: t.mediaSeed,
         // video/images are now small /api/media URLs (not data URLs), so they
         // persist fine and the clip reloads after a restart or container kill.
         msgs: (t.msgs || []).map((m) => ({ role: m.role, content: m.content || "", kind: m.kind, video: m.video, images: m.images, bridgeFrom: m.bridgeFrom, bridgeSide: m.bridgeSide, bridgeScene: m.bridgeScene, error: m.error })).slice(-300),

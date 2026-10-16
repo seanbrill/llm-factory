@@ -49,7 +49,15 @@ type Model struct {
 	// tiny images); "python" = a PyTorch/ComfyUI image (fp16, hard VRAM floor,
 	// big image) for models with no C++/GGUF port. Drives the Dockerfile choice,
 	// the resource footprint, and the "fits your hardware" rating.
-	Runtime string `json:"runtime,omitempty"` // cpp (default) | python
+	Runtime string `json:"runtime,omitempty"` // cpp (default) | python | audiocpp
+	// AudioCpp configures a model served by audio.cpp (runtime "audiocpp"), which
+	// the builder bakes into the server's config file.
+	AudioCpp *AudioCppConfig `json:"audiocpp,omitempty"`
+	// Legacy marks a model superseded by a newer catalog entry. It stays in the
+	// catalog so images built from it and its downloaded weights still resolve
+	// (resource estimates, clone-as-template, Model files); the Build picker
+	// hides it unless asked.
+	Legacy bool `json:"legacy,omitempty"`
 }
 
 // WeightFile is one extra weight a model needs, with the Role the runtime uses to
@@ -58,6 +66,17 @@ type WeightFile struct {
 	File string `json:"file"`
 	URL  string `json:"url"`
 	Role string `json:"role,omitempty"`
+	// As is the file's name inside the image when it must differ from File —
+	// e.g. a voice the runtime looks up by name ("alba.safetensors"), stored
+	// in ./models under a model-specific name so it can't collide.
+	As string `json:"as,omitempty"`
+}
+
+// AudioCppConfig is the per-model part of an audio.cpp server config.
+type AudioCppConfig struct {
+	Family       string            `json:"family"`                  // audio.cpp loader, e.g. pocket_tts, qwen3_tts
+	LoadOptions  map[string]string `json:"load_options,omitempty"`  // e.g. {"language": "english"}
+	DefaultVoice string            `json:"default_voice,omitempty"` // built-in voice used when a request names none
 }
 
 // Mod returns the model's modality, defaulting to "text" when unset.

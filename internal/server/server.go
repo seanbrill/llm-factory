@@ -245,7 +245,17 @@ func engineErrPayload(err error) map[string]string {
 }
 
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.cat.Models)
+	// Annotate each model with the compute targets its runtime can be built for,
+	// so the UI only offers those (Piper TTS is CPU-only, image gen Vulkan-only).
+	type item struct {
+		catalog.Model
+		Computes []string `json:"computes"`
+	}
+	out := make([]item, 0, len(s.cat.Models))
+	for _, m := range s.cat.Models {
+		out = append(out, item{Model: m, Computes: s.b.Computes(m)})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleModels returns the catalog annotated with on-disk download status/size.
@@ -1011,10 +1021,11 @@ func (s *Server) handleTTS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Port  int     `json:"port"`
-		Text  string  `json:"text"`
-		Voice string  `json:"voice"`
-		Speed float64 `json:"speed"`
+		Port         int     `json:"port"`
+		Text         string  `json:"text"`
+		Voice        string  `json:"voice"`
+		Speed        float64 `json:"speed"`
+		Instructions string  `json:"instructions"` // style/emotion, for models that take one (Qwen3-TTS)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1024,14 +1035,19 @@ func (s *Server) handleTTS(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty text"})
 		return
 	}
-	// Pass voice/speed through to the TTS server (honored by pygate/Kokoro;
-	// harmless to a server that ignores them).
-	up := map[string]any{"input": req.Text}
+	// Pass voice/speed/instructions through to the TTS server (honored by
+	// pygate/Kokoro and audio.cpp; harmless to a server that ignores them).
+	// "model" is the id audio.cpp images serve their one model under; Piper and
+	// Kokoro ignore it.
+	up := map[string]any{"input": req.Text, "model": "tts"}
 	if req.Voice != "" {
 		up["voice"] = req.Voice
 	}
 	if req.Speed > 0 {
 		up["speed"] = req.Speed
+	}
+	if strings.TrimSpace(req.Instructions) != "" {
+		up["instructions"] = req.Instructions
 	}
 	body, _ := json.Marshal(up)
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)

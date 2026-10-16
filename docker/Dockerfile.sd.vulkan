@@ -7,6 +7,11 @@
 # OpenAI-compatible POST /v1/images/generations (plus an embedded web UI), so it
 # fronts a model exactly like llama-server does — no llmgate shim needed.
 #
+# The builder bakes the model's sd-server flags into /models/sd_args: `-m
+# model.gguf` for a single-file checkpoint (SDXL, SD 1.5), or `--diffusion-model`
+# plus --vae / --llm for split models (Z-Image, FLUX.2) whose extra weights are
+# baked under /models/extra.
+#
 # Run it (macOS Podman libkrun/krunkit machine):
 #   podman run --device /dev/dri --security-opt label=disable -p 8080:8080 <image>
 
@@ -50,10 +55,12 @@ RUN dnf install -y dnf-plugins-core 'dnf-command(copr)' 'dnf-command(versionlock
     && dnf versionlock add mesa-vulkan-drivers \
     && dnf clean all \
     && useradd --system --uid 10001 --home-dir /work sd \
-    && mkdir -p /models /work && chown sd /work
+    && mkdir -p /models/extra /work && chown sd /work
 
 COPY --from=builder /src/stable-diffusion.cpp/build/bin/sd-server /usr/local/bin/sd-server
 COPY model.gguf /models/model.gguf
+COPY extra/ /models/extra/
+COPY sd_args /models/sd_args
 
 # --vae-tiling is mandatory at 1024² on this machine (the full-res VAE decode OOMs
 # the Venus device otherwise); --diffusion-fa trims UNet VRAM/time. XDG_RUNTIME_DIR
@@ -63,6 +70,6 @@ ENV PORT=8080 \
 EXPOSE 8080
 USER sd
 WORKDIR /work
-ENTRYPOINT ["/usr/local/bin/sd-server", "-m", "/models/model.gguf", \
-            "--listen-ip", "0.0.0.0", "--listen-port", "8080", \
-            "--vae-tiling", "--diffusion-fa"]
+# sd_args is one flag/path per line (paths never contain spaces), so the
+# unquoted expansion splits it into separate arguments.
+ENTRYPOINT ["/bin/sh", "-c", "exec /usr/local/bin/sd-server $(cat /models/sd_args) --listen-ip 0.0.0.0 --listen-port 8080 --vae-tiling --diffusion-fa \"$@\"", "sd-server"]

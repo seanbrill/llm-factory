@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+#
+# audio.cpp runtime (CPU): a ggml-based C++ engine for speech models, used here
+# for TTS models Piper/Kokoro don't cover (Pocket TTS, Qwen3-TTS). Built on the
+# project's published multi-arch image (amd64 + arm64), so nothing compiles.
+# audiocpp_server exposes an OpenAI-style POST /v1/audio/speech and GET /health.
+#
+# The builder stages the model GGUF as model.gguf, any extra weights (Pocket TTS
+# voice states) under extra/, and writes audiocpp.json: one model with id "tts",
+# its loader family, and its default voice (also reachable as voice "default").
+#
+# Pinned to a dated nightly (the project publishes no release-versioned images);
+# bump the tag deliberately. Tags: ghcr.io/0xshug0/audio.cpp, full-cpu-<date>-<sha>.
+FROM ghcr.io/0xshug0/audio.cpp:full-cpu-20261014-26b8927
+
+# Passed uniformly by the builder; declared to avoid "unused ARG" warnings.
+ARG INJECT_MODE=missing
+ARG MODALITY=tts
+ARG CTX_SIZE=0
+
+COPY model.gguf /models/model.gguf
+COPY extra/ /models/embeddings/
+COPY audiocpp.json /models/audiocpp.json
+
+ENV PORT=8080
+EXPOSE 8080
+# The base image's entrypoint dispatches its first argument to the matching
+# binary (cli | server | ...) and runs as the unprivileged "ubuntu" user.
+CMD ["server", "--config", "/models/audiocpp.json"]

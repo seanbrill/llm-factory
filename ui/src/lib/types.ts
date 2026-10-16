@@ -25,6 +25,8 @@ export interface Model {
   mmproj_url?: string;
   extra_files?: WeightFile[];
   runtime?: "cpp" | "python"; // default cpp (GGUF); python = PyTorch/ComfyUI
+  computes?: string[];        // compute targets this model's runtime can be built for
+  legacy?: boolean;           // superseded; hidden in the Build picker by default
 }
 
 export interface SysInfo {
