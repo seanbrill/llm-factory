@@ -348,6 +348,24 @@ export const META: Record<string, ModelMeta> = {
       "Multilingual": 56
     }
   },
+  "mellum2.1-12b-a2.5b": {
+    "strengths": [
+      "coding",
+      "fast",
+      "reasoning"
+    ],
+    "summary": "JetBrains' thinking code model: strong code-generation scores with only 2.5B active, so it's quick even on CPU.",
+    "weakness": "English only; trails Qwen3.5 9B on repo-level agentic coding and general knowledge.",
+    "ratings": {
+      "Reasoning": 74,
+      "Coding": 84,
+      "Math": 76,
+      "Knowledge": 58,
+      "Writing": 56,
+      "Instruction": 74,
+      "Multilingual": 40
+    }
+  },
   "qwen3-coder-30b-a3b": {
     "strengths": [
       "coding",
@@ -682,6 +700,20 @@ export const META: Record<string, ModelMeta> = {
       "Versatility": 84
     }
   },
+  "flux.3-image-klein": {
+    "strengths": [
+      "image-quality",
+      "prompt-adherence"
+    ],
+    "summary": "Black Forest Labs' newest small FLUX model, distilled to 16 steps, with a Qwen3-VL text encoder for detailed prompts.",
+    "weakness": "Four times the steps of FLUX.2 klein, so slower; the FLUX Kommunity License restricts commercial use.",
+    "ratings": {
+      "Image quality": 89,
+      "Prompt adherence": 88,
+      "Speed": 66,
+      "Versatility": 86
+    }
+  },
   "pocket-tts-en": {
     "strengths": [
       "voice-quality",
@@ -727,6 +759,25 @@ export const META: Record<string, ModelMeta> = {
       "Writing": 54,
       "Instruction": 64,
       "Multilingual": 64
+    }
+  },
+  "lfm3-1.7b": {
+    "strengths": [
+      "agentic",
+      "instruction-following",
+      "lightweight",
+      "long-context"
+    ],
+    "summary": "Tiny hybrid model tuned for tool calling and instruction following; far above its size on agent tasks.",
+    "weakness": "Thin world knowledge and weaker hard reasoning; Liquid advises retrieval for facts and another model for agentic coding.",
+    "ratings": {
+      "Reasoning": 66,
+      "Coding": 62,
+      "Math": 66,
+      "Knowledge": 44,
+      "Writing": 58,
+      "Instruction": 84,
+      "Multilingual": 62
     }
   },
   "qwen3.5-4b": {
@@ -804,6 +855,24 @@ export const META: Record<string, ModelMeta> = {
       "Multilingual": 82
     }
   },
+  "granite-4.2-8b": {
+    "strengths": [
+      "reasoning",
+      "math",
+      "instruction-following"
+    ],
+    "summary": "Business-friendly 8B with optional thinking, good math and code, and a clean Apache licence.",
+    "weakness": "IBM only benchmarks it against other Granites; tool calling and long-context recall trail Qwen3.5 9B.",
+    "ratings": {
+      "Reasoning": 80,
+      "Coding": 76,
+      "Math": 84,
+      "Knowledge": 66,
+      "Writing": 70,
+      "Instruction": 80,
+      "Multilingual": 70
+    }
+  },
   "gemma-4-12b": {
     "strengths": [
       "reasoning",
@@ -821,6 +890,24 @@ export const META: Record<string, ModelMeta> = {
       "Writing": 84,
       "Instruction": 86,
       "Multilingual": 88
+    }
+  },
+  "lfm2.5-24b-a2b": {
+    "strengths": [
+      "agentic",
+      "fast",
+      "instruction-following"
+    ],
+    "summary": "Fast agentic MoE: 24B of capacity with ~2.4B active, so it stays quick on CPU or with partial GPU offload.",
+    "weakness": "Weaker coding and knowledge than Qwen3.6 35B-A3B; always thinks, and Liquid advises retrieval for knowledge-heavy work.",
+    "ratings": {
+      "Reasoning": 80,
+      "Coding": 74,
+      "Math": 80,
+      "Knowledge": 62,
+      "Writing": 68,
+      "Instruction": 88,
+      "Multilingual": 72
     }
   },
   "gemma-4-26b-a4b": {
@@ -859,6 +946,24 @@ export const META: Record<string, ModelMeta> = {
       "Writing": 88,
       "Instruction": 90,
       "Multilingual": 90
+    }
+  },
+  "muse-glimmer-30b": {
+    "strengths": [
+      "agentic",
+      "coding",
+      "reasoning"
+    ],
+    "summary": "Meta's open 30B: strong tool use and agentic coding, with reasoning strength set in the system prompt.",
+    "weakness": "Trails Qwen3.8 27B on coding and terminal tasks; needs a 24 GB GPU.",
+    "ratings": {
+      "Reasoning": 88,
+      "Coding": 88,
+      "Math": 86,
+      "Knowledge": 82,
+      "Writing": 82,
+      "Instruction": 88,
+      "Multilingual": 80
     }
   },
   "qwen3.6-35b-a3b": {
@@ -954,6 +1059,40 @@ export const META: Record<string, ModelMeta> = {
       "Multilingual": 58
     }
   },
+  "minicpm-v-4.7-1b": {
+    "strengths": [
+      "vision",
+      "lightweight",
+      "ocr"
+    ],
+    "summary": "Tiny VLM that reads images, documents and short videos on CPU-only machines; successor to MiniCPM-V 4.6.",
+    "weakness": "Shallow reasoning; LFM3-VL 2B scores well ahead for about the same memory.",
+    "ratings": {
+      "Reasoning": 50,
+      "Vision": 70,
+      "OCR": 72,
+      "Knowledge": 40,
+      "Writing": 50,
+      "Multilingual": 60
+    }
+  },
+  "lfm3-vl-2b": {
+    "strengths": [
+      "vision",
+      "ocr",
+      "lightweight"
+    ],
+    "summary": "Small VLM that nearly matches Qwen3.5 4B on documents, charts and screenshots, and can locate UI elements.",
+    "weakness": "Not meant for multi-turn chat, coding or complex reasoning; thinks by default.",
+    "ratings": {
+      "Reasoning": 64,
+      "Vision": 78,
+      "OCR": 78,
+      "Knowledge": 46,
+      "Writing": 56,
+      "Multilingual": 66
+    }
+  },
   "qwen3.5-4b-vision": {
     "strengths": [
       "vision",
@@ -1024,6 +1163,24 @@ export const META: Record<string, ModelMeta> = {
       "Multilingual": 86
     }
   },
+  "qwen3.8-27b-vision": {
+    "strengths": [
+      "vision",
+      "ocr",
+      "reasoning",
+      "agentic"
+    ],
+    "summary": "Strongest local VLM in the catalog: documents, charts and computer-use screenshots with deep reasoning.",
+    "weakness": "Slow at its default (xhigh) reasoning effort; needs a 24 GB GPU.",
+    "ratings": {
+      "Reasoning": 94,
+      "Vision": 94,
+      "OCR": 93,
+      "Knowledge": 82,
+      "Writing": 80,
+      "Multilingual": 84
+    }
+  },
   "embeddinggemma-300m": {
     "strengths": [
       "retrieval",
@@ -1036,6 +1193,21 @@ export const META: Record<string, ModelMeta> = {
     "ratings": {
       "Retrieval": 84,
       "Multilingual": 84,
+      "Efficiency": 90
+    }
+  },
+  "embeddinggemma-2": {
+    "strengths": [
+      "retrieval",
+      "multilingual",
+      "coding",
+      "lightweight"
+    ],
+    "summary": "Google's second-generation compact embedder: 8K-token inputs, Matryoshka output sizes and much stronger code retrieval than v1.",
+    "weakness": "Text retrieval is about level with v1; queries and documents need task prefixes.",
+    "ratings": {
+      "Retrieval": 86,
+      "Multilingual": 85,
       "Efficiency": 90
     }
   },
@@ -1174,7 +1346,9 @@ export const tip = (key: string): string => GLOSSARY[key] ?? "";
 // the image actually serves at the chosen ctx tier.
 const CONTEXT: [string, string][] = [
   ["qwen3.5", "262K"], ["qwen3.6", "262K"], ["qwen3.8", "262K"], ["gemma-4-e", "128K"],
-  ["gemma-4", "256K"], ["gpt-oss", "128K"], ["devstral", "256K"], ["embeddinggemma", "2K"],
+  ["gemma-4", "256K"], ["gpt-oss", "128K"], ["devstral", "256K"], ["embeddinggemma-2", "8K"],
+  ["embeddinggemma", "2K"], ["lfm3-vl", "128K"], ["lfm3", "256K"], ["lfm2.5", "128K"],
+  ["granite-4.2", "128K"], ["muse-glimmer", "128K"], ["mellum", "128K"],
   ["bge-m3", "8K"],
   ["qwen3-coder", "256K"], ["qwen3-embedding", "32K"], ["qwen3", "32K–128K"],
   ["qwen2.5-coder", "32K–128K"], ["qwen2.5-vl", "32K–128K"], ["qwen2.5", "32K–128K"],
@@ -1194,6 +1368,7 @@ const VISUAL: Record<string, VisualSpec> = {
   // image gen
   "z-image-turbo": { res: "512–1024px", note: "8-step turbo; renders legible text" },
   "flux.2-klein-4b": { res: "512–1024px", note: "4-step distilled" },
+  "flux.3-image-klein": { res: "512–1024px", note: "16-step distilled" },
   "sdxl-turbo": { res: "512×512", note: "1–4 step turbo" },
   "sdxl-base": { res: "1024×1024" },
   "sd-1.5": { res: "512×512" },
@@ -1242,10 +1417,11 @@ export const ttsSpec = (id?: string): TtsSpec => TTS[id ?? ""] ?? { voices: [], 
 
 // Image sampling defaults per model. Distilled models (Z-Image Turbo, FLUX.2
 // klein) want CFG 1 — a higher CFG doubles the work for no visible gain — and
-// klein needs only 4 steps. Anything else keeps the SDXL-Turbo-tuned defaults.
+// FLUX.2 klein needs only 4 steps (FLUX.3 klein is distilled to 16). Anything else keeps the SDXL-Turbo-tuned defaults.
 const IMAGE_DEFAULTS: Record<string, { steps: number; cfg: number }> = {
   "z-image-turbo": { steps: 8, cfg: 1 },
   "flux.2-klein-4b": { steps: 4, cfg: 1 },
+  "flux.3-image-klein": { steps: 16, cfg: 1 },
 };
 export const imageDefaults = (id?: string) => IMAGE_DEFAULTS[id ?? ""] ?? { steps: 8, cfg: 1.5 };
 

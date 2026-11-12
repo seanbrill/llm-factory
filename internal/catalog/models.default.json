@@ -16,6 +16,21 @@
       "modality": "text"
     },
     {
+      "id": "lfm3-1.7b",
+      "name": "LFM3 1.7B",
+      "repo": "LiquidAI/LFM3-1.7B-GGUF",
+      "file": "LFM3-1.7B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/resolve/main/LFM3-1.7B-Q4_K_M.gguf?download=true",
+      "size_gb": 1.1,
+      "tier": "tiny",
+      "params": "1.7B",
+      "min_ram_gb": 3,
+      "min_vram_gb": 0,
+      "recommended": false,
+      "description": "Liquid AI's hybrid small model (Oct 2026) built for local tool-calling agents; its card beats Qwen3.5 9B on BFCL v4 and IFBench. Thinks by default, 256K context. LFM Open License (free under $10M revenue).",
+      "modality": "text"
+    },
+    {
       "id": "qwen3.5-4b",
       "name": "Qwen3.5 4B",
       "repo": "unsloth/Qwen3.5-4B-GGUF",
@@ -76,6 +91,21 @@
       "modality": "text"
     },
     {
+      "id": "granite-4.2-8b",
+      "name": "Granite 4.2 8B",
+      "repo": "ibm-granite/granite-4.2-8b-GGUF",
+      "file": "granite-4.2-8b-Q4_K_M.gguf",
+      "url": "https://huggingface.co/ibm-granite/granite-4.2-8b-GGUF/resolve/main/granite-4.2-8b-Q4_K_M.gguf?download=true",
+      "size_gb": 5.35,
+      "tier": "mid",
+      "params": "8B",
+      "min_ram_gb": 9,
+      "min_vram_gb": 7,
+      "recommended": false,
+      "description": "IBM's dense 8B (Aug 2026): thinking by default with a low-effort mode, solid math and code, 128K context. Apache 2.0.",
+      "modality": "text"
+    },
+    {
       "id": "gemma-4-12b",
       "name": "Gemma 4 12B Instruct",
       "repo": "unsloth/gemma-4-12b-it-GGUF",
@@ -88,6 +118,21 @@
       "min_vram_gb": 9,
       "recommended": true,
       "description": "Recommended large generalist (May 2026); outscores Gemma 3 27B across the board. 256K context, Apache 2.0.",
+      "modality": "text"
+    },
+    {
+      "id": "lfm2.5-24b-a2b",
+      "name": "LFM2.5 24B A2B (MoE)",
+      "repo": "LiquidAI/LFM2.5-24B-A2B-GGUF",
+      "file": "LFM2.5-24B-A2B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/LiquidAI/LFM2.5-24B-A2B-GGUF/resolve/main/LFM2.5-24B-A2B-Q4_K_M.gguf?download=true",
+      "size_gb": 14.53,
+      "tier": "large",
+      "params": "24B-A2B",
+      "min_ram_gb": 20,
+      "min_vram_gb": 16,
+      "recommended": false,
+      "description": "Liquid AI's agent MoE (Oct 2026): ~2.4B active, so it stays fast on CPU or with partial GPU offload. Always thinks. LFM Open License (free under $10M revenue).",
       "modality": "text"
     },
     {
@@ -118,6 +163,21 @@
       "min_vram_gb": 20,
       "recommended": false,
       "description": "Flagship dense Gemma 4; Google's strongest open model. Wants a 24 GB GPU.",
+      "modality": "text"
+    },
+    {
+      "id": "muse-glimmer-30b",
+      "name": "Muse Glimmer 30B",
+      "repo": "unsloth/Muse-Glimmer-30B-GGUF",
+      "file": "Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
+      "url": "https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/main/Muse-Glimmer-30B-UD-Q4_K_XL.gguf?download=true",
+      "size_gb": 15.88,
+      "tier": "large",
+      "params": "30B",
+      "min_ram_gb": 22,
+      "min_vram_gb": 20,
+      "recommended": false,
+      "description": "Meta's open dense 30B (Aug 2026): strong tool use and agentic coding, reasoning strength set in the system prompt. Wants a 24 GB GPU. Apache 2.0.",
       "modality": "text"
     },
     {
@@ -181,6 +241,21 @@
       "modality": "code"
     },
     {
+      "id": "mellum2.1-12b-a2.5b",
+      "name": "Mellum2.1 12B A2.5B Thinking (MoE)",
+      "repo": "JetBrains/Mellum2.1-12B-A2.5B-Thinking-GGUF",
+      "file": "Mellum2.1-12B-A2.5B-Thinking-Q4_K_M.gguf",
+      "url": "https://huggingface.co/JetBrains/Mellum2.1-12B-A2.5B-Thinking-GGUF/resolve/main/Mellum2.1-12B-A2.5B-Thinking-Q4_K_M.gguf?download=true",
+      "size_gb": 8.07,
+      "tier": "large",
+      "params": "12B-A2.5B",
+      "min_ram_gb": 12,
+      "min_vram_gb": 10,
+      "recommended": false,
+      "description": "JetBrains' thinking code model (Oct 2026): 2.5B active, so it's quick even on CPU; its card beats Qwen3.5 9B on LiveCodeBench. English only. Apache 2.0.",
+      "modality": "code"
+    },
+    {
       "id": "qwen3-coder-30b-a3b",
       "name": "Qwen3 Coder 30B A3B (MoE)",
       "repo": "lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-GGUF",
@@ -226,21 +301,38 @@
       "modality": "reasoning"
     },
     {
-      "id": "minicpm-v-4.6",
-      "name": "MiniCPM-V 4.6",
-      "repo": "openbmb/MiniCPM-V-4.6-gguf",
-      "file": "MiniCPM-V-4_6-Q4_K_M.gguf",
-      "url": "https://huggingface.co/openbmb/MiniCPM-V-4.6-gguf/resolve/main/MiniCPM-V-4_6-Q4_K_M.gguf?download=true",
-      "size_gb": 0.53,
+      "id": "minicpm-v-4.7-1b",
+      "name": "MiniCPM-V 4.7 1B",
+      "repo": "openbmb/MiniCPM-V-4.7-1B-gguf",
+      "file": "MiniCPM-V-4_7-1B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/openbmb/MiniCPM-V-4.7-1B-gguf/resolve/main/MiniCPM-V-4_7-1B-Q4_K_M.gguf?download=true",
+      "size_gb": 0.67,
       "tier": "tiny",
-      "params": "0.8B",
+      "params": "1B",
       "min_ram_gb": 3,
       "min_vram_gb": 0,
       "recommended": false,
-      "description": "Tiny VLM (May 2026) for low-RAM image+text; runs on CPU.",
+      "description": "Tiny VLM (Oct 2026) for low-RAM image+text on CPU; successor to MiniCPM-V 4.6. Apache 2.0.",
       "modality": "vision",
-      "mmproj_file": "mmproj-MiniCPM-V-4_6-f16.gguf",
-      "mmproj_url": "https://huggingface.co/openbmb/MiniCPM-V-4.6-gguf/resolve/main/mmproj-model-f16.gguf?download=true"
+      "mmproj_file": "mmproj-MiniCPM-V-4_7-1B-f16.gguf",
+      "mmproj_url": "https://huggingface.co/openbmb/MiniCPM-V-4.7-1B-gguf/resolve/main/mmproj-model-f16.gguf?download=true"
+    },
+    {
+      "id": "lfm3-vl-2b",
+      "name": "LFM3-VL 2B",
+      "repo": "LiquidAI/LFM3-VL-2B-GGUF",
+      "file": "LFM3-VL-2B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/LiquidAI/LFM3-VL-2B-GGUF/resolve/main/LFM3-VL-2B-Q4_K_M.gguf?download=true",
+      "size_gb": 1.1,
+      "tier": "tiny",
+      "params": "2B",
+      "min_ram_gb": 3,
+      "min_vram_gb": 0,
+      "recommended": false,
+      "description": "Liquid AI's small VLM (Oct 2026): documents, charts and screenshots at close to Qwen3.5 4B quality in under half the memory. LFM Open License (free under $10M revenue).",
+      "modality": "vision",
+      "mmproj_file": "mmproj-LFM3-VL-2B-F16.gguf",
+      "mmproj_url": "https://huggingface.co/LiquidAI/LFM3-VL-2B-GGUF/resolve/main/mmproj-LFM3-VL-2B-F16.gguf?download=true"
     },
     {
       "id": "qwen3.5-4b-vision",
@@ -311,18 +403,35 @@
       "mmproj_url": "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/mmproj-F16.gguf?download=true"
     },
     {
-      "id": "embeddinggemma-300m",
-      "name": "EmbeddingGemma 300M",
-      "repo": "ggml-org/embeddinggemma-300M-GGUF",
-      "file": "embeddinggemma-300M-Q8_0.gguf",
-      "url": "https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/main/embeddinggemma-300M-Q8_0.gguf?download=true",
-      "size_gb": 0.33,
+      "id": "qwen3.8-27b-vision",
+      "name": "Qwen3.8 27B (Vision)",
+      "repo": "unsloth/Qwen3.8-27B-GGUF",
+      "file": "Qwen3.8-27B-UD-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q4_K_M.gguf?download=true",
+      "size_gb": 16.46,
+      "tier": "large",
+      "params": "27B",
+      "min_ram_gb": 23,
+      "min_vram_gb": 21,
+      "recommended": false,
+      "description": "Qwen3.8 27B with its vision projector: the strongest local reader of documents, charts and screenshots. Wants a 24 GB GPU.",
+      "modality": "vision",
+      "mmproj_file": "mmproj-Qwen3.8-27B-F16.gguf",
+      "mmproj_url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/mmproj-F16.gguf?download=true"
+    },
+    {
+      "id": "embeddinggemma-2",
+      "name": "EmbeddingGemma 2",
+      "repo": "ggml-org/embeddinggemma-2-GGUF",
+      "file": "embeddinggemma-2-Q8_0.gguf",
+      "url": "https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/resolve/main/embeddinggemma-2-Q8_0.gguf?download=true",
+      "size_gb": 0.31,
       "tier": "tiny",
-      "params": "300M",
+      "params": "270M",
       "min_ram_gb": 1,
       "min_vram_gb": 0,
       "recommended": true,
-      "description": "Google's compact multilingual embedder (768-d, Matryoshka); best quality per MB for local RAG.",
+      "description": "Google's second-gen compact embedder (Sep 2026): 768-d with Matryoshka sizes, 8K-token inputs and much stronger code retrieval than v1. Text only here. Apache 2.0.",
       "modality": "embedding"
     },
     {
@@ -420,6 +529,33 @@
         {
           "file": "Qwen3-4B-Q4_K_M.gguf",
           "url": "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true",
+          "role": "llm"
+        }
+      ]
+    },
+    {
+      "id": "flux.3-image-klein",
+      "name": "FLUX.3 image klein (Q4_K)",
+      "repo": "leejet/flux-3-image-klein-GGUF",
+      "file": "flux3-image-klein-Q4_K.gguf",
+      "url": "https://huggingface.co/leejet/flux-3-image-klein-GGUF/resolve/main/flux3-image-klein-Q4_K.gguf?download=true",
+      "size_gb": 6.35,
+      "tier": "mid",
+      "params": "5.6B",
+      "min_ram_gb": 10,
+      "min_vram_gb": 8,
+      "recommended": false,
+      "description": "Black Forest Labs' small FLUX.3 (Oct 2026), distilled to 16 steps; Qwen3-VL 4B text encoder. FLUX Kommunity License: commercial use is restricted, check its terms.",
+      "modality": "image",
+      "extra_files": [
+        {
+          "file": "flux2-vae.safetensors",
+          "url": "https://huggingface.co/Comfy-Org/flux2-klein-4B/resolve/main/split_files/vae/flux2-vae.safetensors?download=true",
+          "role": "vae"
+        },
+        {
+          "file": "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3VL-4B-Instruct-Q4_K_M.gguf?download=true",
           "role": "llm"
         }
       ]
@@ -801,6 +937,40 @@
           "role": "t5"
         }
       ]
+    },
+    {
+      "id": "minicpm-v-4.6",
+      "name": "MiniCPM-V 4.6",
+      "repo": "openbmb/MiniCPM-V-4.6-gguf",
+      "file": "MiniCPM-V-4_6-Q4_K_M.gguf",
+      "url": "https://huggingface.co/openbmb/MiniCPM-V-4.6-gguf/resolve/main/MiniCPM-V-4_6-Q4_K_M.gguf?download=true",
+      "size_gb": 0.53,
+      "tier": "tiny",
+      "params": "0.8B",
+      "min_ram_gb": 3,
+      "min_vram_gb": 0,
+      "recommended": false,
+      "description": "Tiny VLM (May 2026) for low-RAM image+text; runs on CPU.",
+      "modality": "vision",
+      "mmproj_file": "mmproj-MiniCPM-V-4_6-f16.gguf",
+      "mmproj_url": "https://huggingface.co/openbmb/MiniCPM-V-4.6-gguf/resolve/main/mmproj-model-f16.gguf?download=true",
+      "legacy": true
+    },
+    {
+      "id": "embeddinggemma-300m",
+      "name": "EmbeddingGemma 300M",
+      "repo": "ggml-org/embeddinggemma-300M-GGUF",
+      "file": "embeddinggemma-300M-Q8_0.gguf",
+      "url": "https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/main/embeddinggemma-300M-Q8_0.gguf?download=true",
+      "size_gb": 0.33,
+      "tier": "tiny",
+      "params": "300M",
+      "min_ram_gb": 1,
+      "min_vram_gb": 0,
+      "recommended": false,
+      "description": "Google's compact multilingual embedder (768-d, Matryoshka); best quality per MB for local RAG.",
+      "modality": "embedding",
+      "legacy": true
     },
     {
       "id": "qwen3-0.6b",

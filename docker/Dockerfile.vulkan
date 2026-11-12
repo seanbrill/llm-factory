@@ -30,7 +30,7 @@
 # ----------------------------------------------------------------------------
 FROM quay.io/fedora/fedora:44 AS builder
 # Pinned llama.cpp release for reproducible builds (override to track master).
-ARG LLAMA_CPP_REF=b9820
+ARG LLAMA_CPP_REF=v0.9.0
 # Vulkan build deps from Fedora: vulkan-headers + vulkan-loader-devel (headers and
 # the loader to link against), glslc + glslang (GLSL->SPIR-V shader compilers), and
 # spirv-headers-devel (provides SPIRV-HeadersConfig.cmake that ggml-vulkan's

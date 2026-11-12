@@ -262,21 +262,26 @@ deploy/              OPTIONAL ECS/Fargate task definition for later cloud deploy
 
 ## Curated models
 Hand-picked GGUF (mostly Q4_K_M) models that run well locally, from tiny CPU-friendly to
-GPU-class. Edit `config/models.json` to change the list. Chat models (refreshed Oct 2026):
+GPU-class. Edit `config/models.json` to change the list. Chat models (refreshed Nov 2026):
 
 | Tier | Model | ~Size | Notes |
 |---|---|---|---|
-| tiny | Qwen3.5 2B | 1.3 GB | Fast on any CPU; thinks before answering |
+| tiny | Qwen3.5 2B, LFM3 1.7B | 1.1–1.3 GB | Fast on any CPU; both think before answering |
 | small | **Qwen3.5 4B** ★, Gemma 4 E2B | 2.7–3.1 GB | CPU sweet spot |
-| mid | **Qwen3.5 9B** ★, Gemma 4 E4B | 5.0–5.7 GB | GPU or beefy CPU |
-| large | **Gemma 4 12B** ★, gpt-oss 20B, Qwen3.8 27B, Gemma 4 26B-A4B / 31B | 7–18 GB | 12B wants ≥10 GB VRAM; the rest want 16–24 GB |
+| mid | **Qwen3.5 9B** ★, Gemma 4 E4B, Granite 4.2 8B | 5.0–5.7 GB | GPU or beefy CPU |
+| large | **Gemma 4 12B** ★, gpt-oss 20B, LFM2.5 24B-A2B, Qwen3.8 27B, Muse Glimmer 30B, Gemma 4 26B-A4B / 31B | 7–18 GB | 12B wants ≥10 GB VRAM; the rest want 16–24 GB (the MoEs stay usable with CPU offload) |
 
-The catalog also covers code (Devstral Small 2, Qwen3 Coder), vision (Qwen3.5 /
-Gemma 4 with their projectors, MiniCPM-V 4.6), embeddings (EmbeddingGemma, BGE-M3,
-Qwen3 Embedding), image (Z-Image Turbo, FLUX.2 klein 4B, SDXL Turbo), text-to-speech (Pocket TTS,
+The catalog also covers code (Devstral Small 2, Qwen3 Coder, Mellum2.1), vision (Qwen3.5 /
+Gemma 4 / Qwen3.8 with their projectors, LFM3-VL 2B, MiniCPM-V 4.7), embeddings
+(EmbeddingGemma 2, BGE-M3, Qwen3 Embedding), image (Z-Image Turbo, FLUX.2 klein 4B,
+FLUX.3 image klein, SDXL Turbo), text-to-speech (Pocket TTS,
 Qwen3-TTS, Kokoro, Piper), speech-to-text and video. Superseded models are kept with
 `"legacy": true`, so images built from them still resolve; the Build page hides them
 behind **Older models**.
+
+Most entries are Apache 2.0 or MIT. Check the licence in a model's description before
+commercial use: Liquid AI's LFM models are free only under $10M annual revenue, and
+FLUX.3 image klein's FLUX Kommunity License restricts commercial use.
 
 > Catalog URLs point at public HuggingFace GGUF repos. If a download 404s,
 > the repo/file name may have changed — fix the `url` in `config/models.json`.
