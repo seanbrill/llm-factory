@@ -331,14 +331,21 @@ machine with Docker and no Go toolchain. Build/run it with
 
 ```
 docker run -d --name local-llm-factory \
-  -p 8799:8799 \
+  -p 127.0.0.1:8799:8799 \                         # loopback only (BIND=0.0.0.0 / -Bind to share)
+  -e HOST_DIR="$PWD" -e HOST_HOME="$HOME" -e FACTORY_PORT=8799 \
   -v /var/run/docker.sock:/var/run/docker.sock \   # Docker-out-of-Docker
   -v "$PWD/models:/app/models" \                   # weights persist on host
   -v "$PWD/images:/app/images" \                   # tarballs persist on host
   -v "$PWD/config:/app/config" \                   # editable catalog persists
+  -v "$PWD/media:/app/media" \                     # generated images and clips
+  -v "$PWD/skills:/app/skills:ro" \                # agent harness skills
+  -v "$PWD/workspace:/app/workspace" \             # agent harness workspace
   --add-host host.docker.internal:host-gateway \   # so "Test" can reach models
   local-llm-factory
 ```
+
+`HOST_HOME`, `FACTORY_PORT` and the `skills`/`workspace` mounts serve the
+[agent harness](HARNESS.md).
 
 Key points:
 - **Docker-out-of-Docker:** the factory shells out to `docker`, which talks to the

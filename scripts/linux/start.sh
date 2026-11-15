@@ -8,6 +8,8 @@
 #
 #   ./start.sh            # build + run, UI at http://localhost:8799
 #   PORT=9000 ./start.sh
+#   BIND=0.0.0.0 ./start.sh   # also reachable from your network (default: this
+#                             # computer only; the factory has no login)
 #
 # (For native dev without Docker you can still run:  go run ./cmd/builder)
 set -euo pipefail
@@ -21,7 +23,8 @@ command -v docker >/dev/null 2>&1 || { echo "Docker is required and must be runn
 
 NAME=local-llm-factory
 PORT="${PORT:-8799}"
-mkdir -p models images config media
+BIND="${BIND:-127.0.0.1}"
+mkdir -p models images config media workspace
 
 # Build the Svelte UI into internal/server/web so the factory image embeds it
 # (throwaway Node container, no host Node needed).
@@ -59,18 +62,26 @@ if command -v podman >/dev/null 2>&1; then
 fi
 
 echo "Starting factory container..."
+# HOST_HOME / FACTORY_PORT and the skills + workspace mounts serve the agent
+# harness (Harness page): its workspace terminal mounts host paths, and Open
+# WebUI reaches the model gateway on the published port.
 docker run -d --name "$NAME" \
-    -p "$PORT:8799" \
+    -p "$BIND:$PORT:8799" \
     -e "HOST_DIR=$PWD" \
+    -e "HOST_HOME=$HOME" \
+    -e "FACTORY_PORT=$PORT" \
     -v //var/run/docker.sock:/var/run/docker.sock \
     -v "$PWD/models:/app/models" \
     -v "$PWD/images:/app/images" \
     -v "$PWD/config:/app/config" \
     -v "$PWD/media:/app/media" \
+    -v "$PWD/skills:/app/skills:ro" \
+    -v "$PWD/workspace:/app/workspace" \
     --add-host host.docker.internal:host-gateway \
     ${PODMAN_ARGS[@]+"${PODMAN_ARGS[@]}"} \
     "$NAME"
 
 echo "local-llm factory is running at http://localhost:$PORT"
+[ "$BIND" = "127.0.0.1" ] || echo "WARNING: listening on $BIND:$PORT — anyone who can reach this machine can use the factory (it has no login)."
 echo "Logs:  docker logs -f $NAME"
 echo "Stop:  ./stop.sh"

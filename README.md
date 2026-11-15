@@ -352,6 +352,30 @@ Set as `docker run -e ...` (or `podman run -e ...`) overrides (defaults in the
 Dockerfiles): `PORT`, `CTX_SIZE`, `THREADS` (match host vCPUs), `PARALLEL`, and
 `NGL` (GPU layers — CUDA and Vulkan images, default 99).
 
+## Harness: tools for Open WebUI
+The **Harness** page lets your factory models work as agents in
+[Open WebUI](https://github.com/open-webui/open-webui). They can search the web,
+view and edit files and run commands in a sandboxed workspace terminal
+([Open Terminal](https://github.com/open-webui/open-terminal)), and use
+**skills**.
+
+To set it up, start the terminal on the Harness page, paste an Open WebUI admin API
+key and click **Connect**. That adds three things to Open WebUI and lists every
+change:
+- the factory's **model gateway**, one OpenAI-compatible `/v1` connection for every
+  running model,
+- the terminal,
+- web search.
+
+Starter skills live in `skills/`, and the model's files land in `workspace/`. For
+setup, the security model and troubleshooting, see
+**[docs/HARNESS.md](docs/HARNESS.md)**.
+
+> The start scripts now publish the factory on `127.0.0.1` only, because it has no
+> login. To reach it from other machines, opt in with
+> `BIND=0.0.0.0 ./scripts/macos/start.sh` or
+> `.\scripts\windows\start.ps1 -Bind 0.0.0.0`.
+
 ## Optional: cloud deploy
 `deploy/ecs-task-definition.json` runs a built image on AWS Fargate (2 vCPU /
 4 GB baseline; bump memory to 8 GB if you raise context or hit `OOMKilled`).

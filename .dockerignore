@@ -7,6 +7,9 @@ models/
 images/
 config/
 media/
+# Harness: the workspace (user files) and skills are mounted at runtime.
+workspace/
+skills/
 .build/
 *.gguf
 *.tar

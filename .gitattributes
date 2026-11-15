@@ -1,0 +1,3 @@
+# Open Terminal only reads SKILL.md frontmatter that starts with "---\n", so
+# skills must keep LF line endings even in a Windows checkout.
+skills/** text eol=lf

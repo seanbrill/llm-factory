@@ -8,6 +8,8 @@
 #
 #   .\start.ps1            # build + run, UI at http://localhost:8799
 #   .\start.ps1 -Port 9000
+#   .\start.ps1 -Bind 0.0.0.0   # also reachable from your network (default: this
+#                               # computer only; the factory has no login)
 #
 # (For native dev without Docker you can still run:  go run ./cmd/builder)
 #
@@ -15,7 +17,7 @@
 # streams build progress to stderr, which Stop would turn into a fatal error.
 # Real failures are caught via $LASTEXITCODE checks instead.
 
-param([int]$Port = 8799)
+param([int]$Port = 8799, [string]$Bind = "127.0.0.1")
 
 # Docker's build context and the bind-mount paths are repo-relative, so the body
 # runs from the repo root. We use Push/Pop (not Set-Location) so invoking this
@@ -30,7 +32,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 }
 
 $name = "local-llm-factory"
-New-Item -ItemType Directory -Force -Path .\models, .\images, .\config, .\media | Out-Null
+New-Item -ItemType Directory -Force -Path .\models, .\images, .\config, .\media, .\workspace | Out-Null
 
 # Stamp the build with its version (shown in the UI sidebar). Computed before
 # the UI build so "-dirty" reflects only your own local edits.
@@ -82,14 +84,21 @@ if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
 }
 
 Write-Host "Starting factory container..." -ForegroundColor Cyan
+# HOST_HOME / FACTORY_PORT and the skills + workspace mounts serve the agent
+# harness (Harness page): its workspace terminal mounts host paths, and Open
+# WebUI reaches the model gateway on the published port.
 docker run -d --name $name `
-    -p "$($Port):8799" `
+    -p "$($Bind):$($Port):8799" `
     -e "HOST_DIR=$($PWD.Path -replace '\\','/')" `
+    -e "HOST_HOME=$($env:USERPROFILE -replace '\\','/')" `
+    -e "FACTORY_PORT=$Port" `
     -v /var/run/docker.sock:/var/run/docker.sock `
     -v "$($PWD.Path)\models:/app/models" `
     -v "$($PWD.Path)\images:/app/images" `
     -v "$($PWD.Path)\config:/app/config" `
     -v "$($PWD.Path)\media:/app/media" `
+    -v "$($PWD.Path)\skills:/app/skills:ro" `
+    -v "$($PWD.Path)\workspace:/app/workspace" `
     --add-host host.docker.internal:host-gateway `
     $gpuArgs `
     $podmanArgs `
@@ -97,6 +106,7 @@ docker run -d --name $name `
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: failed to start factory container." -ForegroundColor Red; exit 1 }
 
 Write-Host "local-llm factory is running at http://localhost:$Port" -ForegroundColor Green
+if ($Bind -ne "127.0.0.1") { Write-Host "WARNING: listening on $($Bind):$Port - anyone who can reach this machine can use the factory (it has no login)." -ForegroundColor Yellow }
 Write-Host "Logs:  docker logs -f $name"
 Write-Host "Stop:  .\stop.ps1"
 
