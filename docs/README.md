@@ -36,6 +36,9 @@ you've never touched a container before.
 9. [Agent harness: tools for Open WebUI](HARNESS.md) — give your models web search,
    a sandboxed workspace terminal and skills in Open WebUI; security model and
    troubleshooting.
+10. [The FileFreak model archive](FILEFREAK.md) — a public mirror of open-licensed
+    model files: how builds read from it, the license rule for uploads, what
+    FileFreak sees, and how to set an upload key.
 
 ## The 30-second mental model
 
@@ -55,5 +58,6 @@ You chat with it at http://<name>.localhost (a friendly local URL)
 ```
 
 Everything runs on **your** machine. The only thing that ever touches the internet
-is the one-time **download** of the model weights from Hugging Face.
+is the one-time **download** of the model weights, from Hugging Face or from the
+[FileFreak archive](FILEFREAK.md) when it holds the same file.
 </content>

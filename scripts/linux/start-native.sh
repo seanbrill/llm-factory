@@ -39,6 +39,18 @@ else
   echo "WARN: podman not on PATH — install it if the Containers tab is empty (docker still works)."
 fi
 
+# The FileFreak archive (docs/FILEFREAK.md) runs tools/filefreak with Node.js 20
+# or later. Without it the factory still works: model files come from Hugging Face.
+if command -v node >/dev/null 2>&1 && node -e 'process.exit(+process.versions.node.split(".")[0] >= 20 ? 0 : 1)'; then
+  if [ ! -f tools/filefreak/node_modules/.package-lock.json ] || [ tools/filefreak/package-lock.json -nt tools/filefreak/node_modules/.package-lock.json ]; then
+    echo "Installing the FileFreak archive helper (tools/filefreak)..."
+    (cd tools/filefreak && npm ci --omit=dev --no-audit --no-fund --silent) \
+      || echo "WARN: npm ci in tools/filefreak failed, so the FileFreak archive is off: model files download from Hugging Face."
+  fi
+else
+  echo "WARN: Node.js 20 or later isn't on PATH, so the FileFreak archive is off: model files download from Hugging Face. Install it (nodejs.org, or your package manager) to use the archive."
+fi
+
 echo "Factory (native — sees host podman + docker): http://127.0.0.1:$PORT   (Ctrl-C to stop)"
 echo "Its access link (Open: http://127.0.0.1:$PORT/?token=...) is in the log below."
 # The factory opens the browser itself, at the link with the token (a plain

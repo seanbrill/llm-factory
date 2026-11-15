@@ -285,6 +285,7 @@ Linux). See [Choosing an engine & compute](#choosing-an-engine--compute).
 |---|---|
 | `config/models.json` | The model catalog — **edit this to add/remove models** (seeded on first run). |
 | `models/` | Downloaded GGUF weight files (one copy per model, reused across builds). |
+| `config/filefreak.json` | FileFreak archive settings and upload key (0600, not committed). The upload queue is `config/filefreak-queue.json`. |
 | `images/` | Exported image tarballs (`docker`/`podman save`), one `.tar` per build. |
 | `docker/Dockerfile.cpu` / `.cuda` / `.vulkan` | The image recipes (editable). |
 
@@ -301,6 +302,8 @@ internal/builder/    download / build / save / run / stop / list (docker|podman)
 internal/ensemble/   Ensemble model + store (multimodal super-models)
 internal/server/     HTTP API + embedded vanilla-JS UI (internal/server/web)
 internal/llm/        OpenAI-compatible client (generic Chat + typed example)
+internal/filefreak/  the FileFreak model archive: lookup, license rule, upload queue
+tools/filefreak/     Node.js helper the archive runs (FileFreak SDK, pinned)
 docker/              per-runtime Dockerfiles: llama (CPU/CUDA/Vulkan), sd (image),
                      video (Wan/LTX), whisper (STT), tts (Piper), audiocpp (Pocket
                      TTS / Qwen3-TTS via audio.cpp), and ensemble (Conductor)
@@ -404,6 +407,38 @@ setup, the security model and troubleshooting, see
 > `BIND=0.0.0.0 ./scripts/macos/start.sh` or
 > `.\scripts\windows\start.ps1 -Bind 0.0.0.0`. Plain HTTP sends the token
 > unencrypted, so do that only on a network you trust.
+
+## FileFreak model archive
+The factory can keep a public copy of the open-licensed model files it downloads in
+a **FileFreak archive**, a public folder on [FileFreak.io](https://filefreak.io).
+It works like a mirror for when a Hugging Face repository is renamed, a file changes
+or Hugging Face is down.
+
+- **Reading** (any install, no key): before each download the factory looks in the
+  archive. It uses the archive's copy only when its SHA-256 matches the one Hugging
+  Face publishes. Otherwise it downloads from Hugging Face, as before. The build log
+  says which source it used. Turn it off with **Download from the archive first** on
+  the System page.
+- **Uploading** (only with an upload key): files the archive lacks are uploaded in
+  the background after a build downloads them, as public files with no Shard
+  Protection. Builds never wait for an upload, and a failed one never fails a build.
+- **License rule:** a file is uploaded only if its repository isn't gated and its
+  license is `apache-2.0`, `mit`, `bsd-2-clause`, `bsd-3-clause`, `cc-by-4.0`,
+  `cc-by-sa-4.0`, `cc0-1.0` or OpenRAIL. Llama, Gemma and other custom licenses are
+  never uploaded, and the System page says why. Reading isn't limited by license.
+- **What FileFreak sees:** which model repositories, revisions and files this install
+  looks up (from the folders it lists and the files it downloads). With a key it
+  also gets the files themselves, their LICENSE and README files, and a provenance
+  record per file.
+- **Setting the key:** paste a FileFreak API key that can create folders and upload
+  into **System → FileFreak archive → Upload key**. The account's public page must
+  be on. The key is kept in `config/filefreak.json` (mode 0600). The page shows only
+  `ffk_live_…` and the last four characters, and it is never logged.
+
+The archive runs through a small Node.js helper (`tools/filefreak`, Node 20+). The
+factory image includes it. For a native run, the start script installs it when
+Node.js is there, and warns otherwise. Details, the archive layout and the
+environment variables: **[docs/FILEFREAK.md](docs/FILEFREAK.md)**.
 
 ## Optional: cloud deploy
 `deploy/ecs-task-definition.json` runs a built image on AWS Fargate (2 vCPU /

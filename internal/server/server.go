@@ -24,6 +24,7 @@ import (
 	"github.com/seanbrill/local-llm/internal/builder"
 	"github.com/seanbrill/local-llm/internal/catalog"
 	"github.com/seanbrill/local-llm/internal/ensemble"
+	"github.com/seanbrill/local-llm/internal/filefreak"
 	"github.com/seanbrill/local-llm/internal/llm"
 	"github.com/seanbrill/local-llm/internal/version"
 )
@@ -50,6 +51,9 @@ type Server struct {
 	ens *ensemble.Store // saved Ensemble (multimodal super-model) definitions
 
 	mediaDir string // where generated clips/images are saved + served from
+
+	ff    *filefreak.Archive // the FileFreak model archive (filefreak.go); nil if its config can't be read
+	ffErr error
 
 	// Cached global GPU VRAM usage (nvidia-smi via a throwaway container is slow,
 	// so we cache for a few seconds across /api/resources polls).
@@ -148,6 +152,8 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.mux.HandleFunc("/api/resources", s.handleResources)
 	s.mux.HandleFunc("/api/system/reclaim", s.handleReclaimMemory)
 	s.registerHarness() // model gateway (/v1) + /api/harness (harness.go)
+	s.openArchive()     // the FileFreak archive, asked before every weight download (filefreak.go)
+	s.registerFileFreak()
 	return s, nil
 }
 

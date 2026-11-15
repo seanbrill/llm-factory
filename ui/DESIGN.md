@@ -14,7 +14,7 @@ HTML/CSS with the knitted MCP `get_design` (`frameId`), look at it with
 | Builds (lanes, failures) | `#builds`, `#builds/<job id>` | f10 (desktop), f17 (phone) |
 | Library | `#library`, `#library/<image ref or model id>` | f11 |
 | Harness | `#harness` | f12 |
-| System | `#system`, `#system/gpu` | f13 |
+| System | `#system`, `#system/gpu`, `#system/memory`, `#system/archive` | f13 |
 | Playground | `#playground`, `#playground/<port>` | f14 |
 | ⌘K palette | anywhere | f15 |
 
@@ -110,6 +110,7 @@ refresh plus x alert globe …). Add new ones to src/lib/icons.ts.
   `defaultsFor(model, sysinfo)`, `predictRoute(...)`, `queueItems(items, catalog)`,
   `quickBuild(model, sysinfo)`.
 - `harness.ts` — harness API types and calls.
+- `filefreak.ts` — FileFreak archive (System page) types and calls; see docs/FILEFREAK.md.
 - `format.ts` — `gb()`, `dur()`, `clock()`, `ago()`, `plural()`, `engineName()`,
   `computeName()`, `computeChip()`, `upFor()`.
 - `ui.svelte.ts` — `openPalette(seed?)`, `copyText(text)`.
@@ -129,7 +130,8 @@ Actions (POST JSON): `/api/build` (queues; `{status, id, position, engine}`),
 `/api/image/download`, `/api/model/delete {model_id}`, `/api/storage/cleanup`,
 `/api/system/reclaim`, `/api/gpu/probe`, `/api/chat/stream` (SSE),
 `/api/image/generate`, `/api/video/generate`, `/api/transcribe`, `/api/tts`,
-`/api/harness/*`. Shapes are in src/lib/types.ts and src/lib/harness.ts.
+`/api/harness/*`, `/api/filefreak/*` (status, settings, key, key/remove,
+folder/check, queue/retry, queue/remove). Shapes are in src/lib/types.ts, src/lib/harness.ts and src/lib/filefreak.ts.
 
 ## Writing
 

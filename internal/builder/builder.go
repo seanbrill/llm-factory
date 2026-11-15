@@ -14,12 +14,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,9 +52,24 @@ type Builder struct {
 	// containers (the Caddy proxy) that run on the host daemon.
 	HostDir string
 
+	// Archive, when set, is asked before every weight download: it may fill the
+	// file from the FileFreak archive, and queues what came from Hugging Face
+	// for it (internal/filefreak).
+	Archive WeightArchive
+
 	// One `<engine> build` per engine machine at a time (see acquireBuildSlot).
 	slotMu sync.Mutex
 	slots  map[string]chan struct{}
+}
+
+// WeightArchive is a second source for model weights (internal/filefreak).
+// Fetch runs before a download from url into dest. done: dest now holds the
+// file. Otherwise the builder downloads from url itself; wantSHA256 (when
+// not "") is the SHA-256 that download must match, and downloaded (when not
+// nil) is called after it with the file's SHA-256 and size. It never fails a
+// build: a problem is a line in log and a download from url as before.
+type WeightArchive interface {
+	Fetch(ctx context.Context, url, dest, label string, log func(string)) (done bool, wantSHA256 string, downloaded func(sha256 string, size int64))
 }
 
 // LogFunc receives one human-readable progress line at a time.
@@ -411,43 +429,81 @@ func audioCppServerConfig(m catalog.Model) ([]byte, error) {
 	}, "", "  ")
 }
 
-// downloadTo streams url -> dest atomically (via a .part file) with progress
-// logging. Shared by the model and projector downloaders.
+// downloadTo fetches a weight into dest: from the FileFreak archive when it
+// has the file (b.Archive), otherwise from url. Every model, projector and
+// extra weight download comes through here.
 func (b *Builder) downloadTo(ctx context.Context, url, dest, label string, log LogFunc) error {
-	log(fmt.Sprintf("Downloading %s ...", label))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	var want string
+	var downloaded func(string, int64)
+	if b.Archive != nil {
+		var done bool
+		if done, want, downloaded = b.Archive.Fetch(ctx, url, dest, label, log); done {
+			return nil
+		}
+	}
+	sum, size, err := httpDownload(ctx, url, dest, label, want, log)
 	if err != nil {
 		return err
 	}
+	if downloaded != nil {
+		downloaded(sum, size)
+	}
+	return nil
+}
+
+// httpDownload streams url -> dest atomically (via a .part file) with progress
+// logging, and returns the file's SHA-256 and size. With want, a download
+// whose SHA-256 differs is deleted and is an error.
+func httpDownload(ctx context.Context, url, dest, label, want string, log LogFunc) (string, int64, error) {
+	host := url
+	if u, err := neturl.Parse(url); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	log(fmt.Sprintf("Downloading %s from %s ...", label, host))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", 0, err
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return "", 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("download failed: HTTP %d (%s)", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return "", 0, fmt.Errorf("download failed: HTTP %d (%s)", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 	tmp := dest + ".part"
 	f, err := os.Create(tmp)
 	if err != nil {
-		return err
+		return "", 0, err
 	}
+	h := sha256.New()
 	pr := &progressReader{r: resp.Body, total: resp.ContentLength, log: log, label: label}
-	if _, err := io.Copy(f, pr); err != nil {
+	n, err := io.Copy(io.MultiWriter(f, h), pr)
+	if err != nil {
 		f.Close()
 		os.Remove(tmp)
-		return fmt.Errorf("download interrupted: %w", err)
+		return "", 0, fmt.Errorf("download interrupted: %w", err)
 	}
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
-		return err
+		return "", 0, err
+	}
+	sum := hex.EncodeToString(h.Sum(nil))
+	if want != "" && sum != want {
+		os.Remove(tmp)
+		return "", 0, fmt.Errorf("the download of %s doesn't match the SHA-256 %s publishes for it (got %s, want %s), so it was deleted: try the build again", label, host, sum, want)
 	}
 	if err := os.Rename(tmp, dest); err != nil {
-		return err
+		return "", 0, err
 	}
-	log("Saved " + label + " to models/")
-	return nil
+	if want != "" {
+		log(fmt.Sprintf("Saved %s to models/ from %s (SHA-256 checked)", label, host))
+	} else {
+		log(fmt.Sprintf("Saved %s to models/ from %s", label, host))
+	}
+	return sum, n, nil
 }
 
 // BuildOptions configures a single image build.

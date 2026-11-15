@@ -39,6 +39,12 @@ Write-Host "Building UI (Svelte -> internal/server/web)..." -ForegroundColor Cya
 docker run --rm -v "$($PWD.Path):/app" -w /app/ui node:20-alpine sh -c "npm install --no-audit --no-fund --silent && npm run build"
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: UI build failed." -ForegroundColor Red; exit 1 }
 
+# The FileFreak archive helper (docs/FILEFREAK.md): its SDK goes into
+# tools/filefreak/node_modules, which the dev container sees through the repo mount.
+Write-Host "Installing the FileFreak archive helper (tools/filefreak)..." -ForegroundColor Cyan
+docker run --rm -v "$($PWD.Path):/app" -w /app/tools/filefreak node:20-alpine sh -c "npm ci --omit=dev --no-audit --no-fund --silent"
+if ($LASTEXITCODE -ne 0) { Write-Host "WARN: npm ci in tools/filefreak failed, so the FileFreak archive is off: model files download from Hugging Face." -ForegroundColor Yellow }
+
 # UI hot-reload: a background `vite build --watch` rebuilds internal/server/web on
 # every ui/src edit; the dev container serves the fresh bundle from disk, so you
 # just refresh the browser (the Go backend hot-reloads separately via wgo).
@@ -91,6 +97,7 @@ docker run -d --name $name `
     -e "HOST_DIR=$($PWD.Path -replace '\\','/')" `
     -e "HOST_HOME=$($env:USERPROFILE -replace '\\','/')" `
     -e "FACTORY_PORT=$Port" `
+    -e FILEFREAK_ARCHIVE_URL `
     -v /var/run/docker.sock:/var/run/docker.sock `
     -v "$($PWD.Path):/app" `
     -v local-llm-gocache:/root/.cache/go-build `
