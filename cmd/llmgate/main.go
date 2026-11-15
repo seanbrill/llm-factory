@@ -8,8 +8,15 @@
 //     optional "initialization prompt" specializes a model's startup behavior
 //     for every client, without that client needing to know the prompt.
 //
+// When the image has a baked harness (HARNESS_FILE, normally
+// /etc/llmgate/harness.json, non-empty), chat completions also go through the
+// agent loop of internal/agent: the model gets tools (web search, page
+// reading, workspace files, skills, optionally a shell) that run here, inside
+// the container. GET /v1/harness describes the harness (or says there is none).
+//
 // Everything else is proxied verbatim (including SSE token streaming), so the
-// image remains a drop-in OpenAI-compatible server. Stdlib only.
+// image remains a drop-in OpenAI-compatible server. Stdlib only, plus the
+// stdlib-only internal/agent package, which the builder stages beside it.
 package main
 
 import (
@@ -29,13 +36,26 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/seanbrill/local-llm/internal/agent"
 )
+
+// maxChatBody caps a chat-completions body read for prompt injection or the
+// harness (images in vision requests make bodies large).
+const maxChatBody = agent.MaxRequestBytes
 
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("[llmgate] ")
 
 	cfg := loadConfig()
+
+	// The harness is loaded first, so a bad HARNESS_* setting stops the
+	// container with a clear message instead of serving without tools.
+	h, err := loadHarness(cfg.harnessFile, os.Getenv)
+	if err != nil {
+		log.Fatalf("harness: %v", err)
+	}
 
 	// 1. Start llama-server as a child bound to the internal upstream port.
 	child := exec.Command(cfg.llamaBin, cfg.llamaArgs()...)
@@ -59,18 +79,18 @@ func main() {
 	childDone := make(chan error, 1)
 	go func() { childDone <- child.Wait() }()
 
-	// 2. Reverse proxy with system-prompt injection.
-	gate := newGate(cfg)
+	// 2. Reverse proxy with system-prompt injection (and the harness loop).
+	gate := newGate(cfg, h)
 	httpSrv := &http.Server{Addr: ":" + strconv.Itoa(cfg.publicPort), Handler: gate}
 	go func() {
-		log.Printf("listening on :%d -> upstream :%d (inject=%q, prompt=%t)",
-			cfg.publicPort, cfg.upstreamPort, cfg.injectMode, cfg.systemPrompt != "")
+		log.Printf("listening on :%d -> upstream :%d (inject=%q, prompt=%t, harness=%t)",
+			cfg.publicPort, cfg.upstreamPort, cfg.injectMode, cfg.systemPrompt != "", h != nil)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("proxy server error: %v", err)
 		}
 	}()
 
-	err := <-childDone
+	err = <-childDone
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
@@ -101,6 +121,7 @@ type config struct {
 	extraArgs       string // optional space-separated passthrough
 	systemPrompt    string
 	injectMode      string // "missing" | "always"
+	harnessFile     string // baked harness.json; "" or an empty file = no harness
 }
 
 func loadConfig() config {
@@ -118,6 +139,7 @@ func loadConfig() config {
 		modality:        env("MODALITY", "text"),
 		extraArgs:       os.Getenv("EXTRA_ARGS"),
 		injectMode:      env("INJECT_MODE", "missing"),
+		harnessFile:     os.Getenv("HARNESS_FILE"),
 	}
 	// The baked initialization prompt: inline env wins, else a file.
 	c.systemPrompt = strings.TrimSpace(os.Getenv("SYSTEM_PROMPT"))
@@ -177,31 +199,100 @@ type gate struct {
 	proxy        *httputil.ReverseProxy
 	systemPrompt string
 	injectMode   string
+	harness      *agent.Agent   // nil: no baked harness
+	upstream     agent.Upstream // llama-server's chat completions, for the harness
 }
 
-func newGate(c config) *gate {
-	target, _ := url.Parse("http://127.0.0.1:" + strconv.Itoa(c.upstreamPort))
+func newGate(c config, h *agent.Agent) *gate {
+	base := "http://127.0.0.1:" + strconv.Itoa(c.upstreamPort)
+	target, _ := url.Parse(base)
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1 // flush immediately so SSE streaming isn't buffered
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		// Most common during the model-load window: upstream not up yet.
 		http.Error(w, "upstream not ready: "+err.Error(), http.StatusBadGateway)
 	}
-	return &gate{proxy: rp, systemPrompt: c.systemPrompt, injectMode: c.injectMode}
+	// The harness talks to llama-server directly: no proxy settings and no
+	// overall timeout (a long answer streams for minutes; the request's
+	// context ends it).
+	client := &http.Client{Transport: &http.Transport{Proxy: nil, MaxIdleConnsPerHost: 8, IdleConnTimeout: 90 * time.Second}}
+	return &gate{
+		proxy: rp, systemPrompt: c.systemPrompt, injectMode: c.injectMode,
+		harness: h, upstream: agent.HTTPUpstream(client, base+"/v1/chat/completions"),
+	}
 }
 
+// isChatPath reports whether a path is llama-server's chat-completions route
+// (it serves it with and without the /v1 prefix).
+func isChatPath(p string) bool { return p == "/v1/chat/completions" || p == "/chat/completions" }
+
 func (g *gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if g.systemPrompt != "" && r.Method == http.MethodPost &&
-		r.URL.Path == "/v1/chat/completions" {
-		if body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20)); err == nil {
-			r.Body.Close()
-			newBody := injectSystemPrompt(body, g.systemPrompt, g.injectMode)
-			r.Body = io.NopCloser(bytes.NewReader(newBody))
-			r.ContentLength = int64(len(newBody))
-			r.Header.Set("Content-Length", strconv.Itoa(len(newBody)))
+	if r.URL.Path == "/v1/harness" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		g.serveHarnessInfo(w)
+		return
+	}
+	if r.Method == http.MethodPost && isChatPath(r.URL.Path) && (g.systemPrompt != "" || g.harness != nil) {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxChatBody))
+		r.Body.Close()
+		if err != nil {
+			http.Error(w, "request body too large or unreadable: "+err.Error(), http.StatusRequestEntityTooLarge)
+			return
 		}
+		if g.systemPrompt != "" {
+			body = injectSystemPrompt(body, g.systemPrompt, g.injectMode)
+		}
+		if g.harness != nil {
+			g.harness.ServeChat(w, r, body, g.upstream)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+		r.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	}
 	g.proxy.ServeHTTP(w, r)
+}
+
+// serveHarnessInfo answers GET /v1/harness: what the baked harness offers, so
+// the factory (and any client) can tell this model runs its own tool loop.
+func (g *gate) serveHarnessInfo(w http.ResponseWriter) {
+	info := agent.DisabledInfo("llmgate")
+	if g.harness != nil {
+		info = g.harness.Info()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(info)
+}
+
+// loadHarness reads the baked harness config (plus HARNESS_* overrides) and
+// builds the agent. It returns nil when the image has no harness.
+func loadHarness(path string, getenv func(string) string) (*agent.Agent, error) {
+	cfg, ok, err := agent.Load(path, getenv)
+	if err != nil || !ok {
+		return nil, err
+	}
+	h, err := agent.New(cfg, agent.Options{
+		Host: "llmgate",
+		Logf: func(format string, args ...any) { log.Printf("[harness] "+format, args...) },
+	})
+	if err != nil {
+		return nil, err
+	}
+	info := h.Info()
+	for _, u := range info.Unavailable {
+		log.Printf("harness: %s is unavailable: %s", u.Tool, u.Reason)
+	}
+	var names []string
+	for _, t := range info.Tools {
+		names = append(names, t.Name)
+	}
+	if len(names) == 0 {
+		log.Printf("harness: none of the tools %v can run here; serving without the harness", cfg.Tools)
+		return nil, nil
+	}
+	log.Printf("harness on: %d tools (%s), max %d steps, %s per tool", len(names), strings.Join(names, ", "),
+		cfg.Limits.MaxSteps, cfg.Limits.ToolTimeout.D())
+	return h, nil
 }
 
 // injectSystemPrompt prepends (or, in "always" mode, replaces) the system

@@ -3,8 +3,10 @@
 # CPU image: compiles llama.cpp with architecture-appropriate SIMD, bakes a
 # single GGUF (provided in the build context as `model.gguf`) into the image,
 # and fronts it with the `llmgate` shim that injects the baked initialization
-# prompt. The Go builder stages model.gguf, system_prompt.txt, and gate/ into a
-# tiny temp build context.
+# prompt and, when the image bakes one, runs the agent harness (tool loop). The
+# Go builder stages model.gguf, system_prompt.txt, gate/ (llmgate + the
+# internal/agent package) and harness/ (harness.json + skills, placeholders
+# without a harness) into a tiny temp build context.
 #
 # Architecture-aware (via BuildKit's automatic TARGETARCH):
 #   amd64  -> portable x86-64 AVX2/FMA/F16C  (Intel/AMD, incl. Intel Macs)
@@ -72,8 +74,9 @@ RUN set -eux; \
 # ----------------------------------------------------------------------------
 FROM golang:1.22-bookworm AS gate
 WORKDIR /src
+# gate/ mirrors the repo: go.mod, cmd/llmgate/, internal/agent/ (stdlib only).
 COPY gate/ ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /llmgate .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /llmgate ./cmd/llmgate
 
 # ----------------------------------------------------------------------------
 # Stage 3: slim runtime with weights + prompt baked in
@@ -82,11 +85,15 @@ FROM debian:bookworm-slim AS runtime
 ARG INJECT_MODE=missing
 ARG MODALITY=text
 ARG CTX_SIZE=4096
+# /workspace is where the harness's file and shell tools work; it belongs to the
+# unprivileged llama user the container runs as. Mount a host folder there with
+# -v to keep the files (see docs/HARNESS.md, "Baked harness").
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 curl ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 llama \
-    && mkdir -p /etc/llmgate
+    && mkdir -p /etc/llmgate /workspace \
+    && chown llama /workspace
 
 COPY --from=builder /src/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 COPY --from=gate    /llmgate                              /usr/local/bin/llmgate
@@ -94,6 +101,9 @@ COPY model.gguf         /models/model.gguf
 # Always-present vision projector (empty placeholder for text; real for VLMs).
 COPY mmproj.gguf        /models/mmproj.gguf
 COPY system_prompt.txt  /etc/llmgate/system_prompt.txt
+# Agent harness: harness.json (empty = no harness) and skills/, root-owned so
+# the model can read but not change them.
+COPY harness/           /etc/llmgate/
 
 # Tunables (override per `docker run -e ...`). THREADS defaults to the container's
 # CPU count (set by llmgate); set it explicitly to cap or leave cores free.
@@ -107,7 +117,8 @@ ENV MODEL_PATH=/models/model.gguf \
     MMPROJ_PATH=/models/mmproj.gguf \
     MODALITY=${MODALITY} \
     SYSTEM_PROMPT_FILE=/etc/llmgate/system_prompt.txt \
-    INJECT_MODE=${INJECT_MODE}
+    INJECT_MODE=${INJECT_MODE} \
+    HARNESS_FILE=/etc/llmgate/harness.json
 
 EXPOSE 8080
 USER llama

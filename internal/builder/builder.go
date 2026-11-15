@@ -34,6 +34,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/seanbrill/local-llm/internal/agent"
 	"github.com/seanbrill/local-llm/internal/catalog"
 	"github.com/seanbrill/local-llm/internal/ensemble"
 )
@@ -527,6 +528,12 @@ type BuildOptions struct {
 	Route     string  // local URL alias -> http://<route>.localhost
 	Autostart bool    // run with --restart unless-stopped
 
+	// Harness, when set, bakes the agent harness (harness.json plus the
+	// skills folder) into a llama.cpp chat image: llmgate then runs the tool
+	// loop itself. Its workspace and skills paths are replaced by the image's
+	// (see NormalizeHarness). nil builds a plain model image.
+	Harness *agent.Config
+
 	// OnPlan, when set, learns which engine runs the build once the memory
 	// preflight has chosen: the target, or the other engine when the target is
 	// too small to compile (the image is transferred afterwards).
@@ -560,6 +567,15 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	// Select the runtime family, and the compute variant it actually ships (a
 	// GPU request for a CPU-only runtime such as Piper TTS builds the CPU image).
 	family := modelFamily(o.Model)
+
+	// The harness runs inside llmgate, so only llama.cpp chat models take it.
+	harnessCfg, err := NormalizeHarness(o.Harness)
+	if err != nil {
+		return err
+	}
+	if harnessCfg != nil && (family != "llama" || o.Model.Mod() == "embedding") {
+		return fmt.Errorf("the agent harness needs a llama.cpp chat model; %s is a %s model", o.Model.Name, o.Model.Mod())
+	}
 	resolved, err := b.resolveCompute(o.Model, compute)
 	if err != nil {
 		return err
@@ -719,6 +735,10 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		if err := stageGate(b.BaseDir, work); err != nil {
 			return err
 		}
+		// The agent harness config and skills (placeholders without one).
+		if err := stageHarness(b.BaseDir, work, harnessCfg, log); err != nil {
+			return err
+		}
 	}
 
 	// The python family runs a PyTorch model behind the pygate shim (interpreted,
@@ -762,6 +782,9 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	if o.CtxSize > 0 {
 		buildArgs = append(buildArgs, "--build-arg", fmt.Sprintf("CTX_SIZE=%d", o.CtxSize))
 	}
+	// A baked harness is labeled so the factory can tell the model runs its own
+	// tool loop (and clone the build with the same harness).
+	buildArgs = append(buildArgs, harnessLabels(harnessCfg)...)
 	// Podman remote (macOS GPU path): the client forwards its default seccomp
 	// profile *path* (/etc/containers/seccomp.json on Alpine) to the machine VM,
 	// which ships the profile at /usr/share/containers/seccomp.json instead, so
@@ -1871,23 +1894,13 @@ func injectMode(m string) string {
 	return "missing"
 }
 
-// stageGate copies the llmgate shim source into <work>/gate so the Dockerfile's
-// `gate` stage can compile it. The shim is stdlib-only, so a minimal go.mod with
-// no requires is enough (the in-container build needs no network).
+// stageGate copies the llmgate shim source and the agent harness package it
+// imports into <work>/gate, laid out as in this repo (cmd/llmgate,
+// internal/agent), so the Dockerfile's `gate` stage can compile
+// ./cmd/llmgate. Both are stdlib-only, so a go.mod with no requires is enough
+// (the in-container build needs no network).
 func stageGate(baseDir, work string) error {
-	src := filepath.Join(baseDir, "cmd", "llmgate", "main.go")
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return fmt.Errorf("read llmgate source (%s): %w", src, err)
-	}
-	gateDir := filepath.Join(work, "gate")
-	if err := os.MkdirAll(gateDir, 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(gateDir, "main.go"), data, 0o644); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(gateDir, "go.mod"), []byte("module llmgate\n\ngo 1.22\n"), 0o644)
+	return stageGoPackages(baseDir, work, "cmd/llmgate", "internal/agent")
 }
 
 // stageVideogate copies the videogate shim source into <work>/gate so the video

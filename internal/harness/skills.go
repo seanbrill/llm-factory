@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/seanbrill/local-llm/internal/agent"
 )
 
 // Skill is one skill folder (a directory holding SKILL.md).
@@ -28,50 +30,10 @@ var skillNameRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 // ParseFrontmatter mirrors Open Terminal's parse_skill_frontmatter: the file
 // must start with "---\n"; "key: value" lines (quotes stripped) and folded (>)
 // or literal (|) blocks are read until the closing "\n---". It returns the
-// fields and the body after the frontmatter.
+// fields and the body after the frontmatter. The baked harness
+// (internal/agent) reads skills with this same parser.
 func ParseFrontmatter(text string) (map[string]string, string) {
-	if !strings.HasPrefix(text, "---\n") {
-		return map[string]string{}, strings.TrimSpace(text)
-	}
-	end := strings.Index(text[4:], "\n---")
-	if end < 0 {
-		return map[string]string{}, strings.TrimSpace(text)
-	}
-	end += 4
-	fm := map[string]string{}
-	lines := strings.Split(text[4:end], "\n")
-	for i := 0; i < len(lines); {
-		line := lines[i]
-		trimmed := strings.TrimSpace(line)
-		colon := strings.IndexByte(line, ':')
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") || colon < 0 {
-			i++
-			continue
-		}
-		key := strings.TrimSpace(line[:colon])
-		value := strings.TrimSpace(line[colon+1:])
-		if value == ">" || value == "|" {
-			var block []string
-			i++
-			for i < len(lines) && (strings.HasPrefix(lines[i], " ") || strings.HasPrefix(lines[i], "\t")) {
-				block = append(block, strings.TrimSpace(lines[i]))
-				i++
-			}
-			if value == "|" {
-				fm[key] = strings.Join(block, "\n")
-			} else {
-				fm[key] = strings.Join(block, " ")
-			}
-			continue
-		}
-		fm[key] = strings.Trim(value, `"'`)
-		i++
-	}
-	body := ""
-	if nl := strings.IndexByte(text[end+1:], '\n'); nl >= 0 {
-		body = strings.TrimSpace(text[end+1+nl+1:])
-	}
-	return fm, body
+	return agent.ParseFrontmatter(text)
 }
 
 // ErrNoSkillsDir means the skills folder isn't there (e.g. not mounted).

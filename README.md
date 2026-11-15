@@ -330,6 +330,8 @@ cmd/ensemblegate/    the Conductor: routes a request to the right specialist and
                      starts/stops them within a VRAM budget (see docs/ENSEMBLE.md)
 internal/catalog/    config-driven model list (+ embedded default; multi-file models)
 internal/builder/    download / build / save / run / stop / list (docker|podman)
+internal/agent/      agent harness baked into llmgate: tool loop, web search,
+                     fetch, workspace files, shell, skills (docs/HARNESS.md)
 internal/ensemble/   Ensemble model + store (multimodal super-models)
 internal/server/     HTTP API + embedded vanilla-JS UI (internal/server/web)
 internal/llm/        OpenAI-compatible client (generic Chat + typed example)
