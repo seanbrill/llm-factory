@@ -8,7 +8,10 @@
 #   ./start-dev.sh            # UI at http://localhost:8799, hot-reloads
 #   PORT=9000 ./start-dev.sh
 #   BIND=0.0.0.0 ./start-dev.sh   # also reachable from your network (default:
-#                                 # this computer only; the factory has no login)
+#                                 # this computer only)
+#
+# The factory's API needs its access token (config/factory-token, saved on
+# first start); the "Open:" link printed at the end carries it.
 #
 # Stop with ./stop.sh (removes prod and dev containers).
 set -euo pipefail
@@ -68,7 +71,36 @@ docker run -d --name "$NAME" \
     "$NAME"
 
 echo "Dev factory running at http://localhost:$PORT (hot-reload on)"
-[ "$BIND" = "127.0.0.1" ] || echo "WARNING: listening on $BIND:$PORT — anyone who can reach this machine can use the factory (it has no login)."
+# The access link: wait (up to ~20 s on a first start) for the factory to save
+# its token, then print the UI's address with it. The UI is served on $PORT
+# too (vite build --watch writes it to disk), so that's the port to open.
+TOKEN=""
+tries=0
+while [ "$tries" -lt 40 ]; do
+    if [ -r config/factory-token ]; then TOKEN="$(tr -d '[:space:]' < config/factory-token || true)"; fi
+    [ "${#TOKEN}" -ge 24 ] && break
+    TOKEN=""
+    tries=$((tries + 1))
+    sleep 0.5
+done
+if [ -n "$TOKEN" ]; then
+    # Percent-encode it for the link: a generated token is hex, but one you
+    # wrote into the file yourself may hold characters like + & # %.
+    LINK_TOKEN=""
+    pos=0
+    while [ "$pos" -lt "${#TOKEN}" ]; do
+        ch="${TOKEN:$pos:1}"
+        case "$ch" in
+            [[:alnum:]._~-]) LINK_TOKEN="$LINK_TOKEN$ch" ;;
+            *) LINK_TOKEN="$LINK_TOKEN$(printf '%%%02X' "'$ch")" ;;
+        esac
+        pos=$((pos + 1))
+    done
+    echo "Open: http://localhost:$PORT/?token=$LINK_TOKEN"
+else
+    echo "Open: the access link is in the factory log (docker logs $NAME); config/factory-token didn't appear yet (the first dev start compiles the factory)."
+fi
+[ "$BIND" = "127.0.0.1" ] || echo "WARNING: listening on $BIND:$PORT — other machines can reach the factory. They still need its access token, but plain HTTP sends it unencrypted: do this only on a network you trust."
 echo "  UI:      edit ui/src/* -> auto-rebuild (vite watch) -> refresh the browser"
 echo "  Backend: edit *.go -> auto rebuild/restart (watch: docker logs -f $NAME)"
 echo "Stop:  ./stop.sh"

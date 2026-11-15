@@ -9,7 +9,11 @@
 #   ./start.sh            # build + run, UI at http://localhost:8799
 #   PORT=9000 ./start.sh
 #   BIND=0.0.0.0 ./start.sh   # also reachable from your network (default: this
-#                             # computer only; the factory has no login)
+#                             # computer only)
+#
+# The factory's API needs its access token, which the factory saves in
+# config/factory-token on first start. The "Open:" link printed at the end
+# carries it and signs your browser in.
 #
 # (For native dev without Docker you can still run:  go run ./cmd/builder)
 set -euo pipefail
@@ -80,6 +84,34 @@ docker run -d --name "$NAME" \
     "$NAME"
 
 echo "local-llm factory is running at http://localhost:$PORT"
-[ "$BIND" = "127.0.0.1" ] || echo "WARNING: listening on $BIND:$PORT — anyone who can reach this machine can use the factory (it has no login)."
+# The access link: wait (up to ~20 s on a first start) for the factory to save
+# its token, then print the UI's address with it.
+TOKEN=""
+tries=0
+while [ "$tries" -lt 40 ]; do
+    if [ -r config/factory-token ]; then TOKEN="$(tr -d '[:space:]' < config/factory-token || true)"; fi
+    [ "${#TOKEN}" -ge 24 ] && break
+    TOKEN=""
+    tries=$((tries + 1))
+    sleep 0.5
+done
+if [ -n "$TOKEN" ]; then
+    # Percent-encode it for the link: a generated token is hex, but one you
+    # wrote into the file yourself may hold characters like + & # %.
+    LINK_TOKEN=""
+    pos=0
+    while [ "$pos" -lt "${#TOKEN}" ]; do
+        ch="${TOKEN:$pos:1}"
+        case "$ch" in
+            [[:alnum:]._~-]) LINK_TOKEN="$LINK_TOKEN$ch" ;;
+            *) LINK_TOKEN="$LINK_TOKEN$(printf '%%%02X' "'$ch")" ;;
+        esac
+        pos=$((pos + 1))
+    done
+    echo "Open: http://localhost:$PORT/?token=$LINK_TOKEN"
+else
+    echo "Open: the access link is in the factory log (docker logs $NAME); config/factory-token didn't appear."
+fi
+[ "$BIND" = "127.0.0.1" ] || echo "WARNING: listening on $BIND:$PORT — other machines can reach the factory. They still need its access token, but plain HTTP sends it unencrypted: do this only on a network you trust."
 echo "Logs:  docker logs -f $NAME"
 echo "Stop:  ./stop.sh"

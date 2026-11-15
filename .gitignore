@@ -23,6 +23,10 @@
 /config/Caddyfile
 # Harness settings + secrets (gateway key, terminal key); written 0600.
 /config/harness.json
+# The factory's access token (every /api call needs it); written 0600 via a
+# temp file that a crash mid-write could leave behind.
+/config/factory-token
+/config/.factory-token-*
 
 # The harness workspace terminal's shared folder (the model's files).
 /workspace/*

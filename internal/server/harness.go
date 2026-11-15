@@ -77,7 +77,9 @@ func (s *Server) registerHarness() {
 	newHarnessAPI(s, filepath.Join(s.b.ConfigDir, "harness.json")).mount(s.mux)
 }
 
-func (h *harnessAPI) mount(mux *http.ServeMux) {
+func (h *harnessAPI) mount(mux interface {
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}) {
 	mux.HandleFunc("/v1/", h.handleGateway)
 	mux.HandleFunc("/api/harness/status", guarded(http.MethodGet, h.handleStatus))
 	mux.HandleFunc("/api/harness/gateway/key", guarded(http.MethodPost, h.handleGatewayKey))

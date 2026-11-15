@@ -9,6 +9,10 @@
 #   $env:PORT="9000"; ./start-native.ps1
 #   $env:OPEN="0"; ./start-native.ps1     # don't auto-open the browser
 #
+# The factory's API needs its access token (config\factory-token, saved on
+# first start, or FACTORY_TOKEN). The factory logs an "Open:" link carrying it
+# and opens that link in your browser itself.
+#
 # Stop with Ctrl-C.
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..\..")
@@ -29,6 +33,9 @@ if (Get-Command podman -ErrorAction SilentlyContinue) {
 }
 
 Write-Host "Factory (native — sees host podman + docker): http://127.0.0.1:$port   (Ctrl-C to stop)"
-if (($env:OPEN -ne "0")) { Start-Process "http://127.0.0.1:$port" }
+Write-Host "Its access link (Open: http://127.0.0.1:$port/?token=...) is in the log below."
+# The factory opens the browser itself, at the link with the token (a plain
+# http://127.0.0.1:$port tab would only show the lock screen).
+$openFlag = if ($env:OPEN -eq "0") { "-open=false" } else { "-open=true" }
 
-& .\local-llm.exe -addr "127.0.0.1:$port"
+& .\local-llm.exe -addr "127.0.0.1:$port" $openFlag
