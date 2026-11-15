@@ -179,6 +179,13 @@ func (s *Server) handleEnsembleDelete(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// A running one would be left behind with nothing on the page to stop it.
+	if runs, err := s.ensembleRuns(r.Context()); err == nil {
+		if _, ok := runs[req.ID]; ok {
+			errorJSON(w, http.StatusConflict, "it's still running. Stop it first")
+			return
+		}
+	}
 	if err := s.ens.Delete(req.ID); err != nil {
 		errorJSON(w, http.StatusInternalServerError, err.Error())
 		return
@@ -319,22 +326,37 @@ func (s *Server) gateStatus(ctx context.Context, port int) (*ensemble.Status, er
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, errNotGate
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	var st ensemble.Status
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&st); err != nil || st.ID == "" {
-		return nil, errors.New("not an ensemble")
+		return nil, errNotGate
 	}
 	return &st, nil
 }
 
+// errNotGate: something answers on the port, and it isn't a Conductor.
+var errNotGate = errors.New("not an ensemble")
+
+// forgetGatePort drops what ensembleAt remembers about a port (a new
+// container was just started on it).
+func (s *Server) forgetGatePort(port int) {
+	s.gatePortsMu.Lock()
+	delete(s.notGate, port)
+	s.gatePortsMu.Unlock()
+}
+
 // ensembleAt reports whether a model port is a Conductor, and its status.
-// Ports that aren't are remembered for a little while, so chat with a plain
-// model doesn't ask every time.
+// Ports that aren't are remembered (10 minutes when something else answered,
+// 15 s when nothing did), so chat with a plain model doesn't ask every time;
+// running a container on a port forgets it.
 func (s *Server) ensembleAt(ctx context.Context, port int) *ensemble.Status {
 	s.gatePortsMu.Lock()
-	if t, ok := s.notGate[port]; ok && time.Since(t) < 15*time.Second {
+	if t, ok := s.notGate[port]; ok && time.Now().Before(t) {
 		s.gatePortsMu.Unlock()
 		return nil
 	}
@@ -346,7 +368,11 @@ func (s *Server) ensembleAt(ctx context.Context, port int) *ensemble.Status {
 		s.notGate = map[int]time.Time{}
 	}
 	if err != nil {
-		s.notGate[port] = time.Now()
+		ttl := 15 * time.Second
+		if errors.Is(err, errNotGate) {
+			ttl = 10 * time.Minute
+		}
+		s.notGate[port] = time.Now().Add(ttl)
 		return nil
 	}
 	delete(s.notGate, port)
@@ -567,6 +593,7 @@ func (s *Server) handleEnsembleRun(w http.ResponseWriter, r *http.Request) {
 	if err := s.b.RegenProxy(r.Context()); err != nil {
 		log.Printf("regen proxy after ensemble run: %v", err)
 	}
+	s.forgetGatePort(port)
 	// Push the persona as soon as the Conductor answers.
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

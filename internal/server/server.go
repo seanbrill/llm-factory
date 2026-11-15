@@ -597,6 +597,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if err := s.b.RegenProxy(r.Context()); err != nil {
 		log.Printf("regen proxy after run: %v", err) // non-fatal
 	}
+	s.forgetGatePort(req.Port) // it may be an ensemble now
 	resp := map[string]any{"id": id, "port": req.Port, "engine": engine, "compute": compute}
 	if warning != "" {
 		resp["warning"] = warning

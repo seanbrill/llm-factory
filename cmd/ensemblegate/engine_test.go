@@ -38,7 +38,21 @@ type dockerCtr struct {
 	State  string            `json:"state"`
 }
 
+// lockState serializes fake docker processes over the state file (StopAll
+// runs several `docker rm` at once), so no update is lost.
+func lockState(path string) func() {
+	lock := path + ".lock"
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(2 * time.Millisecond) {
+		if f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err == nil {
+			f.Close()
+			return func() { _ = os.Remove(lock) }
+		}
+	}
+	return func() {}
+}
+
 func fakeDocker(path string, args []string) int {
+	defer lockState(path)() // registered first, so it unlocks after the state is written
 	var st dockerState
 	if b, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(b, &st)

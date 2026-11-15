@@ -150,7 +150,7 @@ func TestStartTimeout(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	te.g.mg.members[ensemble.ToolChat].m.Image = "local-llm/stuck"
-	te.g.mg.startTimeout = 200 * time.Millisecond
+	te.g.mg.startTimeout = time.Second // room for several probes under -race on a busy machine
 	err := te.g.mg.Start(context.Background(), ensemble.ToolChat)
 	if err == nil || !strings.Contains(err.Error(), "didn't answer its health check within") || !strings.Contains(err.Error(), "503") {
 		t.Fatalf("err = %v", err)

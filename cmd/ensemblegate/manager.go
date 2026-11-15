@@ -428,7 +428,11 @@ func (mg *Manager) waitHealthy(ctx context.Context, st *member, port int) error 
 		if ok {
 			return nil
 		}
-		last = why
+		// A probe cut off by the start deadline says nothing about the
+		// member: keep the last real answer ("loading") for the error.
+		if ctx.Err() == nil {
+			last = why
+		}
 		if n%4 == 0 { // now and then: is the container still there?
 			if state, err := mg.eng.State(ctx, st.name); err == nil && state != "running" && state != "created" && state != "restarting" {
 				if state == "" {
