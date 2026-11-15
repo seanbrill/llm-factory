@@ -11,6 +11,8 @@
 #   ./start-native.sh                 # http://127.0.0.1:8799
 #   PORT=9000 ./start-native.sh
 #   OPEN=0 ./start-native.sh          # don't auto-open the browser
+#   FACTORY_DOCKER_SOCK=~/.lima/docker/sock/docker.sock ./start-native.sh
+#                                     # drive another Docker Engine
 #
 # The factory's API needs its access token (config/factory-token, saved on
 # first start, or FACTORY_TOKEN). The factory logs an "Open:" link carrying it
@@ -26,6 +28,19 @@ command -v go >/dev/null 2>&1 || { echo "Go is required (brew install go)." >&2;
 # PATH omits. The factory also falls back to this dir internally, but adding it
 # here lets the host podman CLI resolve its own connection config cleanly too.
 [ -d /opt/podman/bin ] && PATH="/opt/podman/bin:$PATH"
+
+# Another Docker Engine to build and run models on, by its socket — for example
+# Docker Engine in a Lima or Colima VM started with vmType krunkit, whose
+# virtio-gpu can give containers the Mac's GPU (experimental). The docker CLI
+# the factory runs follows DOCKER_HOST.
+if [ -n "${FACTORY_DOCKER_SOCK:-}" ]; then
+  if [ ! -S "$FACTORY_DOCKER_SOCK" ]; then
+    echo "FACTORY_DOCKER_SOCK=$FACTORY_DOCKER_SOCK isn't a socket. Start that VM, or unset FACTORY_DOCKER_SOCK to use the default Docker." >&2
+    exit 1
+  fi
+  export DOCKER_HOST="unix://$FACTORY_DOCKER_SOCK"
+  echo "Docker engine for models: $FACTORY_DOCKER_SOCK (FACTORY_DOCKER_SOCK)"
+fi
 
 PORT="${PORT:-8799}"
 mkdir -p models images config

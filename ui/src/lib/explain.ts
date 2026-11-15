@@ -122,7 +122,14 @@ export function explainFailure(job: BuildJob, log = ""): Explanation | null {
       tone: "er",
       title: `${eng} can't give containers the GPU.`,
       why: "It has no GPU device (/dev/dri) on this machine.",
-      fixes: [{ label: "Build GPU (Vulkan) images for Podman, which passes the Apple GPU through" }, { label: "Check GPU access on System", action: "system" }],
+      fixes:
+        job.engine === "podman"
+          ? [{ label: "Use a libkrun Podman machine, which passes the Apple GPU through" }, { label: "Check GPU access on System", action: "system" }]
+          : [
+              { label: "Build GPU (Vulkan) images for Podman, which passes the Apple GPU through" },
+              { label: "Or switch Docker Desktop to Docker VMM (Settings → General → Virtual Machine Manager), then check GPU access again (experimental)" },
+              { label: "Check GPU access on System", action: "system" },
+            ],
     };
   }
 

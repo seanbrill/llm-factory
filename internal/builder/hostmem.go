@@ -31,6 +31,35 @@ var (
 	hostMemNative float64
 )
 
+// HostOS is the computer's OS as Go names it ("darwin", "linux", "windows"),
+// "" when unknown. The factory usually runs in a Linux container, where
+// runtime.GOOS says nothing about the host, so the start scripts pass it as
+// FACTORY_HOST_OS; a factory running natively knows it itself.
+func HostOS() string {
+	if v, ok := os.LookupEnv("FACTORY_HOST_OS"); ok && strings.TrimSpace(v) != "" {
+		return normalizeOS(v)
+	}
+	if !inContainer() {
+		return runtime.GOOS
+	}
+	return ""
+}
+
+// normalizeOS maps what a start script may say (uname -s: "Darwin", "Linux",
+// Git Bash's "MINGW64_NT-10.0-…"; PowerShell's "windows") onto Go's names;
+// anything else is passed through lower-cased.
+func normalizeOS(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch {
+	case v == "darwin" || v == "macos" || v == "mac" || v == "osx":
+		return "darwin"
+	case v == "windows" || v == "win" || v == "win32" || v == "windows_nt",
+		strings.HasPrefix(v, "mingw"), strings.HasPrefix(v, "msys"), strings.HasPrefix(v, "cygwin"):
+		return "windows"
+	}
+	return v
+}
+
 func nativeHostMemGB(ctx context.Context) float64 {
 	switch runtime.GOOS {
 	case "darwin":

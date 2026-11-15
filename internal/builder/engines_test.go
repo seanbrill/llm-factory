@@ -49,28 +49,40 @@ func TestParseMemCPU(t *testing.T) {
 }
 
 func TestEngineGPU(t *testing.T) {
-	cases := []struct{ factoryGPU, engine, want string }{
-		{"vulkan", "podman", "vulkan"}, // libkrun Podman machine: the Mac GPU path
-		{"vulkan", "docker", ""},       // ...which Docker Desktop doesn't get
-		{"cuda", "docker", "cuda"},     // NVIDIA host: Docker + Container Toolkit
-		{"cuda", "podman", ""},
-		{"", "docker", ""},
-		{"", "podman", ""},
+	cases := []struct {
+		name               string
+		factoryGPU, engine string
+		probeDRI           bool
+		want, from         string
+	}{
+		{"libkrun podman: the Mac GPU path", "vulkan", "podman", false, "vulkan", "host"},
+		{"docker desktop, never checked", "vulkan", "docker", false, "", ""},
+		{"docker vmm checked: same as podman", "vulkan", "docker", true, "vulkan", "probe"},
+		{"docker in a krunkit VM, no podman", "", "docker", true, "vulkan", "probe"},
+		{"host podman wins over its own probe", "vulkan", "podman", true, "vulkan", "host"},
+		{"nvidia host: docker is cuda", "cuda", "docker", false, "cuda", "host"},
+		{"nvidia host: cuda wins over /dev/dri", "cuda", "docker", true, "cuda", "host"},
+		{"nvidia host: podman's /dev/dri is the nvidia card", "cuda", "podman", true, "", ""},
+		{"linux amd/intel docker", "", "docker", true, "vulkan", "probe"},
+		{"linux podman with a render node", "", "podman", true, "vulkan", "probe"},
+		{"nothing", "", "docker", false, "", ""},
+		{"nothing on podman", "", "podman", false, "", ""},
 	}
 	for _, c := range cases {
-		if got := engineGPU(c.factoryGPU, c.engine); got != c.want {
-			t.Errorf("engineGPU(%q, %q) = %q, want %q", c.factoryGPU, c.engine, got, c.want)
+		got, from := engineGPU(c.factoryGPU, c.engine, c.probeDRI)
+		if got != c.want || from != c.from {
+			t.Errorf("%s: engineGPU(%q, %q, %v) = %q, %q; want %q, %q", c.name, c.factoryGPU, c.engine, c.probeDRI, got, from, c.want, c.from)
 		}
 	}
 }
 
 func TestSysInfoSummarize(t *testing.T) {
 	docker := EngineResources{Engine: "docker", Reachable: true, MemGB: 18.8, CPUs: 14}
-	podman := EngineResources{Engine: "podman", Reachable: true, MemGB: 2.0, CPUs: 7, GPU: "vulkan"}
+	podman := EngineResources{Engine: "podman", Reachable: true, MemGB: 2.0, CPUs: 7, GPU: "vulkan", GPUFrom: "host"}
 
 	t.Run("mac with a small libkrun machine", func(t *testing.T) {
 		si := SysInfo{Engines: []EngineResources{docker, podman}}
-		si.summarize("vulkan")
+		si.summarize()
 		// Top-level numbers now belong to the GPU engine, not Docker's RAM next
 		// to Podman's GPU.
 		if si.Engine != "podman" || si.MemGB != 2.0 || si.CPUs != 7 || si.GPU != "vulkan" {
@@ -87,15 +99,15 @@ func TestSysInfoSummarize(t *testing.T) {
 		big := podman
 		big.MemGB = 12.6
 		si := SysInfo{Engines: []EngineResources{docker, big}}
-		si.summarize("vulkan")
+		si.summarize()
 		if si.Engines[1].LowMemory {
 			t.Error("a 12.6 GB GPU machine shouldn't be flagged")
 		}
 	})
 	t.Run("podman machine stopped", func(t *testing.T) {
-		down := EngineResources{Engine: "podman", GPU: "vulkan"}
+		down := EngineResources{Engine: "podman", GPU: "vulkan", GPUFrom: "host"}
 		si := SysInfo{Engines: []EngineResources{docker, down}}
-		si.summarize("vulkan")
+		si.summarize()
 		if si.Engine != "docker" || si.GPU != "" || si.MemGB != 18.8 {
 			t.Errorf("top-level = %s %q %.1f, want docker's own numbers with no GPU", si.Engine, si.GPU, si.MemGB)
 		}
@@ -109,27 +121,106 @@ func TestSysInfoSummarize(t *testing.T) {
 	})
 	t.Run("nvidia host", func(t *testing.T) {
 		d := docker
-		d.GPU = "cuda"
+		d.GPU, d.GPUFrom = "cuda", "host"
 		si := SysInfo{Engines: []EngineResources{d}}
-		si.summarize("cuda")
+		si.summarize()
 		if si.DefaultEngine != "docker" || si.DefaultCompute != "cuda" || si.GPU != "cuda" {
 			t.Errorf("defaults = %s/%s gpu %q, want docker/cuda", si.DefaultEngine, si.DefaultCompute, si.GPU)
 		}
 	})
 	t.Run("cpu only", func(t *testing.T) {
 		si := SysInfo{Engines: []EngineResources{docker, {Engine: "podman", Reachable: true, MemGB: 4, CPUs: 4}}}
-		si.summarize("")
+		si.summarize()
 		if si.DefaultEngine != "docker" || si.DefaultCompute != "cpu" || si.Engine != "docker" {
 			t.Errorf("defaults = %s/%s (top %s), want docker/cpu", si.DefaultEngine, si.DefaultCompute, si.Engine)
 		}
 	})
 	t.Run("only podman answers", func(t *testing.T) {
 		si := SysInfo{Engines: []EngineResources{{Engine: "docker"}, {Engine: "podman", Reachable: true, MemGB: 8, CPUs: 4}}}
-		si.summarize("")
+		si.summarize()
 		if si.DefaultEngine != "podman" || si.DefaultCompute != "cpu" {
 			t.Errorf("defaults = %s/%s, want podman/cpu", si.DefaultEngine, si.DefaultCompute)
 		}
 	})
+	t.Run("docker vmm and no podman", func(t *testing.T) {
+		d := docker
+		d.GPU, d.GPUFrom = "vulkan", "probe"
+		si := SysInfo{Engines: []EngineResources{d}}
+		si.summarize()
+		if si.DefaultEngine != "docker" || si.DefaultCompute != "vulkan" || si.GPU != "vulkan" || si.Engines[0].LowMemory {
+			t.Errorf("defaults = %s/%s gpu %q low %v, want docker/vulkan", si.DefaultEngine, si.DefaultCompute, si.GPU, si.Engines[0].LowMemory)
+		}
+	})
+}
+
+// Two engines give containers the GPU (a libkrun Podman machine and Docker
+// VMM): GPU work defaults to the one with more usable memory.
+func TestTwoGPUEngines(t *testing.T) {
+	gpu := func(engine string, up bool, mem float64, from string) EngineResources {
+		e := EngineResources{Engine: engine, Reachable: up, GPU: "vulkan", GPUFrom: from}
+		if up {
+			e.MemGB, e.CPUs = mem, 8
+		}
+		return e
+	}
+	cases := []struct {
+		name       string
+		docker     EngineResources
+		podman     EngineResources
+		want       string
+		lowDocker  bool
+		lowPodman  bool
+		topMem     float64
+		wantGPUTop string
+	}{
+		{"docker vmm bigger than a 2 GB podman", gpu("docker", true, 18.8, "probe"), gpu("podman", true, 2.0, "host"), "docker", false, true, 18.8, "vulkan"},
+		{"podman bigger than docker", gpu("docker", true, 8.0, "probe"), gpu("podman", true, 12.6, "host"), "podman", false, false, 12.6, "vulkan"},
+		{"same size: the verified libkrun path", gpu("docker", true, 12.0, "probe"), gpu("podman", true, 12.0, "host"), "podman", false, false, 12.0, "vulkan"},
+		{"podman stopped", gpu("docker", true, 8.0, "probe"), gpu("podman", false, 0, "host"), "docker", false, false, 8.0, "vulkan"},
+		{"docker stopped", gpu("docker", false, 0, "probe"), gpu("podman", true, 4.0, "host"), "podman", false, true, 4.0, "vulkan"},
+		{"both small: still the bigger", gpu("docker", true, 5.0, "probe"), gpu("podman", true, 2.0, "host"), "docker", true, true, 5.0, "vulkan"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			si := SysInfo{Engines: []EngineResources{c.docker, c.podman}}
+			si.summarize()
+			if si.DefaultEngine != c.want || si.DefaultCompute != "vulkan" {
+				t.Errorf("defaults = %s/%s, want %s/vulkan", si.DefaultEngine, si.DefaultCompute, c.want)
+			}
+			if si.Engine != c.want || si.MemGB != c.topMem || si.GPU != c.wantGPUTop {
+				t.Errorf("top-level = %s %.1f %q", si.Engine, si.MemGB, si.GPU)
+			}
+			if si.Engines[0].LowMemory != c.lowDocker || si.Engines[1].LowMemory != c.lowPodman {
+				t.Errorf("low_memory = docker %v podman %v, want %v %v", si.Engines[0].LowMemory, si.Engines[1].LowMemory, c.lowDocker, c.lowPodman)
+			}
+			if g := preferredGPUEngine(si.Engines, "vulkan"); g == nil || g.Engine != c.want {
+				t.Errorf("preferredGPUEngine(vulkan) = %v", g)
+			}
+			if g := preferredGPUEngine(si.Engines, "cuda"); g != nil {
+				t.Errorf("preferredGPUEngine(cuda) = %s, want none", g.Engine)
+			}
+		})
+	}
+}
+
+// A small Docker VMM borrows Podman to compile, just like a small Podman
+// machine borrows Docker: decideBuild doesn't care which engine has the GPU.
+func TestDecideBuildDockerGPU(t *testing.T) {
+	mem := func(gb float64) engineMem { return engineMem{GB: gb} }
+	plan, err := decideBuild("docker", "vulkan", 6, map[string]engineMem{"docker": mem(4.0), "podman": mem(12.6)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Build != "podman" || plan.Target != "docker" || !plan.Transfer {
+		t.Errorf("plan = %+v, want build on podman, transfer to docker", plan)
+	}
+	if !strings.Contains(plan.Note, "Docker has 4.0 GB") || !strings.Contains(plan.Note, "compiles on the Podman machine") {
+		t.Errorf("note = %q", plan.Note)
+	}
+	_, err = decideBuild("docker", "vulkan", 6, map[string]engineMem{"docker": mem(4.0), "podman": mem(2.0)})
+	if err == nil || !strings.Contains(err.Error(), "Docker Desktop → Settings → Resources → Memory") {
+		t.Errorf("err = %v, want the Docker memory fix", err)
+	}
 }
 
 func TestCompileFloor(t *testing.T) {
@@ -287,25 +378,41 @@ func TestGPUDeviceHint(t *testing.T) {
 	dockerOut := `docker: Error response from daemon: error gathering device information while adding custom device "/dev/dri": no such file or directory.`
 	podmanOut := `Error: stat /dev/dri: no such file or directory`
 
-	mac := gpuDeviceHint("docker", "vulkan", dockerOut, true)
-	if mac != "Docker Desktop on this Mac has no GPU device under Apple Virtualization. Run this image on Podman, or switch Docker Desktop to Docker VMM (Settings → General → Virtual Machine Manager) and try again." {
-		t.Errorf("mac docker hint = %q", mac)
+	// Docker Desktop on a Mac: the actionable message — switch to Docker VMM,
+	// then check again; or run it on Podman.
+	mac := gpuDeviceHint("docker", "vulkan", dockerOut, dockerDesktopOnMac)
+	for _, want := range []string{
+		"Docker Desktop on this Mac", "Apple Virtualization", "Docker VMM",
+		"Settings → General → Virtual Machine Manager", "Check GPU access", "run this image on Podman",
+	} {
+		if !strings.Contains(mac, want) {
+			t.Errorf("mac docker hint lacks %q: %s", want, mac)
+		}
 	}
-	if h := gpuDeviceHint("docker", "vulkan", dockerOut, false); !strings.Contains(h, "/dev/dri") || strings.Contains(h, "Mac") {
+	lima := gpuDeviceHint("docker", "vulkan", dockerOut, dockerVMOnMac)
+	for _, want := range []string{"krunkit", "Check GPU access", "run this image on Podman"} {
+		if !strings.Contains(lima, want) {
+			t.Errorf("lima docker hint lacks %q: %s", want, lima)
+		}
+	}
+	if strings.Contains(lima, "Docker Desktop") {
+		t.Errorf("a Lima VM isn't Docker Desktop: %s", lima)
+	}
+	if h := gpuDeviceHint("docker", "vulkan", dockerOut, dockerElsewhere); !strings.Contains(h, "/dev/dri") || strings.Contains(h, "Mac") {
 		t.Errorf("linux docker hint = %q", h)
 	}
-	if h := gpuDeviceHint("podman", "vulkan", podmanOut, false); !strings.Contains(h, "libkrun") {
+	if h := gpuDeviceHint("podman", "vulkan", podmanOut, dockerElsewhere); !strings.Contains(h, "libkrun") {
 		t.Errorf("podman hint = %q", h)
 	}
-	if h := gpuDeviceHint("docker", "cpu", dockerOut, true); h != "" {
+	if h := gpuDeviceHint("docker", "cpu", dockerOut, dockerDesktopOnMac); h != "" {
 		t.Errorf("a CPU run gets no GPU hint, got %q", h)
 	}
-	if h := gpuDeviceHint("docker", "vulkan", "port is already allocated", true); h != "" {
+	if h := gpuDeviceHint("docker", "vulkan", "port is already allocated", dockerDesktopOnMac); h != "" {
 		t.Errorf("unrelated failure got %q", h)
 	}
 	// Without the Run-time context, the generic matcher still explains it.
 	raw := errors.New("docker run: exit status 125: " + dockerOut)
-	if h := ClassifyEngineError(raw); !strings.Contains(h, "no GPU device (/dev/dri)") {
+	if h := ClassifyEngineError(raw); !strings.Contains(h, "no GPU device (/dev/dri)") || !strings.Contains(h, "Docker VMM") {
 		t.Errorf("ClassifyEngineError(/dev/dri) = %q", h)
 	}
 	macInfo := `Docker Desktop|7.0.14-linuxkit|["com.docker.desktop.address=unix:///Users/me/Library/Containers/com.docker.docker/Data/docker-cli.sock"]`
@@ -319,6 +426,33 @@ func TestGPUDeviceHint(t *testing.T) {
 	// ...and the existing classifications are unchanged.
 	if h := ClassifyEngineError(errors.New("Bind for 127.0.0.1:8080 failed: port is already allocated")); !strings.Contains(h, "port") {
 		t.Errorf("port hint = %q", h)
+	}
+}
+
+func TestDockerWhere(t *testing.T) {
+	desktop, _ := parseEngineInfo([]byte(dockerInfoMac))
+	lima, _ := parseEngineInfo([]byte(dockerInfoLima))
+	linuxDD := engineInfo{Identity: EngineIdentity{System: "Docker Desktop", Kernel: "6.12.54-linuxkit"},
+		Labels: []string{"com.docker.desktop.address=unix:///home/me/.docker/desktop/docker-cli.sock"}}
+	cases := []struct {
+		name   string
+		hostOS string
+		in     engineInfo
+		want   dockerWhere
+	}{
+		{"docker desktop on a mac", "darwin", desktop, dockerDesktopOnMac},
+		{"lima docker on a mac", "darwin", lima, dockerVMOnMac},
+		{"docker desktop on a mac, host os unknown", "", desktop, dockerDesktopOnMac},
+		{"lima, host os unknown", "", lima, dockerElsewhere},
+		{"docker engine on linux", "linux", lima, dockerElsewhere},
+		{"docker desktop on linux", "linux", linuxDD, dockerElsewhere},
+		{"docker desktop on linux, host os unknown", "", linuxDD, dockerElsewhere},
+		{"mac, docker didn't answer", "darwin", engineInfo{}, dockerVMOnMac},
+	}
+	for _, c := range cases {
+		if got := dockerWhereOf(c.hostOS, c.in); got != c.want {
+			t.Errorf("%s: dockerWhereOf = %d, want %d", c.name, got, c.want)
+		}
 	}
 }
 

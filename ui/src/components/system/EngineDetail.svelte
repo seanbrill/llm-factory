@@ -1,8 +1,9 @@
 <script lang="ts">
   // One engine on System (sheet frame f13): its machine (memory, CPUs, how many
   // compile jobs it runs), whether containers get a GPU there and why — from
-  // /api/sysinfo, then from the GPU access check once it has run — and how to
-  // change its memory, which is done on the host.
+  // /api/sysinfo, including the factory's saved GPU check (when it ran, and
+  // whether the engine's machine changed since) — and how to change its
+  // memory, which is done on the host.
   import Icon from "../Icon.svelte";
   import CodeLine from "../CodeLine.svelte";
   import { sysinfo } from "../../lib/stores";
@@ -10,11 +11,13 @@
   import { ago, computeName, engineName } from "../../lib/format";
   import { DOCKER_MEMORY_PATH } from "../../lib/explain";
   import {
+    checkFor,
     checkGPU,
     compileFloor,
     compileJobs,
     engineTitle,
     engineVer,
+    everChecked,
     fallbackFor,
     gpuCheck,
     hostMem,
@@ -24,7 +27,7 @@
     PODMAN_START_CMD,
     podmanFixNoRoom,
     podmanMemoryCmd,
-    probeFor,
+    renderAccessText,
     startScript,
     vmGB,
   } from "../../lib/system.svelte";
@@ -37,14 +40,20 @@
   const podman = $derived(e.engine === "podman");
   const down = $derived(!e.reachable);
   const low = $derived(e.reachable && !!e.low_memory);
-  const probe = $derived(probeFor(e.engine));
+  const check = $derived(checkFor(si, e.engine));
+  const stale = $derived(!!check?.stale);
+  // "Its kernel changed (7.0.14-linuxkit → 7.1.2-linuxkit)"
+  const staleWhy = $derived.by(() => {
+    const r = check?.stale_reason || "its machine changed";
+    return r.charAt(0).toUpperCase() + r.slice(1);
+  });
   const ver = $derived(engineVer.map?.[e.engine] || "");
 
   const title = $derived(engineTitle(e.engine, si));
   const sub = $derived(
     [
       ver ? (podman ? ver : `Engine ${ver}`) : "",
-      podman ? (e.gpu === "vulkan" ? "libkrun machine" : "Podman machine") : mac ? "Linux VM" : "",
+      podman ? (e.gpu === "vulkan" && e.gpu_from === "host" ? "libkrun machine" : "Podman machine") : mac ? "Linux VM" : "",
     ]
       .filter(Boolean)
       .join(" · ") || "Container engine",
@@ -68,25 +77,42 @@
         ". A busy engine runs fewer.",
   );
 
-  // GPU: what reaches containers here, and why.
-  const gpuYes = $derived(probe ? probe.reachable && probe.dri : !!e.gpu);
+  // GPU: what reaches containers here, and why. The server decides (e.gpu): the
+  // start script's GPU, or one the saved GPU check found while the engine's
+  // machine is still the one it checked.
+  const gpuYes = $derived(!!e.gpu);
   const gpuTitle = $derived.by(() => {
-    if (probe && !probe.reachable) return "Couldn't check: it isn't running";
-    if (e.gpu && (!probe || probe.dri)) return `GPU: ${computeName(e.gpu)}${mac && e.gpu === "vulkan" ? " on this Mac's GPU" : ""}`;
-    if (probe?.dri) return "A GPU device reaches containers";
-    if (e.gpu) return "GPU expected, but no device reached the container";
+    if (check && !check.reachable) return "Couldn't check: it isn't running";
+    if (e.gpu) {
+      return `GPU: ${computeName(e.gpu)}${mac && e.gpu === "vulkan" ? " on this Mac's GPU" : ""}${e.gpu_experimental ? " (experimental)" : ""}`;
+    }
+    if (stale && check?.dri) return "GPU unknown until it's checked again";
+    if (check?.source === "run") return "No GPU device: a Vulkan run found none";
+    if (check?.dri) return "A GPU device reaches containers, but models can't use it";
     return "No GPU for models";
   });
   const gpuText = $derived.by(() => {
-    if (probe) return probe.verdict;
+    if (stale && check?.dri && !e.gpu) {
+      return `The GPU check found a GPU device here ${ago(check.checked_at)}, but ${check.stale_reason || "its machine changed"}, so GPU builds don't come here until it's checked again.`;
+    }
+    if (check) return check.verdict;
     const when = down ? " while the machine runs" : "";
     if (e.gpu === "vulkan") return mac ? `libkrun passes the Mac's GPU into containers as Vulkan${when}.` : `Containers here get the GPU through Vulkan${when}.`;
     if (e.gpu === "cuda") return `Containers here get the NVIDIA GPU through CUDA${when}.`;
     if (podman) return "This Podman machine doesn't pass a GPU through, so containers run on the CPU.";
     return mac
-      ? "Docker on a Mac doesn't give Linux containers a Vulkan or Metal GPU, so models here run on the CPU."
+      ? "Docker Desktop's default VM (Apple Virtualization) gives containers no GPU, so models here run on the CPU. Its Docker VMM may (experimental): switch to it, then check GPU access."
       : "Containers on this engine run on the CPU.";
   });
+  // When the check ran, and what it means for the GPU here.
+  const when = $derived.by(() => {
+    if (!check?.checked_at) return "";
+    const t = ago(check.checked_at);
+    if (check.source === "run") return `A Vulkan run found no GPU device here ${t}.`;
+    if (e.gpu_from === "probe") return `${engineName(e.engine)}'s GPU comes from the GPU check, ${t}.`;
+    return `Checked ${t}.`;
+  });
+  const access = $derived(check?.dri ? renderAccessText(check) : "");
   const floorGPU = $derived(compileFloor(si, e.gpu || "vulkan"));
   const fb = $derived(low ? fallbackFor(si, e, e.gpu || "vulkan") : undefined);
 
@@ -118,18 +144,37 @@
       <b>{gpuTitle}</b>
       {gpuText}
       {#if low && e.gpu}{" Needs more memory before it's useful."}{/if}
-      {#if probe?.reachable}
+      {#if check?.reachable}
         <span class="facts">
-          {#if probe.system}<span>{probe.system}</span>{/if}
-          <span><code>/dev/dri</code>: {probe.dri_devices?.length ? probe.dri_devices.join(", ") : probe.dri_error || "none"}</span>
-          {#if probe.cdi_devices?.length}
-            <span>CDI devices: {probe.cdi_devices.join(", ")}{#if probe.webgpu}{" (WebGPU remoting, experimental)"}{/if}</span>
+          {#if check.system}<span>{check.system}</span>{/if}
+          <span><code>/dev/dri</code>: {check.dri_devices?.length ? check.dri_devices.join(", ") : check.dri_error || "none"}</span>
+          {#if access}<span>Render node: {access}</span>{/if}
+          {#if check.cdi_devices?.length}
+            <span>CDI devices: {check.cdi_devices.join(", ")}{#if check.webgpu}{" (WebGPU remoting, experimental)"}{/if}</span>
           {/if}
         </span>
       {/if}
-      {#if probe && gpuCheck.at}<small class="when">Checked {ago(gpuCheck.at)}</small>{/if}
+      {#if when}<small class="when">{when}</small>{/if}
     </span>
   </div>
+
+  {#if stale && check}
+    <div class="callout wa">
+      <Icon name="warn" size={16} />
+      <span>
+        <b>{title} changed since the GPU check.</b>
+        <p>
+          {staleWhy}.
+          {check.dri ? "Check GPU access again so the factory knows whether its GPU still works." : "Check GPU access again to see whether it gives containers a GPU now."}
+        </p>
+        <span class="fixes">
+          <button class="small" onclick={checkGPU} disabled={gpuCheck.running}>
+            {#if gpuCheck.running}<span class="spin"></span>Checking…{:else}<Icon name="retry" size={14} />Check GPU access again{/if}
+          </button>
+        </span>
+      </span>
+    </div>
+  {/if}
 
   {#if down}
     <div class="callout er">
@@ -164,9 +209,9 @@
   {/if}
 
   <div class="eacts">
-    {#if checkHere}
+    {#if checkHere && !stale}
       <button class="small" onclick={checkGPU} disabled={gpuCheck.running}>
-        {#if gpuCheck.running}<span class="spin"></span>Checking…{:else}<Icon name="chip" size={14} />{gpuCheck.results ? "Check GPU access again" : "Check GPU access"}{/if}
+        {#if gpuCheck.running}<span class="spin"></span>Checking…{:else}<Icon name="chip" size={14} />{everChecked(si) ? "Check GPU access again" : "Check GPU access"}{/if}
       </button>
     {/if}
     {#if podman}
@@ -178,7 +223,7 @@
       </button>
     {/if}
   </div>
-  {#if checkHere && !gpuCheck.results && !gpuCheck.running}
+  {#if checkHere && !everChecked(si) && !gpuCheck.running}
     <p class="note">Starts a throwaway container on each engine with <code>--device /dev/dri</code>. The first check pulls alpine, a few MB.</p>
   {/if}
   {#if showMem}
@@ -187,7 +232,7 @@
       <code>{startScript(si)}</code>.
     </p>
   {/if}
-  {#if checkHere && gpuCheck.error}
+  {#if (checkHere || stale) && gpuCheck.error}
     <p class="err">The GPU check didn't finish: {gpuCheck.error}. Check that the engines are running, then try again.</p>
   {/if}
 </div>
@@ -235,6 +280,7 @@
   .when { display: block; margin-top: 6px; color: var(--fa); font-size: 11.5px; }
   .callout { margin-top: 12px; }
   .callout code { font-size: 11.5px; }
+  .fixes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
   .ecard > :global(.code) { margin-top: 8px; }
   .eacts { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
   .note { margin-top: 8px; font-size: 12px; color: var(--fa); }

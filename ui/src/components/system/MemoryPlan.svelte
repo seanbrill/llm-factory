@@ -27,6 +27,7 @@
   const mp = $derived(memoryPlans(si, hostMem.gb, $catalog));
   const twoEngines = $derived(mp.podmanNow !== null);
   const podmanGPU = $derived(!!engineOf(si, "podman")?.gpu);
+  const dockerGPU = $derived(!!engineOf(si, "docker")?.gpu);
 
   let pick = $state<PlanId | "">("");
   const selId = $derived(pick || mp.recommended);
@@ -134,7 +135,7 @@
         {segText(seg.rest, `${mac ? "macOS" : "System"} and apps · ${seg.rest}`, `${mac ? "macOS" : "System"} · ${seg.rest}`)}
       </span>
     {/if}
-    {#if barPlan.docker != null}<span class="b-dk" style="width:{pct(seg.d)}" title="Docker's VM: {seg.d} GB">{segText(seg.d, `Docker · ${seg.d}`)}</span>{/if}
+    {#if barPlan.docker != null}<span class="b-dk" class:gpu={dockerGPU} style="width:{pct(seg.d)}" title="Docker's VM: {seg.d} GB">{segText(seg.d, ...(dockerGPU ? [`Docker · ${seg.d} · GPU`] : []), `Docker · ${seg.d}`)}</span>{/if}
     {#if seg.p}
       <span class="b-pm" class:gpu={podmanGPU} style="width:{pct(seg.p)}" title="The Podman machine: {seg.p} GB">
         {segText(seg.p, ...(podmanGPU ? [`Podman · ${seg.p} · GPU`] : []), `Podman · ${seg.p}`)}
@@ -233,6 +234,7 @@
   .b-os { background: var(--p3); color: var(--mu); }
   .b-dk { background: color-mix(in srgb, var(--ink) 22%, var(--cv)); color: var(--ink); }
   .b-pm { background: color-mix(in srgb, var(--ink) 14%, var(--cv)); color: var(--ink); }
+  .b-dk.gpu,
   .b-pm.gpu {
     background: var(--gpus);
     color: var(--gpu);

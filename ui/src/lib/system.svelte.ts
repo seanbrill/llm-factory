@@ -1,16 +1,20 @@
 // Engine facts shared by the System and Overview pages: the GPU access check
-// (POST /api/gpu/probe), this Mac's memory as the user told us (the factory
+// (POST /api/gpu/probe; the factory saves each engine's last result in
+// config/gpu-probe.json and returns it as gpu_check in /api/sysinfo), this
+// Mac's memory as the user told us (the factory
 // runs inside Docker and can't see the host), and the server's build rules
 // turned into numbers for each engine. The rules mirror internal/builder
 // (engines.go compileFloorGB / decideBuild, preflight.go) and the Dockerfiles'
 // BUILD_JOBS sizing; the numbers come from /api/sysinfo. Also the memory plan
 // (how this Mac's memory could be split between the two engine machines) and
 // the engines' versions from /readyz.
+import { get } from "svelte/store";
 import { post } from "./api";
 import { loadSysInfo, sysinfo } from "./stores";
 import { engineName } from "./format";
 import { DOCKER_MEMORY_PATH } from "./explain";
-import type { EngineResources, GPUProbe, Model, SysInfo } from "./types";
+import { gpuEngineFor } from "./catalog";
+import type { EngineResources, GPUCheckInfo, GPUProbe, Model, SysInfo } from "./types";
 
 // ---- rules the server applies (keep in step with the Go code) -----------------
 
@@ -33,17 +37,22 @@ export function engineOf(si: SysInfo | null, engine: string): EngineResources | 
   return si?.engines?.find((e) => e.engine === engine);
 }
 
-/** The engine that gives containers a GPU ("" gpu = none). */
+/**
+ * The engine GPU work goes to: when Docker and Podman both give containers the
+ * GPU (Docker VMM beside a libkrun machine), the one with more memory.
+ */
 export function gpuEngine(si: SysInfo | null): EngineResources | undefined {
-  return si?.engines?.find((e) => !!e.gpu);
+  return gpuEngineFor(si);
 }
 
 /**
- * A libkrun Podman machine (the only thing that sets FACTORY_GPU=vulkan on the
- * Podman engine) is the Mac GPU path, so it means this host is a Mac.
+ * This computer is a Mac: the start scripts tell the factory (host_os). A
+ * factory too old to say falls back on the libkrun Podman machine, which only
+ * a Mac has.
  */
 export function isMac(si: SysInfo | null): boolean {
-  return !!si?.engines?.some((e) => e.engine === "podman" && e.gpu === "vulkan");
+  if (si?.host_os) return si.host_os === "darwin";
+  return !!si?.engines?.some((e) => e.engine === "podman" && e.gpu === "vulkan" && e.gpu_from !== "probe");
 }
 
 /** Least engine memory a from-source build for compute needs (compile_min_gb). */
@@ -98,28 +107,21 @@ export function gpuLabel(e: EngineResources): string {
 }
 
 // ---- the GPU access check ----------------------------------------------------------
+//
+// The factory saves each engine's last answer (config/gpu-probe.json) and
+// /api/sysinfo reports it as the engine's gpu_check, with whether the engine's
+// machine changed since (stale). An engine that didn't answer the check keeps
+// its saved result, so this session's answer is shown for it instead.
 
 export interface GPUCheck {
   running: boolean;
-  results: GPUProbe[] | null;
-  at: number; // when it last answered (unix ms), 0 = never
+  results: GPUProbe[] | null; // this session's answers
+  at: number; // when they came (unix ms), 0 = not this session
   error: string;
 }
 
-const CHECK_KEY = "llmfactory.gpucheck.v1";
-
-function readCheck(): Pick<GPUCheck, "results" | "at"> {
-  try {
-    const v = JSON.parse(localStorage.getItem(CHECK_KEY) || "null");
-    if (v && Array.isArray(v.results) && typeof v.at === "number") return { results: v.results, at: v.at };
-  } catch {
-    /* none saved */
-  }
-  return { results: null, at: 0 };
-}
-
-/** The last GPU access check (kept in this browser so a reload still shows it). */
-export const gpuCheck = $state<GPUCheck>({ running: false, error: "", ...readCheck() });
+/** The GPU access check as this page knows it. */
+export const gpuCheck = $state<GPUCheck>({ running: false, results: null, at: 0, error: "" });
 
 /** Run the GPU access check on every engine (starts a throwaway container on each). */
 export async function checkGPU(): Promise<void> {
@@ -127,15 +129,11 @@ export async function checkGPU(): Promise<void> {
   gpuCheck.running = true;
   gpuCheck.error = "";
   try {
-    const r = await post<{ engines: GPUProbe[] }>("/api/gpu/probe", {});
+    const r = await post<{ engines: GPUProbe[]; checked_at?: number }>("/api/gpu/probe", {});
     gpuCheck.results = r.engines ?? [];
-    gpuCheck.at = Date.now();
-    try {
-      localStorage.setItem(CHECK_KEY, JSON.stringify({ results: gpuCheck.results, at: gpuCheck.at }));
-    } catch {
-      /* private mode: it just won't survive a reload */
-    }
-    loadSysInfo();
+    gpuCheck.at = r.checked_at || Date.now();
+    // The saved results (and any GPU they give) arrive with sysinfo.
+    await loadSysInfo();
   } catch (e) {
     gpuCheck.error = (e as Error).message || "no answer";
   } finally {
@@ -143,23 +141,49 @@ export async function checkGPU(): Promise<void> {
   }
 }
 
-export function probeFor(engine: string): GPUProbe | undefined {
-  return gpuCheck.results?.find((p) => p.engine === engine);
+/** An engine's GPU check: the saved one, or this session's when the engine didn't answer it. */
+export function checkFor(si: SysInfo | null, engine: string): GPUCheckInfo | undefined {
+  const saved = engineOf(si, engine)?.gpu_check;
+  const now = gpuCheck.results?.find((p) => p.engine === engine);
+  if (now && (!now.reachable || !saved || saved.checked_at < gpuCheck.at - 60_000)) {
+    return { ...now, checked_at: gpuCheck.at, source: "probe" };
+  }
+  return saved;
 }
 
-/** The engine's product line from the last check ("Docker Desktop · kernel …"), "" if unknown. */
-export function engineSystem(engine: string): string {
-  return probeFor(engine)?.system || "";
+/** Any engine has been checked (saved or this session). */
+export function everChecked(si: SysInfo | null): boolean {
+  return !!gpuCheck.results || !!si?.engines?.some((e) => !!e.gpu_check);
+}
+
+/** The engine's machine in a line ("Docker Desktop · kernel …"), "" if unknown. */
+export function engineSystem(engine: string, si: SysInfo | null = get(sysinfo)): string {
+  return engineOf(si, engine)?.system || checkFor(si, engine)?.system || "";
 }
 
 /**
- * "Docker Desktop" when the last GPU check said so, or on a Mac before any
- * check (what the factory's Mac setup uses), else "Docker" / "Podman".
+ * "Docker Desktop" when the engine says so, or on a Mac when it hasn't
+ * answered (what the factory's Mac setup uses), else "Docker" / "Podman".
  */
 export function engineTitle(engine: string, si: SysInfo | null = null): string {
   if (engine !== "docker") return engineName(engine);
-  const sys = engineSystem("docker");
+  const sys = engineSystem("docker", si ?? get(sysinfo));
   return /docker desktop/i.test(sys) || (!sys && isMac(si)) ? "Docker Desktop" : "Docker";
+}
+
+/** What the render-node line of a check says, "" when it has nothing to add. */
+export function renderAccessText(p: GPUProbe): string {
+  switch (p.render_access) {
+    case "all":
+      return "any user can open it";
+    case "group":
+      return `group ${p.render_gid} can open it; GPU runs join that group`;
+    case "root":
+      return "only root can open it";
+    case "none":
+      return "no render node";
+  }
+  return "";
 }
 
 // ---- this Mac's memory (from the factory when it knows, else the user tells us) ----
@@ -283,19 +307,25 @@ export function memoryPlans(si: SysInfo | null, host: number | null, cat: Model[
   const dockerMin = compileFloor(si, "cpu");
   const reserve = host ? osReserve(host) : null;
   const fitsHost = (dm: number | null, pm: number | null) => !host || dm == null || pm == null || dm + pm <= host;
-  const gpuText = (pm: number) => {
+  const gpuText = (pm: number, engine = "Podman", note = "") => {
     const fit = biggestFit(cat, pm, true);
-    return fit ? `Podman compiles and runs GPU models up to ${fit}.` : "Podman compiles and runs GPU models.";
+    return `${engine} compiles and runs GPU models${fit ? ` up to ${fit}` : ""}${note}.`;
   };
+  // Docker can give containers the GPU too (Docker VMM or a krunkit VM, found
+  // by the GPU check): then it compiles and runs GPU models itself when it has
+  // the memory, and the Podman machine is optional.
+  const dockerGPU = !!d?.gpu && !!d.reachable && (dockerNow ?? 0) >= gpuFloor;
+  const dockerGPUText = () => gpuText(dockerNow ?? 0, "Docker", d?.gpu_experimental ? " (experimental)" : "");
+  const leavesRoom = !host || dockerNow == null || dockerNow + (podmanNow ?? 0) <= host - 4;
 
   // Today: as the engines report themselves. Fine when Podman can compile for
-  // its GPU and both leave macOS at least 4 GB.
-  const todayOK =
-    !!p?.reachable && (podmanNow ?? 0) >= gpuFloor && (!host || dockerNow == null || dockerNow + (podmanNow ?? 0) <= host - 4);
+  // its GPU, or Docker can for its own, and both leave macOS at least 4 GB.
+  const podmanOK = !!p?.reachable && (podmanNow ?? 0) >= gpuFloor;
+  const todayOK = (podmanOK || dockerGPU) && leavesRoom;
   let todayText: string;
-  if (!p) todayText = "Docker only.";
-  else if (!p.reachable) todayText = "Podman isn't running, so nothing runs on the GPU.";
-  else if ((podmanNow ?? 0) < gpuFloor) todayText = "Podman is too small to build for GPU.";
+  if (!p) todayText = dockerGPU ? dockerGPUText() : "Docker only.";
+  else if (!p.reachable) todayText = dockerGPU ? `Podman isn't running. ${dockerGPUText()}` : "Podman isn't running, so nothing runs on the GPU.";
+  else if ((podmanNow ?? 0) < gpuFloor) todayText = dockerGPU ? `Podman is too small to build for GPU. ${dockerGPUText()}` : "Podman is too small to build for GPU.";
   else if (!fitsHost(dockerNow, podmanNow)) todayText = "Both engines together ask for more than this Mac has.";
   else todayText = gpuText(podmanNow ?? 0);
   const today: MemPlan = {
@@ -312,7 +342,9 @@ export function memoryPlans(si: SysInfo | null, host: number | null, cat: Model[
   // Docker); Docker shrinks only as far as it has to, never below what a CPU
   // build needs.
   let gpu: MemPlan;
-  if (todayOK && (podmanNow ?? 0) >= PODMAN_FIX_GB) {
+  if (todayOK && dockerGPU && !podmanOK) {
+    gpu = { ...today, id: "gpu", title: "GPU first", text: `${dockerGPUText()} It's set up this way now.` };
+  } else if (todayOK && (podmanNow ?? 0) >= PODMAN_FIX_GB) {
     gpu = { ...today, id: "gpu", title: "GPU first", text: `${gpuText(podmanNow ?? 0)} It's set up this way now.` };
   } else if (host && reserve != null) {
     const avail = host - reserve;
@@ -354,8 +386,10 @@ export function memoryPlans(si: SysInfo | null, host: number | null, cat: Model[
 
   const cpu: MemPlan = {
     id: "cpu",
-    title: "CPU only",
-    text: "Everything builds and runs on Docker. No GPU.",
+    title: d?.gpu ? "Docker only" : "CPU only",
+    text: d?.gpu
+      ? `Everything builds and runs on Docker, GPU models too${d.gpu_experimental ? " (experimental)" : ""}.`
+      : "Everything builds and runs on Docker. No GPU.",
     docker: dockerNow,
     podman: 0,
     ok: true,
