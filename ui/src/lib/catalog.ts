@@ -7,7 +7,7 @@
 // compile_min_gb on the engine that compiles it (decideBuild), and running
 // needs the weights plus ~2 GB in the engine's machine (engineFit). A model
 // "needs" the larger of that and the catalog's minimum RAM.
-import type { BuildJob, ContainerInfo, EngineResources, ImageInfo, Model, SysInfo } from "./types";
+import type { BuildJob, ContainerInfo, EngineResources, HarnessConfig, ImageInfo, Model, SysInfo } from "./types";
 import { labelVal } from "./api";
 import { containerPort, isRunning, imageRef } from "./util";
 import { computeName, engineName, gb } from "./format";
@@ -734,6 +734,7 @@ export interface ImageConfig {
   memory_gb: string;  // label text: "0" = unlimited
   route: string;
   autostart: boolean;
+  harness?: HarnessConfig | null; // the baked agent harness (null = none)
 }
 
 export const CTX_TIERS = ["2048", "4096", "8192", "16384", "32768"];

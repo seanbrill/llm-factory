@@ -657,8 +657,10 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	if err != nil {
 		return err
 	}
-	if harnessCfg != nil && (family != "llama" || o.Model.Mod() == "embedding") {
-		return fmt.Errorf("the agent harness needs a llama.cpp chat model; %s is a %s model", o.Model.Name, o.Model.Mod())
+	if harnessCfg != nil {
+		if err := HarnessModelError(o.Model); err != nil {
+			return err
+		}
 	}
 	resolved, err := b.resolveCompute(o.Model, compute)
 	if err != nil {
@@ -952,6 +954,10 @@ type RunOptions struct {
 	// model's behavior for a ~10s container restart instead of a recompile.
 	SystemPrompt string // overrides the baked system prompt when non-empty
 	InjectMode   string // "missing" | "always"; overrides the baked mode when set
+	// Workspace is a host folder mounted read-write at /workspace, where a
+	// baked harness's file and shell tools work ("" = none). The caller checks
+	// it (harness.ValidateWorkspace).
+	Workspace string
 }
 
 // Run starts a container detached and returns its id.
@@ -1034,6 +1040,11 @@ func runArgs(engine, name string, o RunOptions, group int) []string {
 	}
 	if o.Autostart {
 		args = append(args, "--restart", "unless-stopped")
+	}
+	if o.Workspace != "" {
+		// The baked harness's files and shell work here; the label tells the
+		// Library which folder that is.
+		args = append(args, "-v", o.Workspace+":"+ImageWorkspace, "--label", "local-llm.workspace="+o.Workspace)
 	}
 	// Same podman-remote seccomp path mismatch as Build (see there): the client
 	// forwards a profile path the machine VM lacks. Run the model server
@@ -1386,6 +1397,11 @@ func (b *Builder) Images(ctx context.Context) ([]map[string]any, error) {
 						parts = append(parts, k+"="+labels[k])
 					}
 					im["Labels"] = strings.Join(parts, ",")
+				}
+				// A baked harness, read here: its tools and config labels hold
+				// commas, which the joined string above can't carry.
+				if h := HarnessInfo(BakedHarness(labels)); h != nil {
+					im["Harness"] = h
 				}
 				if c := labels["local-llm.compute"]; c != "" {
 					im["Compute"] = c
@@ -1900,13 +1916,14 @@ func injectMode(m string) string {
 	return "missing"
 }
 
-// stageGate copies the llmgate shim source and the agent harness package it
-// imports into <work>/gate, laid out as in this repo (cmd/llmgate,
+// stageGate copies the llmgate shim source and the packages it imports (the
+// proxy it shares with the native launcher, and the agent harness) into
+// <work>/gate, laid out as in this repo (cmd/llmgate, internal/gate,
 // internal/agent), so the Dockerfile's `gate` stage can compile
-// ./cmd/llmgate. Both are stdlib-only, so a go.mod with no requires is enough
+// ./cmd/llmgate. All are stdlib-only, so a go.mod with no requires is enough
 // (the in-container build needs no network).
 func stageGate(baseDir, work string) error {
-	return stageGoPackages(baseDir, work, "cmd/llmgate", "internal/agent")
+	return stageGoPackages(baseDir, work, "cmd/llmgate", "internal/gate", "internal/agent")
 }
 
 // stageVideogate copies the videogate shim source into <work>/gate so the video

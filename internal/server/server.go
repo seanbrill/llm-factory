@@ -178,6 +178,7 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.registerHarness() // model gateway (/v1) + /api/harness (harness.go)
 	s.openArchive()     // the FileFreak archive, asked before every weight download (filefreak.go)
 	s.registerFileFreak()
+	s.registerNative() // native packages (native.go)
 	return s, nil
 }
 
@@ -228,10 +229,12 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	// so the UI only offers those (Piper TTS is CPU-only, image gen Vulkan-only).
 	// Compiles says the build compiles a runtime from source, which needs
 	// sysinfo's compile_min_gb on the engine that builds it.
+	// CanHarness says the model can take a baked agent harness (tools).
 	type item struct {
 		catalog.Model
-		Computes []string `json:"computes"`
-		Compiles bool     `json:"compiles"`
+		Computes   []string `json:"computes"`
+		Compiles   bool     `json:"compiles"`
+		CanHarness bool     `json:"can_harness"`
 	}
 	out := make([]item, 0, len(s.cat.Models))
 	compiles := map[string]bool{} // runtime|modality (which picks the family) -> Compiles
@@ -242,7 +245,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 			c = s.b.Compiles(m)
 			compiles[key] = c
 		}
-		out = append(out, item{Model: m, Computes: s.b.Computes(m), Compiles: c})
+		out = append(out, item{Model: m, Computes: s.b.Computes(m), Compiles: c, CanHarness: builder.CanHarness(m)})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -445,6 +448,13 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "image name is required"})
 		return
 	}
+	if harnessCfg != nil {
+		// Refuse now rather than fail the build once it starts.
+		if err := builder.HarnessModelError(model); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
 
 	engine := normalizeEngine(req.Engine)
 	compute := normalizeCompute(req.Compute)
@@ -539,6 +549,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		InjectMode   string `json:"inject_mode"`
 		// Force bypasses the resource guardrail ("Run anyway").
 		Force bool `json:"force"`
+		// Workspace is the host folder an image with a baked harness gets at
+		// /workspace ("" = the factory's workspace/ folder). See runWorkspace.
+		Workspace string `json:"workspace"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -561,6 +574,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	route := labels["local-llm.route"]
 	autostart := labels["local-llm.autostart"] == "true"
 	orchestrator := labels["local-llm.kind"] == "ensemble" // mounts the docker socket
+	workspace, err := s.runWorkspace(labels, req.Workspace)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	// Resource guardrail: refuse to start a model that would over-subscribe VRAM
 	// or RAM given what's already running (a crash risk), unless the caller forces
@@ -588,7 +606,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	id, err := s.b.Run(r.Context(), builder.RunOptions{
 		Ref: req.Ref, HostPort: req.Port, Engine: engine, Compute: compute,
 		MemoryGB: memGB, Route: route, Autostart: autostart, Orchestrator: orchestrator,
-		SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode,
+		SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode, Workspace: workspace,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
@@ -601,6 +619,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{"id": id, "port": req.Port, "engine": engine, "compute": compute}
 	if warning != "" {
 		resp["warning"] = warning
+	}
+	if workspace != "" {
+		resp["workspace"] = workspace
 	}
 	if route != "" {
 		resp["url"] = "http://" + route + ".localhost" + proxyURLSuffix(s.b.ProxyPort())
@@ -738,6 +759,8 @@ func (s *Server) handleImageConfig(w http.ResponseWriter, r *http.Request) {
 		"memory_gb":     labels["local-llm.memory"],
 		"route":         labels["local-llm.route"],
 		"autostart":     labels["local-llm.autostart"] == "true",
+		// The baked harness config (null = none), so a clone keeps the tools.
+		"harness": builder.BakedHarness(labels),
 	})
 }
 

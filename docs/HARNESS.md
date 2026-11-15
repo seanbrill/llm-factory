@@ -387,6 +387,12 @@ local-llm.harness_tools=web_search,fetch_url,files,skills   # the enabled toolse
 local-llm.harness_config={"version":1,"tools":[...],...}     # the baked harness.json
 ```
 
+The factory's `GET /api/images` reads them into a `Harness` object for each
+such image (`tools`, `search`, `searxng_url`, `max_steps`, and `workspace` when
+the files or shell tools are on), because the tools and config labels hold
+commas that the joined `Labels` string can't carry. `GET /api/image/config`
+returns the baked config as `harness` (`null` without one).
+
 `GET /v1/harness` on the container reports what is active: the tools, any tool
 that can't run and why, the limits, the search backend, the workspace and the
 skills. Without a harness it answers with `"enabled": false` and no tools. Every other endpoint is passed through to llama-server unchanged, as
@@ -394,8 +400,23 @@ before.
 
 ### Baking one
 
-The build page doesn't offer it yet. Use the build API: add `"harness": true`
-for the defaults, or a `harness.json` object, to `POST /api/build`.
+On the **Build plan**, open a chat model's settings (the sliders button on its
+row) and turn on **Tools**. Web search, reading web pages, files and skills are
+on by default; the shell stays off unless you tick it, and ticking it shows what
+it allows. Pick the search engine (DuckDuckGo, built in, or the address of your
+own SearXNG) and, under **Limits**, the step, call, time and output limits. The
+row shows a **Tools** chip, and the setting is saved with the plan like the
+other build settings. The Catalog's model details say which models can take
+tools, and the Harness page's *Tools inside the image* card links to the
+setting.
+
+In the **Library**, an image with a harness has a **Tools** chip (amber when the
+shell is on), and its details list the tools. *Build settings* shows them too,
+and *Use as template* copies them into the plan, including the fields the plan
+doesn't show.
+
+With the build API, add `"harness": true` for the defaults, or a `harness.json`
+object, to `POST /api/build`.
 
 ```bash
 curl -X POST http://localhost:8799/api/build \
@@ -406,9 +427,10 @@ curl -X POST http://localhost:8799/api/build \
 ```
 
 - Only llama.cpp chat models can have one (text, code, reasoning, vision), not
-  embedding models.
-- The factory checks the config before it queues the build. A typo, an unknown
-  tool or a value out of range returns `400` with every problem listed.
+  embedding models. `GET /api/catalog` says which with `can_harness`.
+- The factory checks the config and the model before it queues the build. A
+  typo, an unknown tool, a value out of range or a model that can't take tools
+  returns `400` with every problem listed.
 - `workspace` and `skills_dir` are always set to `/workspace` and
   `/etc/llmgate/skills`. API keys are refused: they are only read from the
   environment at run time, so they never end up in an image.
@@ -497,11 +519,22 @@ also give an image built without a harness one at run time by mounting a config:
 ### Running a container with a workspace
 
 The image has no `VOLUME`, so `/workspace` lasts only as long as the container.
-To keep the files, mount a folder from your computer:
+
+**Run from the Library**, the factory mounts a folder for you when the image's
+harness has the files or shell tools: the `workspace/` folder in the factory
+folder (created when missing), read-write, at `/workspace`. The run dialog says
+so, and can name another folder instead (`"workspace"` in `POST /api/run`). That
+folder is checked like the workspace terminal's: never a system folder, a hidden
+folder, a whole home folder or disk, or anything else in the factory folder. The
+container is labeled `local-llm.workspace=<folder>`, which the Library shows, and
+the run's answer includes `"workspace"`. An image whose tools don't touch files
+gets no mount.
+
+**Run it yourself** by mounting a folder from your computer:
 
 ```bash
 mkdir -p work
-docker run --rm -p 8080:8080 \
+docker run --rm -p 127.0.0.1:8080:8080 \
   -v "$PWD/work:/workspace" \
   -e HARNESS_SEARXNG_URL=http://host.docker.internal:8888 \
   local-llm/qwen-agent:latest

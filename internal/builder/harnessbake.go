@@ -8,9 +8,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/seanbrill/local-llm/internal/agent"
+	"github.com/seanbrill/local-llm/internal/catalog"
 )
 
 // The baked agent harness: a llama.cpp image can carry a harness.json and a
@@ -53,6 +55,85 @@ func NormalizeHarness(h *agent.Config) (*agent.Config, error) {
 		return nil, err
 	}
 	return &c, nil
+}
+
+// CanHarness reports whether m can take a baked harness. The tool loop runs in
+// llmgate, which fronts the llama.cpp chat models (text, code, reasoning and
+// vision); embedding models and the other runtimes have no tool loop.
+func CanHarness(m catalog.Model) bool {
+	return modelFamily(m) == "llama" && m.Mod() != "embedding"
+}
+
+// HarnessModelError says why m can't take a baked harness (nil when it can).
+// The build API checks it before queueing, the builder again before building.
+func HarnessModelError(m catalog.Model) error {
+	if CanHarness(m) {
+		return nil
+	}
+	return fmt.Errorf("the agent harness needs a llama.cpp chat model; %s is a %s model", m.Name, m.Mod())
+}
+
+// BakedHarness returns the harness config an image was built with, read from
+// its labels, or nil when it has none. When the config label is missing or
+// unreadable, the tools label stands in, with defaults for the rest.
+func BakedHarness(labels map[string]string) *agent.Config {
+	if labels[LabelHarness] != "1" {
+		return nil
+	}
+	if raw := strings.TrimSpace(labels[LabelHarnessConfig]); raw != "" {
+		if c, err := agent.ParseConfig([]byte(raw)); err == nil {
+			c = c.WithDefaults()
+			return &c
+		}
+	}
+	tools := []string{}
+	known := agent.Toolsets()
+	for _, t := range strings.Split(labels[LabelHarnessTools], ",") {
+		if t = strings.TrimSpace(t); slices.Contains(known, t) {
+			tools = append(tools, t)
+		}
+	}
+	c := agent.Config{Tools: tools, Workspace: ImageWorkspace, SkillsDir: ImageSkillsDir}.WithDefaults()
+	return &c
+}
+
+// HarnessUsesWorkspace reports whether c turns on tools that work in the
+// workspace (the files or the shell tools), so a run mounts a folder there.
+func HarnessUsesWorkspace(c *agent.Config) bool {
+	if c == nil {
+		return false
+	}
+	sets := c.EnabledToolsets()
+	return slices.Contains(sets, agent.ToolsetFiles) || slices.Contains(sets, agent.ToolsetShell)
+}
+
+// ImageHarness is what the Library shows of a baked harness (an image's
+// "Harness" in GET /api/images): the toolsets that are on and how it searches.
+type ImageHarness struct {
+	Tools      []string `json:"tools"`                 // enabled toolsets, in order
+	Search     string   `json:"search,omitempty"`      // search backend, when web_search is on
+	SearXNGURL string   `json:"searxng_url,omitempty"` // with the searxng backend
+	MaxSteps   int      `json:"max_steps"`
+	Workspace  bool     `json:"workspace"` // a run mounts a workspace folder at /workspace
+}
+
+// HarnessInfo summarizes c for the Library (nil for no harness).
+func HarnessInfo(c *agent.Config) *ImageHarness {
+	if c == nil {
+		return nil
+	}
+	h := &ImageHarness{
+		Tools:     append([]string{}, c.EnabledToolsets()...),
+		MaxSteps:  c.Limits.MaxSteps,
+		Workspace: HarnessUsesWorkspace(c),
+	}
+	if slices.Contains(h.Tools, agent.ToolsetWebSearch) {
+		h.Search = c.Search.Backend
+		if h.Search == agent.SearchSearXNG {
+			h.SearXNGURL = c.Search.SearXNGURL
+		}
+	}
+	return h
 }
 
 // harnessLabels are the image labels describing a baked harness.

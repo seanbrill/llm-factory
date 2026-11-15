@@ -110,7 +110,15 @@ refresh plus x alert globe …). Add new ones to src/lib/icons.ts.
   `defaultsFor(model, sysinfo)`, `predictRoute(...)`, `queueItems(items, catalog)`,
   `quickBuild(model, sysinfo)`.
 - `harness.ts` — harness API types and calls.
+- `baked.ts` — tools baked into an image (docs/HARNESS.md, "Baked harness"):
+  `TOOLSETS`, `canHarness(model)`, the plan item's `harness` setting
+  (`defaultHarness`, `harnessProblem`, `harnessBody` → the build's `harness`,
+  `harnessFromConfig` for clones) and `imageHarness(image)` for the Library.
+  `#harness/baked` opens its card on the Harness page.
 - `filefreak.ts` — FileFreak archive (System page) types and calls; see docs/FILEFREAK.md.
+- `native.ts` — native packages (docs/NATIVE.md): `/api/native/*` types and calls,
+  `nativeWhy(model)` (which models can be packaged), `packPercent(lines)`. The
+  Library's `NativeDialog` makes one; `NativePackages` lists them.
 - `format.ts` — `gb()`, `dur()`, `clock()`, `ago()`, `plural()`, `engineName()`,
   `computeName()`, `computeChip()`, `upFor()`.
 - `ui.svelte.ts` — `openPalette(seed?)`, `copyText(text)`.
@@ -131,7 +139,8 @@ Actions (POST JSON): `/api/build` (queues; `{status, id, position, engine}`),
 `/api/system/reclaim`, `/api/gpu/probe`, `/api/chat/stream` (SSE),
 `/api/image/generate`, `/api/video/generate`, `/api/transcribe`, `/api/tts`,
 `/api/harness/*`, `/api/filefreak/*` (status, settings, key, key/remove,
-folder/check, queue/retry, queue/remove). Shapes are in src/lib/types.ts, src/lib/harness.ts and src/lib/filefreak.ts.
+folder/check, queue/retry, queue/remove), `/api/native/*` (targets, source,
+package, jobs, state, cancel, packages, download, delete). Shapes are in src/lib/types.ts, src/lib/harness.ts and src/lib/filefreak.ts.
 
 ## Writing
 
