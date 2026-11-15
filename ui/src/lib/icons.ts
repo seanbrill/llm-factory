@@ -108,7 +108,9 @@ export const ICONS: Record<string, string> = {
   // [/p2]
 
   // [p3] Builds
-
+  arrowDown: '<path d="M12 5v14M5 12l7 7 7-7"/>',
+  toTop: '<path d="M5.5 4.5h13M12 20V9.5M7.5 14 12 9.5l4.5 4.5"/>',
+  toBottom: '<path d="M5.5 19.5h13M12 4v10.5M7.5 10 12 14.5l4.5-4.5"/>',
   // [/p3]
 
   // [p4] Library, Playground
