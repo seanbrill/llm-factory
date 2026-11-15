@@ -30,6 +30,12 @@ mkdir -p models images config workspace
 echo "Building UI (Svelte -> internal/server/web)..."
 docker run --rm -v "$PWD:/app" -w /app/ui node:20-alpine sh -c "npm install --no-audit --no-fund --silent && npm run build" || { echo "ERROR: UI build failed."; exit 1; }
 
+# The FileFreak archive helper (docs/FILEFREAK.md): its SDK goes into
+# tools/filefreak/node_modules, which the dev container sees through the repo mount.
+echo "Installing the FileFreak archive helper (tools/filefreak)..."
+docker run --rm -v "$PWD:/app" -w /app/tools/filefreak node:20-alpine sh -c "npm ci --omit=dev --no-audit --no-fund --silent" \
+    || echo "WARN: npm ci in tools/filefreak failed, so the FileFreak archive is off: model files download from Hugging Face."
+
 # UI hot-reload: a background `vite build --watch` rebuilds internal/server/web on
 # every ui/src edit; the dev container serves it from disk, so just refresh the
 # browser (the Go backend hot-reloads separately via wgo). CHOKIDAR_USEPOLLING is
@@ -82,6 +88,7 @@ docker run -d --name "$NAME" \
     -e "HOST_DIR=$PWD" \
     -e "HOST_HOME=$HOME" \
     -e "FACTORY_PORT=$PORT" \
+    -e FILEFREAK_ARCHIVE_URL \
     -e "FACTORY_HOST_MEM_BYTES=$(sysctl -n hw.memsize 2>/dev/null || true)" \
     -e "FACTORY_HOST_OS=$(uname -s 2>/dev/null || true)" \
     "${DOCKER_SOCK_ARGS[@]}" \

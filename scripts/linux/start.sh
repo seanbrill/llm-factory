@@ -92,6 +92,7 @@ docker run -d --name "$NAME" \
     -e "HOST_DIR=$PWD" \
     -e "HOST_HOME=$HOME" \
     -e "FACTORY_PORT=$PORT" \
+    -e FILEFREAK_ARCHIVE_URL \
     -e "FACTORY_HOST_MEM_BYTES=$(awk '/^MemTotal:/ {printf "%d", $2 * 1024}' /proc/meminfo 2>/dev/null || true)" \
     -e "FACTORY_HOST_OS=$(uname -s 2>/dev/null || true)" \
     "${DOCKER_SOCK_ARGS[@]}" \

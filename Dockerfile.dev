@@ -25,6 +25,11 @@ COPY --from=docker:27-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /u
 RUN apt-get update && apt-get install -y --no-install-recommends podman \
     && rm -rf /var/lib/apt/lists/*
 
+# Node.js for the FileFreak archive helper (tools/filefreak, docs/FILEFREAK.md):
+# the SDK needs Node 20+, newer than Debian's package, so the binary comes from
+# the official image (same Debian release). start-dev.{sh,ps1} run npm ci for it.
+COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+
 # wgo: a tiny live-reload runner. We restrict it to .go files so UI edits never
 # restart the backend (that's the "separate" part).
 RUN go install github.com/bokwoon95/wgo@latest

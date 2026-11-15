@@ -32,6 +32,26 @@ if (Get-Command podman -ErrorAction SilentlyContinue) {
   Write-Warning "podman not on PATH — install it if the Containers tab is empty (docker still works)."
 }
 
+# The FileFreak archive (docs/FILEFREAK.md) runs tools/filefreak with Node.js 20
+# or later. Without it the factory still works: model files come from Hugging Face.
+$nodeOK = $false
+if (Get-Command node -ErrorAction SilentlyContinue) {
+  & node -e "process.exit(+process.versions.node.split('.')[0] >= 20 ? 0 : 1)"
+  $nodeOK = ($LASTEXITCODE -eq 0)
+}
+if ($nodeOK) {
+  $ffLock = "tools/filefreak/node_modules/.package-lock.json"
+  if (-not (Test-Path $ffLock) -or ((Get-Item "tools/filefreak/package-lock.json").LastWriteTime -gt (Get-Item $ffLock).LastWriteTime)) {
+    Write-Host "Installing the FileFreak archive helper (tools/filefreak)..."
+    Push-Location tools/filefreak
+    npm ci --omit=dev --no-audit --no-fund --silent
+    if ($LASTEXITCODE -ne 0) { Write-Warning "npm ci in tools/filefreak failed, so the FileFreak archive is off: model files download from Hugging Face." }
+    Pop-Location
+  }
+} else {
+  Write-Warning "Node.js 20 or later isn't on PATH, so the FileFreak archive is off: model files download from Hugging Face. Install it (winget install OpenJS.NodeJS.LTS) to use the archive."
+}
+
 Write-Host "Factory (native — sees host podman + docker): http://127.0.0.1:$port   (Ctrl-C to stop)"
 Write-Host "Its access link (Open: http://127.0.0.1:$port/?token=...) is in the log below."
 # The factory opens the browser itself, at the link with the token (a plain

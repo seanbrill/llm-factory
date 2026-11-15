@@ -97,6 +97,7 @@ docker run -d --name $name `
     -e "HOST_HOME=$($env:USERPROFILE -replace '\\','/')" `
     -e "FACTORY_PORT=$Port" `
     -e "FACTORY_HOST_OS=windows" `
+    -e FILEFREAK_ARCHIVE_URL `
     -v /var/run/docker.sock:/var/run/docker.sock `
     -v "$($PWD.Path)\models:/app/models" `
     -v "$($PWD.Path)\images:/app/images" `

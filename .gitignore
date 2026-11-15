@@ -39,3 +39,11 @@
 /ensemblegate
 /builder
 /llmgate
+
+# The FileFreak archive: settings + upload key (0600), and the upload queue.
+/config/filefreak.json
+/config/filefreak-queue.json
+/config/.filefreak.json-*
+/config/.filefreak-queue.json-*
+# The archive helper's SDK (npm ci in tools/filefreak; the image installs its own).
+/tools/filefreak/node_modules/
