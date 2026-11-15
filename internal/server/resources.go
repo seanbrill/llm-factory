@@ -73,21 +73,21 @@ type RunningModel struct {
 // factory-managed subset (for the per-model breakdown). GlobalVRAM/GlobalRAM say
 // whether Used is a real measurement (true) or fell back to the estimate (false).
 type ResourceBudget struct {
-	GPU             string         `json:"gpu"`
-	TotalVRAMGB     float64        `json:"total_vram_gb"`
-	TotalRAMGB      float64        `json:"total_ram_gb"`
-	UsedVRAMGB      float64        `json:"used_vram_gb"`
-	UsedRAMGB       float64        `json:"used_ram_gb"`
-	FreeVRAMGB      float64        `json:"free_vram_gb"`
-	FreeRAMGB       float64        `json:"free_ram_gb"`
-	CommittedVRAMGB float64        `json:"committed_vram_gb"`
-	CommittedRAMGB  float64        `json:"committed_ram_gb"`
-	GlobalVRAM      bool           `json:"global_vram"`
-	GlobalRAM       bool           `json:"global_ram"`
+	GPU             string  `json:"gpu"`
+	TotalVRAMGB     float64 `json:"total_vram_gb"`
+	TotalRAMGB      float64 `json:"total_ram_gb"`
+	UsedVRAMGB      float64 `json:"used_vram_gb"`
+	UsedRAMGB       float64 `json:"used_ram_gb"`
+	FreeVRAMGB      float64 `json:"free_vram_gb"`
+	FreeRAMGB       float64 `json:"free_ram_gb"`
+	CommittedVRAMGB float64 `json:"committed_vram_gb"`
+	CommittedRAMGB  float64 `json:"committed_ram_gb"`
+	GlobalVRAM      bool    `json:"global_vram"`
+	GlobalRAM       bool    `json:"global_ram"`
 	// CPU is global too: 1-min load average from /proc/loadavg vs core count.
-	CPUs       int     `json:"cpus"`
-	CPULoad1   float64 `json:"cpu_load1"`
-	CPUUsedPct float64 `json:"cpu_used_pct"`
+	CPUs       int            `json:"cpus"`
+	CPULoad1   float64        `json:"cpu_load1"`
+	CPUUsedPct float64        `json:"cpu_used_pct"`
 	Running    []RunningModel `json:"running"`
 }
 
