@@ -104,7 +104,7 @@ export const ICONS: Record<string, string> = {
   // [/p1]
 
   // [p2] Catalog, Build plan
-
+  bang: '<path d="M12 6v7.5M12 17.5v.01"/>',
   // [/p2]
 
   // [p3] Builds
