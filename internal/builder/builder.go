@@ -1996,13 +1996,14 @@ func injectMode(m string) string {
 	return "missing"
 }
 
-// stageGate copies the llmgate shim source and the agent harness package it
-// imports into <work>/gate, laid out as in this repo (cmd/llmgate,
+// stageGate copies the llmgate shim source and the packages it imports (the
+// proxy it shares with the native launcher, and the agent harness) into
+// <work>/gate, laid out as in this repo (cmd/llmgate, internal/gate,
 // internal/agent), so the Dockerfile's `gate` stage can compile
-// ./cmd/llmgate. Both are stdlib-only, so a go.mod with no requires is enough
+// ./cmd/llmgate. All are stdlib-only, so a go.mod with no requires is enough
 // (the in-container build needs no network).
 func stageGate(baseDir, work string) error {
-	return stageGoPackages(baseDir, work, "cmd/llmgate", "internal/agent")
+	return stageGoPackages(baseDir, work, "cmd/llmgate", "internal/gate", "internal/agent")
 }
 
 // stageVideogate copies the videogate shim source into <work>/gate so the video

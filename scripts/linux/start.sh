@@ -31,7 +31,7 @@ command -v docker >/dev/null 2>&1 || { echo "Docker is required and must be runn
 NAME=local-llm-factory
 PORT="${PORT:-8799}"
 BIND="${BIND:-127.0.0.1}"
-mkdir -p models images config media workspace
+mkdir -p models images config media workspace packages
 
 # Build the Svelte UI into internal/server/web so the factory image embeds it
 # (throwaway Node container, no host Node needed).
@@ -100,6 +100,7 @@ docker run -d --name "$NAME" \
     -v "$PWD/images:/app/images" \
     -v "$PWD/config:/app/config" \
     -v "$PWD/media:/app/media" \
+    -v "$PWD/packages:/app/packages" \
     -v "$PWD/skills:/app/skills:ro" \
     -v "$PWD/workspace:/app/workspace" \
     --add-host host.docker.internal:host-gateway \

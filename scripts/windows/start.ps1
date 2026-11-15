@@ -36,7 +36,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 }
 
 $name = "local-llm-factory"
-New-Item -ItemType Directory -Force -Path .\models, .\images, .\config, .\media, .\workspace | Out-Null
+New-Item -ItemType Directory -Force -Path .\models, .\images, .\config, .\media, .\workspace, .\packages | Out-Null
 
 # Stamp the build with its version (shown in the UI sidebar). Computed before
 # the UI build so "-dirty" reflects only your own local edits.
@@ -103,6 +103,7 @@ docker run -d --name $name `
     -v "$($PWD.Path)\images:/app/images" `
     -v "$($PWD.Path)\config:/app/config" `
     -v "$($PWD.Path)\media:/app/media" `
+    -v "$($PWD.Path)\packages:/app/packages" `
     -v "$($PWD.Path)\skills:/app/skills:ro" `
     -v "$($PWD.Path)\workspace:/app/workspace" `
     --add-host host.docker.internal:host-gateway `

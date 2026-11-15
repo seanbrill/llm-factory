@@ -41,6 +41,9 @@ you've never touched a container before.
     FileFreak sees, and how to set an upload key.
 11. [Voice cloning](VOICE-CLONING.md) — the text-to-speech models that copy a voice
     from a recording, their licenses, the consent rule, and how to call them.
+12. [Native packages](NATIVE.md) — a model and its tools as one zip for macOS,
+    Linux or Windows that runs without Docker or Podman (Metal on a Mac): what's
+    in it, how to run it, the security model and the signing warnings.
 
 ## The 30-second mental model
 

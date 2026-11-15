@@ -8,10 +8,13 @@
 #
 # At runtime the factory reads, from disk (besides the embedded UI), the
 # Dockerfiles under docker/ and the gate shim sources it stages into each model
-# image's build context: cmd/llmgate (text) with internal/agent (the agent
-# harness it imports), cmd/videogate (video), cmd/ensemblegate (Conductor).
-# All are copied into the image below. The skills a harness bakes come from
-# the skills/ folder the start scripts mount at /app/skills. It also runs
+# image's build context: cmd/llmgate (text) with internal/gate (its front door,
+# shared with the native-package launcher) and internal/agent (the agent
+# harness), cmd/videogate (video), cmd/ensemblegate (Conductor). All are
+# copied into the image below, with the prebuilt native-package launchers
+# (native/launchers/; docs/NATIVE.md), whose packages go to the packages/
+# folder the start scripts mount at /app/packages. The skills a harness bakes
+# come from the skills/ folder they mount at /app/skills. It also runs
 # tools/filefreak/ff.mjs, the FileFreak archive helper, with Node.js
 # (docs/FILEFREAK.md).
 #
@@ -33,6 +36,17 @@ ARG FACTORY_COMMIT=
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
       -ldflags "-s -w -X github.com/seanbrill/local-llm/internal/version.Version=${FACTORY_VERSION} -X github.com/seanbrill/local-llm/internal/version.Commit=${FACTORY_COMMIT}" \
       -o /factory ./cmd/builder
+# The native-package launcher (cmd/llmpack, docs/NATIVE.md) for every target a
+# package can be made for, so the factory needs no Go toolchain to make one.
+# Pure Go and cross-compiled; the darwin/arm64 build is signed ad hoc by Go's
+# linker, which is what Apple Silicon requires.
+RUN set -eux; mkdir -p /launchers; \
+    for t in darwin/arm64 linux/amd64 windows/amd64; do \
+      os=${t%/*}; arch=${t#*/}; ext=; [ "$os" = windows ] && ext=.exe; \
+      CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+        -ldflags "-s -w -X github.com/seanbrill/local-llm/internal/version.Version=${FACTORY_VERSION} -X github.com/seanbrill/local-llm/internal/version.Commit=${FACTORY_COMMIT}" \
+        -o /launchers/llmpack-$os-$arch$ext ./cmd/llmpack; \
+    done
 
 # ----------------------------------------------------------------------------
 # Stage 2: the FileFreak archive helper (tools/filefreak): the FileFreak SDK,
@@ -85,11 +99,13 @@ RUN set -eux; \
 COPY --from=build /factory      /usr/local/bin/factory
 COPY docker/                    /app/docker/
 COPY cmd/llmgate/               /app/cmd/llmgate/
+COPY internal/gate/             /app/internal/gate/
 COPY internal/agent/            /app/internal/agent/
 COPY cmd/videogate/             /app/cmd/videogate/
 COPY cmd/ensemblegate/          /app/cmd/ensemblegate/
 COPY cmd/pygate/                /app/cmd/pygate/
 COPY --from=filefreak /tools/filefreak /app/tools/filefreak
+COPY --from=build /launchers/   /app/native/launchers/
 
 # host.docker.internal lets the in-UI "Test" reach model containers' published
 # ports on the host. (start.{ps1,sh} adds --add-host for Linux hosts.)
