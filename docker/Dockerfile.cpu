@@ -5,8 +5,8 @@
 # and fronts it with the `llmgate` shim that injects the baked initialization
 # prompt and, when the image bakes one, runs the agent harness (tool loop). The
 # Go builder stages model.gguf, system_prompt.txt, gate/ (llmgate + the
-# internal/agent package) and harness/ (harness.json + skills, placeholders
-# without a harness) into a tiny temp build context.
+# internal/gate and internal/agent packages) and harness/ (harness.json +
+# skills, placeholders without a harness) into a tiny temp build context.
 #
 # Architecture-aware (via BuildKit's automatic TARGETARCH):
 #   amd64  -> portable x86-64 AVX2/FMA/F16C  (Intel/AMD, incl. Intel Macs)
@@ -74,7 +74,8 @@ RUN set -eux; \
 # ----------------------------------------------------------------------------
 FROM golang:1.22-bookworm AS gate
 WORKDIR /src
-# gate/ mirrors the repo: go.mod, cmd/llmgate/, internal/agent/ (stdlib only).
+# gate/ mirrors the repo: go.mod, cmd/llmgate/, internal/gate/, internal/agent/
+# (stdlib only).
 COPY gate/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /llmgate ./cmd/llmgate
 

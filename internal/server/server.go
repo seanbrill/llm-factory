@@ -155,6 +155,7 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.registerHarness() // model gateway (/v1) + /api/harness (harness.go)
 	s.openArchive()     // the FileFreak archive, asked before every weight download (filefreak.go)
 	s.registerFileFreak()
+	s.registerNative() // native packages (native.go)
 	return s, nil
 }
 

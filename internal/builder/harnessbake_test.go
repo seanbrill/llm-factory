@@ -76,7 +76,7 @@ func TestStageGateCompiles(t *testing.T) {
 	if err != nil || !strings.HasPrefix(string(mod), "module "+gateModule+"\n") {
 		t.Fatalf("go.mod = %q, %v", mod, err)
 	}
-	for _, f := range []string{"cmd/llmgate/main.go", "internal/agent/agent.go", "internal/agent/netguard.go", "internal/agent/shell_unix.go", "internal/agent/shell_windows.go"} {
+	for _, f := range []string{"cmd/llmgate/main.go", "internal/gate/gate.go", "internal/gate/llama.go", "internal/agent/agent.go", "internal/agent/netguard.go", "internal/agent/shell_unix.go", "internal/agent/shell_windows.go"} {
 		if _, err := os.Stat(filepath.Join(gate, filepath.FromSlash(f))); err != nil {
 			t.Errorf("not staged: %s", f)
 		}
