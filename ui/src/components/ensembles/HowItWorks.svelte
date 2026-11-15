@@ -17,27 +17,34 @@
 
   <ol>
     <li>
-      <b>One model to talk to.</b> Its image answers OpenAI-style chat requests and lists itself as one model. Inside,
-      the <b>Conductor</b> sends each request to a member.
+      <b>One model to talk to.</b> It answers OpenAI-style chat, <span class="mono">/v1/audio/transcriptions</span> and
+      <span class="mono">/v1/audio/speech</span>, and shows up as one model in the Playground and the factory's /v1
+      gateway. Inside, the <b>Conductor</b> sends each request to a member.
     </li>
     <li>
       <b>Routing.</b> Heuristic routing looks at the request: an image goes to vision, “draw…” to image generation,
       “make a video…” to video, “say…” to speech, and the rest to chat. Tool-calling asks a small conductor model
-      instead, and falls back to the heuristic.
+      instead, and falls back to the heuristic. Images and clips come back inside the chat reply.
     </li>
     <li>
-      <b>Members start when needed.</b> Each starts the first time a request needs it. To stay under the VRAM budget,
-      the Conductor stops the least recently used ones first.
+      <b>Voice in, voice out.</b> A spoken question goes to speech to text, then chat, then speech: the answer comes
+      back in the persona's voice, built-in or cloned from a clip you record.
+    </li>
+    <li>
+      <b>Members start when needed.</b> Each starts the first time a request needs it; “Keep warm” ones start with
+      the ensemble. To stay under the memory budget, the Conductor stops the least recently used ones first. The card
+      shows each member's state while it runs.
     </li>
     <li>
       <b>Docker only.</b> The Conductor starts members with Docker, so members must be Docker images. Running an
-      ensemble image gives it the Docker socket for that.
+      ensemble gives it the Docker socket for that; stopping it stops its members too.
     </li>
   </ol>
 
   <p class="fine">
-    Build image makes <span class="mono">local-llm/ens-&lt;name&gt;</span> and a <span class="mono">.tar</span>; it waits
-    behind model builds for the same engine. More in <span class="mono">docs/ENSEMBLE.md</span>.
+    Build image makes <span class="mono">local-llm/ens-&lt;name&gt;</span> and a <span class="mono">.tar</span> holding
+    the Conductor only: members stay separate images, and voice clips are never in it. Everything runs as separate
+    containers; one big image with every member inside isn't built yet. More in <span class="mono">docs/ENSEMBLE.md</span>.
   </p>
 </aside>
 

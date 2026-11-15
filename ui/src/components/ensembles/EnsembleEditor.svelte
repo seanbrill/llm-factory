@@ -1,17 +1,21 @@
 <script lang="ts">
-  // New / edit an ensemble: its name, the built images it can use, how it routes,
-  // and what it runs on. Saves to /api/ensembles.
+  // New / edit an ensemble: its name, one member per slot (chat, vision, speech
+  // in and out, images, video) from the built images, the persona it plays and
+  // that persona's voice, how it routes, and its memory budget. Saves the
+  // persona's voice (when changed) to /api/personas, then the ensemble to
+  // /api/ensembles.
   import { untrack } from "svelte";
   import Icon from "../Icon.svelte";
-  import { post } from "../../lib/api";
+  import VoiceEditor from "../personas/VoiceEditor.svelte";
+  import { post, type ApiError } from "../../lib/api";
   import { ui } from "../../lib/ui.svelte";
   import { href } from "../../lib/router";
   import { modMeta } from "../../lib/icons";
-  import { gb, computeName, computeChip, engineName } from "../../lib/format";
+  import { gb, computeName } from "../../lib/format";
   import { live } from "../../lib/live.svelte";
-  import { catalog, sysinfo } from "../../lib/stores";
-  import type { Ensemble, EnsembleMember } from "../../lib/types";
-  import { candidates, slug, TOOL_TEXT, type Candidate } from "./util";
+  import { catalog, personas, sysinfo, loadPersonas } from "../../lib/stores";
+  import type { Ensemble, EnsembleMember, Persona, PersonaVoice } from "../../lib/types";
+  import { candidates, memberOf, slug, SLOTS, type Candidate, type Slot } from "./util";
 
   let {
     ens,
@@ -31,13 +35,18 @@
   // ---- form state, seeded once from the ensemble being edited -------------------
   const dockerGpu = untrack(() => $sysinfo?.engines?.find((e) => e.engine === "docker")?.gpu || "");
   const seed = untrack(() => ens);
+  const seedMembers = seed?.members ?? [];
+  /** The first saved member per tool (an older ensemble could list two). */
+  const oldMember = (tool: string): EnsembleMember | undefined => seedMembers.find((m) => m.tool === tool);
+
   let name = $state(seed?.name ?? "");
-  let chosen = $state<string[]>((seed?.members ?? []).map((m) => m.image));
+  let pick = $state<Record<string, string>>(Object.fromEntries(SLOTS.map((s) => [s.tool, oldMember(s.tool)?.image ?? ""])));
+  let pin = $state<Record<string, boolean>>(Object.fromEntries(SLOTS.map((s) => [s.tool, !!oldMember(s.tool)?.pinned])));
   let routing = $state(seed?.routing || "heuristic");
   let conductor = $state(seed?.conductor ?? "");
   let budget = $state(seed?.vram_budget_gb || 12);
   let compute = $state(seed?.compute || dockerGpu || "cpu");
-  let mode = $state(seed?.package_mode || "orchestrated");
+  let personaId = $state(seed?.persona ?? "");
   let saving = $state(false);
   let error = $state("");
   let nameInput: HTMLInputElement | undefined = $state();
@@ -48,44 +57,66 @@
 
   const cands = $derived(candidates(live.images, $catalog));
   const usable = (c: Candidate) => c.engine !== "podman";
-  // Members whose image is gone stay listed so they can be removed.
-  const missing = $derived(
-    (seed?.members ?? []).filter((m) => !cands.some((c) => c.ref === m.image)),
-  );
+  const options = (s: Slot) => cands.filter((c) => s.mods.includes(c.modality));
   const chatImages = $derived(cands.filter((c) => c.tool === "chat" && usable(c)));
+  const candFor = (ref: string) => cands.find((c) => c.ref === ref);
 
-  function memberFor(ref: string): EnsembleMember | null {
-    const c = cands.find((x) => x.ref === ref);
-    const old = seed?.members?.find((m) => m.image === ref);
-    if (c) return { tool: c.tool, modality: c.modality, image: c.ref, vram_gb: old?.vram_gb || c.vram || 6 };
-    return old ?? null;
+  /** The member a slot holds now: its picked image as a candidate, else the saved member (image gone). */
+  function slotMember(s: Slot): EnsembleMember | null {
+    const ref = pick[s.tool];
+    if (!ref) return null;
+    const c = candFor(ref);
+    if (c) return memberOf(s, c, pin[s.tool]);
+    const old = seedMembers.find((m) => m.tool === s.tool && m.image === ref);
+    return old ? { ...old, pinned: pin[s.tool] || undefined } : null;
   }
-  const members = $derived(chosen.map(memberFor).filter((m): m is EnsembleMember => !!m));
+  const members = $derived(SLOTS.map(slotMember).filter((m): m is EnsembleMember => !!m));
+  const gone = (s: Slot) => !!pick[s.tool] && !candFor(pick[s.tool]);
 
-  function toggle(ref: string, on: boolean) {
-    chosen = on ? [...chosen, ref] : chosen.filter((r) => r !== ref);
-  }
+  // ---- persona and its voice ---------------------------------------------------------
+  const persona = $derived<Persona | undefined>($personas.find((p) => p.id === personaId));
+  const norm = (v: PersonaVoice | undefined): PersonaVoice =>
+    !v?.kind ? { kind: "" } : v.kind === "builtin" ? { kind: "builtin", name: v.name ?? "" } : { kind: "clone", clip: v.clip ?? "" };
+  let voice = $state<PersonaVoice>({ kind: "" });
+  let voiceFor = "";
+  $effect(() => {
+    const p = persona;
+    const id = p?.id ?? "";
+    if (id === voiceFor) return;
+    voiceFor = id;
+    voice = norm(p?.voice);
+  });
+  const voiceDirty = $derived(!!persona && JSON.stringify(norm(voice)) !== JSON.stringify(norm(persona.voice)));
+  const speak = $derived(members.find((m) => m.tool === "speak"));
+  const speakCand = $derived(speak ? candFor(speak.image) : undefined);
+  const speakName = $derived(speakCand?.modelName ?? speak?.model ?? "");
+  const canClone = $derived(speak ? (speakCand ? speakCand.voiceClone : !!speak.voice_clone) : null);
 
   // ---- what to tell them before saving --------------------------------------------
   const totalGB = $derived(members.reduce((s, m) => s + (m.vram_gb || 0), 0));
-  const unknownVRAM = $derived(chosen.some((r) => {
-    const c = cands.find((x) => x.ref === r);
-    return c ? c.vram == null && !seed?.members?.find((m) => m.image === r)?.vram_gb : false;
-  }));
+  const pinnedGB = $derived(members.filter((m) => m.pinned).reduce((s, m) => s + (m.vram_gb || 0), 0));
+  const unknownFootprint = $derived(members.some((m) => !m.vram_gb));
   const warnings = $derived.by(() => {
     const w: string[] = [];
     if (!members.length) return w;
-    const tools = members.map((m) => m.tool);
-    if (!tools.includes("chat")) w.push("No chat model: a request that isn't about an image, a picture to draw, a video or speech has nowhere to go.");
-    const dup = [...new Set(tools.filter((t, i) => tools.indexOf(t) !== i))];
-    for (const t of dup) w.push(`More than one member does “${TOOL_TEXT[t] ?? t}”: only the first one in the list is used.`);
-    if (tools.includes("transcribe")) w.push("The Conductor doesn't route to speech-to-text yet, so that member isn't used.");
+    if (!pick.chat) w.push("Pick a chat member: it answers everything that isn't an image, a picture to draw, a video or speech.");
+    if (persona && voice.kind && !pick.speak) w.push(`${persona.name} has a voice, but the ensemble has no speech member to speak with it. Pick one under Speech.`);
     if (routing === "tool-calling" && !conductor) w.push("Tool-calling needs a conductor model; without one it routes with the heuristic.");
-    const big = Math.max(0, ...members.map((m) => m.vram_gb || 0));
-    if (big > budget) w.push(`The budget (${gb(budget, 0)}) is smaller than one member (${gb(big, 0)}): that member can never start within it.`);
-    if (mode === "embedded") w.push("Embedded isn't built yet: an embedded ensemble doesn't start its members, so only ones already running would answer.");
+    const b = Number(budget) || 0;
+    for (const m of members) {
+      if ((m.vram_gb || 0) > b) w.push(`${candFor(m.image)?.modelName ?? m.image} needs ~${gb(m.vram_gb, 0)}, more than the ${gb(b, 0)} budget: it can never start. Raise the budget.`);
+    }
+    if (pinnedGB > b) w.push(`The members you keep warm need ~${gb(pinnedGB, 0)}, more than the ${gb(b, 0)} budget. Keep fewer warm, or raise the budget.`);
+    const pod = SLOTS.filter((s) => pick[s.tool] && candFor(pick[s.tool])?.engine === "podman");
+    for (const s of pod) w.push(`The ${s.label.toLowerCase()} image is built for Podman; an ensemble starts its members with Docker. Build it for Docker.`);
     return w;
   });
+
+  function voiceProblem(): string {
+    if (voice.kind === "builtin" && !voice.name?.trim()) return "Name the persona's built-in voice, or pick another kind of voice.";
+    if (voice.kind === "clone" && !voice.clip) return "Pick or record a voice clip for the persona, or pick another kind of voice.";
+    return "";
+  }
 
   async function save() {
     error = "";
@@ -105,32 +136,46 @@
       nameInput?.focus();
       return;
     }
-    if (!members.length) {
-      error = "Pick at least one member.";
+    if (!pick.chat) {
+      error = "Pick a chat member: every ensemble needs one.";
       return;
     }
     const b = Number(budget);
     if (!Number.isFinite(b) || b <= 0) {
-      error = "Give it a VRAM budget above 0 GB.";
+      error = "Give it a memory budget above 0 GB.";
       return;
+    }
+    if (persona && voiceDirty) {
+      const vp = voiceProblem();
+      if (vp) {
+        error = vp;
+        return;
+      }
     }
     const body: Partial<Ensemble> = {
       id: ens?.id,
       name: n,
-      package_mode: mode,
+      package_mode: "orchestrated",
       routing,
       conductor,
       vram_budget_gb: b,
       engine: ens?.engine || "docker",
       compute,
+      persona: personaId || "",
       members,
     };
     saving = true;
     try {
+      // The voice belongs to the persona: save it there first.
+      if (persona && voiceDirty) {
+        await post<Persona>("/api/personas", { id: persona.id, name: persona.name, prompt: persona.prompt, voice: norm(voice) });
+        await loadPersonas();
+      }
       const saved = await post<Ensemble>("/api/ensembles", body);
       onsaved(saved);
     } catch (e) {
-      error = `It wasn't saved: ${(e as Error).message || "the factory didn't answer"}.`;
+      const err = e as ApiError;
+      error = err.status === 409 && err.message ? err.message : `It wasn't saved: ${err.message || "the factory didn't answer"}.`;
     } finally {
       saving = false;
     }
@@ -140,9 +185,13 @@
   let sectionEl: HTMLElement | undefined = $state();
   function onKey(e: KeyboardEvent) {
     if (e.key !== "Escape" || ui.paletteOpen || !sectionEl?.contains(document.activeElement)) return;
+    if ((e.target as HTMLElement)?.closest?.("audio")) return;
     e.preventDefault();
     onclose();
   }
+
+  const optText = (c: Candidate) =>
+    `${c.name.replace(/^(localhost\/)?local-llm\//, "")} · ${computeName(c.compute)}${c.footprint != null ? ` · ~${gb(c.footprint, 0)}` : ""}${usable(c) ? "" : " · Podman, can't be used"}`;
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -171,61 +220,74 @@
     {/if}
   </div>
 
-  <!-- Members -->
+  <!-- Members, one per slot -->
   <fieldset class="grp">
     <legend>Members</legend>
-    <p class="hint">The built images it can use. Each one backs a tool; the Conductor starts it the first time it's needed.</p>
+    <p class="hint">One built image per job. The Conductor starts each the first time it's needed; “Keep warm” starts it with the ensemble and never stops it to make room.</p>
     {#if !live.loaded.images}
       <p class="empty"><span class="spin" aria-hidden="true"></span> Reading your images…</p>
-    {:else if !cands.length && !missing.length}
+    {:else if !cands.length && !seedMembers.length}
       <p class="empty">
-        No built images yet. <a href={href("catalog")}>Build a model</a> first: a chat model, plus any of vision, image,
-        video or speech.
+        No built images yet. <a href={href("catalog")}>Build a model</a> first: a chat model, plus any of vision, speech,
+        image or video.
       </p>
     {:else}
-      <ul class="mem">
-        {#each cands as c (c.ref)}
-          {@const on = chosen.includes(c.ref)}
-          <li class:off={!usable(c)}>
-            <label>
-              <input
-                type="checkbox"
-                checked={on}
-                disabled={!usable(c) && !on}
-                onchange={(e) => toggle(c.ref, (e.currentTarget as HTMLInputElement).checked)} />
-              <span class="mi" title={modMeta(c.modality).label}><Icon name={modMeta(c.modality).icon} size={15} /></span>
-              <span class="mt">
-                <span class="mono nm">{c.name}</span>
-                <small>
-                  {TOOL_TEXT[c.tool] ?? c.tool}
-                  {#if !usable(c)} · built for Podman; an ensemble starts its members with Docker{/if}
-                </small>
-              </span>
-              <span class="tags">
-                {#if c.compute}<span class={computeChip(c.compute)}>{computeName(c.compute)}</span>{/if}
-                {#if c.engine === "podman"}<span class="chip">{engineName(c.engine)}</span>{/if}
-              </span>
-              <span class="vr mono" title={c.vram == null ? "The catalog gives no VRAM figure for it: it counts as 6 GB toward the budget" : "VRAM it needs (from the catalog)"}>
-                {c.vram == null ? "—" : `~${gb(c.vram, 0)}`}
-              </span>
-            </label>
-          </li>
-        {/each}
-        {#each missing as m (m.image)}
-          {@const on = chosen.includes(m.image)}
-          <li class="gone">
-            <label>
-              <input type="checkbox" checked={on} onchange={(e) => toggle(m.image, (e.currentTarget as HTMLInputElement).checked)} />
-              <span class="mi"><Icon name={modMeta(m.modality).icon} size={15} /></span>
-              <span class="mt">
-                <span class="mono nm">{m.image}</span>
-                <small>{TOOL_TEXT[m.tool] ?? m.tool} · this image isn't on Docker any more</small>
-              </span>
-              <span class="vr mono">{m.vram_gb ? `~${gb(m.vram_gb, 0)}` : "—"}</span>
+      <ul class="slots">
+        {#each SLOTS as s (s.tool)}
+          {@const opts = options(s)}
+          {@const old = seedMembers.find((m) => m.tool === s.tool && m.image === pick[s.tool])}
+          <li class:set={!!pick[s.tool]}>
+            <span class="mi" aria-hidden="true"><Icon name={modMeta(s.mods[0]).icon} size={15} /></span>
+            <span class="sl">
+              <label for="{uid}-slot-{s.tool}">{s.label}{#if s.tool === "chat"}<em> · required</em>{/if}</label>
+              <small>{s.help}</small>
+            </span>
+            <span class="pk">
+              <select id="{uid}-slot-{s.tool}" bind:value={pick[s.tool]} class:bad={gone(s)}>
+                <option value="">{opts.length ? "None" : `None built yet`}</option>
+                {#each opts as c (c.ref)}<option value={c.ref} disabled={!usable(c) && pick[s.tool] !== c.ref}>{optText(c)}</option>{/each}
+                {#if gone(s)}<option value={pick[s.tool]}>{pick[s.tool]} · not built any more</option>{/if}
+              </select>
+              {#if gone(s)}
+                <small class="gonet">This image isn't on Docker any more ({old?.model || "build it again"}). Pick another, or rebuild it.</small>
+              {/if}
+            </span>
+            <label class="kw" title="Start it with the ensemble and never stop it to make room">
+              <input type="checkbox" class="tg" bind:checked={pin[s.tool]} disabled={!pick[s.tool]} />
+              <span>Keep warm</span>
             </label>
           </li>
         {/each}
       </ul>
+    {/if}
+  </fieldset>
+
+  <!-- Persona and voice -->
+  <fieldset class="grp">
+    <legend>Persona and voice</legend>
+    <div class="fl">
+      <label for="{uid}-persona">Persona</label>
+      <select id="{uid}-persona" bind:value={personaId}>
+        <option value="">None: no system prompt, the speech member's default voice</option>
+        {#each $personas as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
+        {#if personaId && !persona}<option value={personaId}>A deleted persona ({personaId})</option>{/if}
+      </select>
+      {#if personaId && !persona}
+        <p class="hint warn">That persona was deleted. Pick another, or none.</p>
+      {:else if persona}
+        <p class="hint">Its prompt comes first in every chat. <a href={href("personas", persona.id)}>Edit {persona.name}</a></p>
+      {:else}
+        <p class="hint">A persona gives the ensemble a character to play and a voice to speak with. <a href={href("personas", "new")}>Make one</a></p>
+      {/if}
+    </div>
+    {#if persona}
+      <div class="voice">
+        <span class="vl">{persona.name}'s voice</span>
+        <VoiceEditor bind:voice ensembleId={ens?.id ?? ""} speakModel={speak?.model ?? ""} {speakName} {canClone} defaultClipName={`${persona.name}'s voice`} />
+        <p class="hint">
+          The voice is saved with the persona{voiceDirty ? " when you save the ensemble" : ""}: every ensemble that uses {persona.name} speaks with it.
+        </p>
+      </div>
     {/if}
   </fieldset>
 
@@ -239,7 +301,7 @@
       </label>
       <label class:on={routing === "tool-calling"}>
         <input type="radio" name="{uid}-routing" value="tool-calling" bind:group={routing} />
-        <b>Tool-calling</b><span>A small model picks the tool</span>
+        <b>Tool-calling</b><span>A small model picks the member</span>
       </label>
     </div>
     {#if routing === "tool-calling"}
@@ -258,30 +320,25 @@
   <!-- Runs on -->
   <fieldset class="grp">
     <legend>Runs on</legend>
-    <div class="three">
+    <div class="two">
       <div class="fl">
-        <label for="{uid}-comp">Compute for its members</label>
+        <label for="{uid}-budget">Memory budget (GB)</label>
+        <input id="{uid}-budget" type="number" min="1" max="512" step="1" bind:value={budget} />
+        <p class="hint">What its members may use at once: VRAM for GPU members, RAM for CPU ones.</p>
+      </div>
+      <div class="fl">
+        <label for="{uid}-comp">Compute for older member images</label>
         <select id="{uid}-comp" bind:value={compute}>
           <option value="cpu">CPU</option>
           <option value="cuda">NVIDIA GPU (CUDA)</option>
           <option value="vulkan">GPU (Vulkan)</option>
         </select>
-      </div>
-      <div class="fl">
-        <label for="{uid}-budget">VRAM budget (GB)</label>
-        <input id="{uid}-budget" type="number" min="1" max="80" step="1" bind:value={budget} />
-      </div>
-      <div class="fl">
-        <label for="{uid}-mode">Package</label>
-        <select id="{uid}-mode" bind:value={mode}>
-          <option value="orchestrated">Orchestrated: starts members as containers</option>
-          <option value="embedded">Embedded: everything in one image (not built yet)</option>
-        </select>
+        <p class="hint">Each member runs on the compute its image was built for; this is only for images that don't say.</p>
       </div>
     </div>
     {#if members.length}
       <p class="hint meter">
-        Members need {unknownVRAM ? "at least " : ""}~{gb(totalGB, 0)} in all, against a {gb(Number(budget) || 0, 0)} budget.
+        Members need {unknownFootprint ? "at least " : ""}~{gb(totalGB, 0)} in all, against a {gb(Number(budget) || 0, 0)} budget.
         {#if totalGB > budget}The Conductor stops the least recently used member to start another.{:else}They all fit at once.{/if}
       </p>
     {/if}
@@ -311,6 +368,7 @@
   .fl input, .fl select { font-size: 13px; padding: 7px 10px; }
   .hint { font-size: 12px; line-height: 1.45; }
   .hint .mono { font-size: 11.5px; color: var(--ink); }
+  .hint.warn { color: var(--wa); }
 
   .grp { border: 0; padding: 0; margin: 14px 0 0; min-width: 0; }
   .grp legend {
@@ -325,27 +383,30 @@
   .empty { padding: 8px 0; font-size: 12.5px; display: flex; align-items: center; gap: 8px; }
   .empty .spin { width: 14px; height: 14px; }
 
-  .mem { list-style: none; margin: 8px 0 0; padding: 0; border: 1px solid var(--ln); border-radius: 11px; overflow: hidden; }
-  .mem li + li { border-top: 1px solid var(--ln); }
-  .mem label {
+  .slots { list-style: none; margin: 8px 0 0; padding: 0; border: 1px solid var(--ln); border-radius: 11px; overflow: hidden; }
+  .slots li {
     display: grid;
-    grid-template-columns: 16px 30px minmax(0, 1fr) auto 52px;
-    gap: 10px;
+    grid-template-columns: 30px minmax(150px, 0.8fr) minmax(0, 1.4fr) auto;
+    gap: 12px;
     align-items: center;
-    padding: 8px 12px;
-    cursor: pointer;
+    padding: 9px 12px;
   }
-  .mem label:hover { background: var(--p2); }
-  .mem input { margin: 0; width: 15px; height: 15px; }
-  .mem li.off label { cursor: not-allowed; }
-  .mem li.off .mt, .mem li.off .mi { opacity: 0.6; }
-  .mem li.gone .nm { color: var(--wa); }
+  .slots li + li { border-top: 1px solid var(--ln); }
+  .slots li.set .mi { background: var(--prs); color: var(--pr); }
   .mi { width: 30px; height: 30px; border-radius: 8px; background: var(--p3); display: grid; place-items: center; color: var(--mu); }
-  .mt { min-width: 0; display: flex; flex-direction: column; }
-  .nm { color: var(--ink); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mt small { color: var(--mu); font-size: 12px; }
-  .tags { display: flex; gap: 4px; }
-  .vr { color: var(--mu); font-size: 12px; text-align: right; }
+  .sl { display: flex; flex-direction: column; min-width: 0; }
+  .sl label { font-size: 13px; font-weight: 600; color: var(--ink); }
+  .sl em { font-style: normal; font-weight: 500; color: var(--fa); font-size: 12px; }
+  .sl small { color: var(--mu); font-size: 12px; line-height: 1.35; }
+  .pk { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .pk select { font-size: 12.5px; padding: 6px 9px; min-width: 0; width: 100%; }
+  .pk select.bad { border-color: var(--wa); }
+  .gonet { color: var(--wa); font-size: 11.5px; }
+  .kw { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--mu); white-space: nowrap; cursor: pointer; }
+  .kw:has(input:disabled) { opacity: 0.5; cursor: default; }
+
+  .voice { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid var(--ln); border-radius: 11px; }
+  .vl { font-size: 12px; font-weight: 600; color: var(--ink); }
 
   .segc { display: flex; padding: 3px; border: 1px solid var(--ln2); border-radius: 10px; gap: 2px; max-width: 520px; }
   .segc label {
@@ -363,8 +424,8 @@
   .segc input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
   .segc label:has(input:focus-visible) { outline: 2px solid var(--pr); outline-offset: 1px; }
 
-  .three { display: grid; grid-template-columns: minmax(0, 1fr) 140px minmax(0, 1.4fr); gap: 12px; }
-  .three .fl { margin-top: 4px; }
+  .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 12px; }
+  .two .fl { margin-top: 4px; }
   .meter { margin-top: 8px; }
 
   .callout { margin-top: 10px; }
@@ -372,9 +433,15 @@
   .acts { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
   .spin.dark { width: 14px; height: 14px; border-color: color-mix(in srgb, var(--onpr) 30%, transparent); border-top-color: var(--onpr); }
 
+  @media (max-width: 1100px) {
+    .slots li { grid-template-columns: 30px minmax(0, 1fr) auto; row-gap: 8px; }
+    .pk { grid-column: 2 / 4; grid-row: 2; }
+    .kw { grid-column: 3; grid-row: 1; }
+  }
   @media (max-width: 760px) {
-    .three { grid-template-columns: minmax(0, 1fr); }
-    .mem label { grid-template-columns: 16px 30px minmax(0, 1fr) auto; }
-    .tags { display: none; }
+    .two { grid-template-columns: minmax(0, 1fr); }
+    .slots li { grid-template-columns: 30px minmax(0, 1fr); }
+    .pk { grid-column: 2; grid-row: 2; }
+    .kw { grid-column: 2; grid-row: 3; justify-self: start; }
   }
 </style>

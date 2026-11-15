@@ -6,7 +6,9 @@ export const COMPUTE_BADGE: Record<string, string> = { cpu: "CPU", cuda: "GPU (C
 export const computeBadge = (c?: string) => COMPUTE_BADGE[c ?? ""] ?? "CPU";
 export const engineBadge = (e?: string) => (e === "podman" ? "Podman" : "Docker");
 export const ctxDefaultFor = (compute: string) => (compute === "cuda" || compute === "vulkan" ? 8192 : 4096);
-export const isStreamMod = (m: string) => m === "text" || m === "code" || m === "reasoning" || m === "vision";
+// Models whose replies stream as chat tokens. An ensemble streams too: its
+// Conductor passes the chat member's stream through.
+export const isStreamMod = (m: string) => m === "text" || m === "code" || m === "reasoning" || m === "vision" || m === "ensemble";
 
 export function containerRef(c: ContainerInfo): string {
   return labelVal(c.Labels, "local-llm.ref") || (c.Image ?? "");

@@ -1414,6 +1414,10 @@ const TTS: Record<string, TtsSpec> = {
 };
 // Unknown TTS images keep the old behaviour: no voice list, speed slider shown.
 export const ttsSpec = (id?: string): TtsSpec => TTS[id ?? ""] ?? { voices: [], speed: true, style: false };
+/** Every built-in voice the factory knows, with the model it belongs to (for a persona's voice). */
+export function knownVoices(): { id: string; label: string; model: string }[] {
+  return Object.entries(TTS).flatMap(([model, s]) => s.voices.map(([id, label]) => ({ id, label, model })));
+}
 
 // Image sampling defaults per model. Distilled models (Z-Image Turbo, FLUX.2
 // klein) want CFG 1 — a higher CFG doubles the work for no visible gain — and

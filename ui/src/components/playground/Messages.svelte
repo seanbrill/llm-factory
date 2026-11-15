@@ -1,7 +1,9 @@
 <script lang="ts">
-  // One side's conversation: your messages on the right, the model's replies as
-  // markdown (with its thinking folded away), generated images, video and
-  // speech, a progress ring while media generates, and what went wrong.
+  // One side's conversation: your messages on the right (typed or asked out
+  // loud), the model's replies as markdown (with its thinking folded away),
+  // generated images, video and speech (an ensemble's reply can hold words and
+  // media together), a progress ring while media generates or an ensemble's
+  // member warms up, and what went wrong.
   import type { Snippet } from "svelte";
   import Icon from "../Icon.svelte";
   import GenLoader from "../GenLoader.svelte";
@@ -29,6 +31,10 @@
     void last?.reasoning;
     void last?.pending;
     void last?.err;
+    void last?.images;
+    void last?.video;
+    void last?.audio;
+    void last?.note;
     if (n !== count) {
       if (n > count) stick = true;
       count = n;
@@ -65,25 +71,21 @@
           {#if m.kind === "audio"}
             {#if m.audio}<audio controls src={m.audio}></audio>{/if}
             <span class="fn"><Icon name="mic" size={13} />{m.content}</span>
+          {:else if m.spoken}
+            <div class="ut" class:heard={m.content === "Transcribing…"}>{m.content}</div>
+            <span class="fn"><Icon name="mic" size={13} />Asked out loud</span>
           {:else if m.content}
             <div class="ut">{m.content}</div>
           {/if}
         </div>
       {:else}
+        {@const media = !!(m.images?.length || m.video || m.audio)}
         <div class="a" class:bridge={!!m.bridgeFrom} class:b={m.bridgeSide === "b"}>
           {#if m.bridgeFrom || persona}<div class="who">{m.bridgeFrom || persona}</div>{/if}
           {#if m.pending}
             <GenLoader eta={m.pending.eta} label={m.pending.label} />
-          {:else if m.kind === "image" && m.images?.length}
-            <div class="gens">{#each m.images as src, j (j)}<img class="gen" {src} alt={`Made from “${pane.msgs[i - 1]?.content || "your prompt"}”`} />{/each}</div>
-          {:else if m.kind === "video" && m.video}
-            <!-- svelte-ignore a11y_media_has_caption (generated clips have no sound) -->
-            <video class="gen" controls loop playsinline src={m.video}></video>
-          {:else if m.kind === "audio" && m.audio}
-            <audio controls autoplay={m.autoplay} src={m.audio}></audio>
-          {:else if (m.kind === "image" || m.kind === "video" || m.kind === "audio") && !m.err}
-            <p class="note">This {m.kind} wasn't kept after the page reloaded. Send the prompt again to make a new one.</p>
           {:else}
+            <!-- A reply can hold words, generated media, or both (an ensemble's caption and its image). -->
             {#if m.reasoning}
               <details class="think" open={!m.content}>
                 <summary><Icon name="idea" size={13} />Thinking{live && !m.content ? "…" : ""}</summary>
@@ -92,10 +94,24 @@
             {/if}
             {#if m.content}
               <div class="md" class:old-err={m.error} class:live>{@html m.error ? escapeHtml(m.content) : renderAssistant(m.content)}</div>
-            {:else if live}
+            {:else if live && !media}
               <span class="typing" role="status" aria-label="Writing"><i></i><i></i><i></i></span>
             {/if}
+            {#if m.images?.length}
+              <div class="gens">{#each m.images as src, j (j)}<img class="gen" {src} alt={`Made from “${pane.msgs[i - 1]?.content || "your prompt"}”`} />{/each}</div>
+            {/if}
+            {#if m.video}
+              <!-- svelte-ignore a11y_media_has_caption (generated clips have no sound) -->
+              <video class="gen" controls loop playsinline src={m.video}></video>
+            {/if}
+            {#if m.audio}
+              <audio controls autoplay={m.autoplay} src={m.audio}></audio>
+            {/if}
+            {#if (m.kind === "image" || m.kind === "video" || m.kind === "audio") && !media && !m.err}
+              <p class="note">This {m.kind} wasn't kept after the page reloaded. Send the prompt again to make a new one.</p>
+            {/if}
           {/if}
+          {#if m.note}<p class="note">{m.note}</p>{/if}
           {#if m.err}
             <div class="callout er">
               <Icon name="errc" />
@@ -130,6 +146,7 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
+  .ut.heard { color: var(--mu); font-style: italic; }
   .att { max-width: 220px; max-height: 220px; border-radius: 10px; border: 1px solid var(--ln); object-fit: cover; }
   .fn { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--mu); }
   .a { font-size: 13.5px; line-height: 1.6; color: color-mix(in srgb, var(--ink) 90%, var(--cv)); min-width: 0; display: flex; flex-direction: column; gap: 6px; }

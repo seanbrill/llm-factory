@@ -3,9 +3,12 @@
   // every message to both sides.
   import { personas } from "../../lib/stores";
   import { href } from "../../lib/router";
-  import { save, type Tab } from "../../lib/chat.svelte";
+  import { save, visiblePanes, type Tab } from "../../lib/chat.svelte";
 
   let { tab }: { tab: Tab } = $props();
+
+  // An ensemble puts its own persona's prompt first; this one is added after it.
+  const ensemble = $derived(visiblePanes(tab).some((p) => p.modality === "ensemble"));
 
   // "" = none, "~" = your own text, else a persona id.
   const current = $derived(
@@ -49,10 +52,17 @@
     Goes first in every request{tab.compare ? ", to both sides" : ""}. A model built with its own prompt may add that one too.
     <a href={href("personas")}>Manage personas</a>
   </p>
+  {#if ensemble}
+    <p class="hint ens">
+      An ensemble applies its own persona first, and speaks in that persona's voice; the prompt here is added after
+      it. Change the ensemble's persona on the <a href={href("ensembles")}>Ensembles</a> page.
+    </p>
+  {/if}
 </div>
 
 <style>
   .f { display: flex; flex-direction: column; gap: 6px; }
   textarea { min-height: 96px; }
   .hint { color: var(--fa); font-size: 12px; }
+  .hint.ens { padding: 8px 10px; border-radius: var(--r); background: var(--prs); color: var(--ink); }
 </style>

@@ -1,0 +1,188 @@
+package voice
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// Speaker is a speech member as the adapters see it.
+type Speaker struct {
+	Runtime string // catalog runtime: "cpp" (Piper), "python" (Kokoro), "audiocpp", or "contract"
+	Model   string // catalog model id, for messages
+	Clone   bool   // the member can speak a cloned voice (ensemble.Member.VoiceClone)
+}
+
+// Call is one HTTP request to a speech member: POST Path with Body.
+type Call struct {
+	Path        string
+	Body        []byte
+	ContentType string
+}
+
+// Adapter maps a contract SpeechRequest to one runtime's request. Adding a
+// speech runtime means adding an adapter here and a case in For.
+type Adapter interface {
+	Name() string
+	Clones() bool
+	Call(r SpeechRequest) (Call, error)
+}
+
+// CloneError says a speech member can't speak a cloned voice.
+type CloneError struct {
+	Model   string
+	Runtime string
+}
+
+func (e *CloneError) Error() string {
+	who := e.Model
+	if who == "" {
+		who = "this speech model"
+	}
+	return fmt.Sprintf("the speech member (%s) can't clone voices: it only speaks its built-in voices. "+
+		"Give the persona a built-in voice, or make an audio.cpp speech model (e.g. Pocket TTS) the ensemble's speech member", who)
+}
+
+// For picks the adapter for a speech member.
+func For(s Speaker) Adapter {
+	switch s.Runtime {
+	case "audiocpp":
+		return audioCpp{s}
+	case "python":
+		return pygate{s}
+	case "", "cpp":
+		return piper{s}
+	default:
+		return contract{s}
+	}
+}
+
+func jsonCall(body map[string]any) (Call, error) {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return Call{}, err
+	}
+	return Call{Path: "/v1/audio/speech", Body: b, ContentType: "application/json"}, nil
+}
+
+func checkInput(r SpeechRequest) error {
+	if strings.TrimSpace(r.Input) == "" {
+		return fmt.Errorf("nothing to say: the input is empty")
+	}
+	if len(r.Input) > MaxInputChars {
+		return fmt.Errorf("the input is too long to speak (%d characters, at most %d)", len(r.Input), MaxInputChars)
+	}
+	return nil
+}
+
+func (s Speaker) refuseClone(r SpeechRequest) error {
+	if r.IsClone() && !s.Clone {
+		return &CloneError{Model: s.Model, Runtime: s.Runtime}
+	}
+	return nil
+}
+
+// piper: the factory's Piper image (docker/Dockerfile.tts.cpu) takes {"input"}
+// and speaks its one baked voice.
+type piper struct{ s Speaker }
+
+func (piper) Name() string { return "piper" }
+func (piper) Clones() bool { return false }
+func (a piper) Call(r SpeechRequest) (Call, error) {
+	if err := checkInput(r); err != nil {
+		return Call{}, err
+	}
+	if r.IsClone() {
+		return Call{}, &CloneError{Model: a.s.Model, Runtime: "cpp"}
+	}
+	return jsonCall(map[string]any{"input": r.Input})
+}
+
+// pygate: the Python runtime (cmd/pygate, Kokoro) takes {input, voice, speed}.
+// A clone-capable Python model would take the contract's ref_audio/ref_text.
+type pygate struct{ s Speaker }
+
+func (pygate) Name() string   { return "pygate" }
+func (a pygate) Clones() bool { return a.s.Clone }
+func (a pygate) Call(r SpeechRequest) (Call, error) {
+	if err := checkInput(r); err != nil {
+		return Call{}, err
+	}
+	if err := a.s.refuseClone(r); err != nil {
+		return Call{}, err
+	}
+	body := map[string]any{"input": r.Input}
+	if r.Voice != "" {
+		body["voice"] = r.Voice
+	}
+	if r.Speed > 0 {
+		body["speed"] = r.Speed
+	}
+	if r.IsClone() {
+		body["ref_audio"] = r.RefAudio
+		body["ref_text"] = r.RefText
+	}
+	return jsonCall(body)
+}
+
+// audioCpp: audio.cpp's server (docker/Dockerfile.audiocpp.cpu) serves its one
+// model as id "tts" and takes OpenAI's fields plus, for a clone, voice_ref
+// {"type":"base64","data":<wav>} and reference_text (Pocket TTS needs only the
+// clip; Qwen3-TTS Base also wants the transcript). It rejects a speed its model
+// doesn't support, so speed goes only when it isn't 1. stream_format ("sse" or
+// "audio", with response_format "pcm") streams from a model configured with
+// mode "streaming". See https://github.com/0xShug0/audio.cpp/blob/main/app/server/api.md.
+type audioCpp struct{ s Speaker }
+
+func (audioCpp) Name() string   { return "audiocpp" }
+func (a audioCpp) Clones() bool { return a.s.Clone }
+func (a audioCpp) Call(r SpeechRequest) (Call, error) {
+	if err := checkInput(r); err != nil {
+		return Call{}, err
+	}
+	if err := a.s.refuseClone(r); err != nil {
+		return Call{}, err
+	}
+	body := map[string]any{"model": "tts", "input": r.Input}
+	if r.IsClone() {
+		body["voice_ref"] = map[string]string{"type": "base64", "data": r.RefAudio}
+		if strings.TrimSpace(r.RefText) != "" {
+			body["reference_text"] = r.RefText
+		}
+	} else if r.Voice != "" {
+		body["voice"] = r.Voice
+	}
+	if r.Speed > 0 && r.Speed != 1 {
+		body["speed"] = r.Speed
+	}
+	if strings.TrimSpace(r.Instructions) != "" {
+		body["instructions"] = r.Instructions
+	}
+	if r.StreamFormat != "" {
+		body["stream_format"] = r.StreamFormat
+		body["response_format"] = "pcm"
+	}
+	return jsonCall(body)
+}
+
+// contract: a runtime that speaks this contract as is.
+type contract struct{ s Speaker }
+
+func (contract) Name() string   { return "contract" }
+func (a contract) Clones() bool { return a.s.Clone }
+func (a contract) Call(r SpeechRequest) (Call, error) {
+	if err := checkInput(r); err != nil {
+		return Call{}, err
+	}
+	if err := a.s.refuseClone(r); err != nil {
+		return Call{}, err
+	}
+	if r.ResponseFormat == "" {
+		r.ResponseFormat = "wav"
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return Call{}, err
+	}
+	return Call{Path: "/v1/audio/speech", Body: b, ContentType: "application/json"}, nil
+}

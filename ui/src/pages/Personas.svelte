@@ -78,8 +78,8 @@
 <div class="pp" bind:this={topEl}>
   <div class="lead">
     <p>
-      Named system prompts: who the model is and how it answers. Bake one into an image when you build a model, or apply
-      one when you run an image, without rebuilding.
+      Named system prompts: who the model is and how it answers, and how it sounds. Bake one into an image when you
+      build a model, apply one when you run an image, or give one to an ensemble, which also speaks in its voice.
     </p>
     {#if editing === undefined && list.length && !loadError}<!-- the empty state has its own -->
       <button class="primary" onclick={() => openEditor(null)}><Icon name="plus" size={15} />New persona</button>
@@ -118,6 +118,11 @@
             <div class="ph">
               <span class="av" aria-hidden="true">{p.name.trim().charAt(0).toUpperCase() || "?"}</span>
               <h3 id="per-{p.id}">{p.name}</h3>
+              {#if p.voice?.kind === "builtin" && p.voice.name}
+                <span class="chip" title="Speaks with this built-in voice in an ensemble"><Icon name="speaker" size={12} />Voice: {p.voice.name}</span>
+              {:else if p.voice?.kind === "clone"}
+                <span class="chip pr" title="Speaks with a voice cloned from a clip on this machine"><Icon name="wave" size={12} />Cloned voice</span>
+              {/if}
               <span class="wc">{words(p.prompt)} words</span>
             </div>
             <div class="prompt">

@@ -2,9 +2,13 @@
   // The prompt box: one message to the model, or to both in compare mode. Takes
   // an image (vision) or an audio file (speech to text) by button or paste, the
   // clip length for video models, and stops replies that are still streaming.
+  // With an ensemble on screen it also has a mic (ask out loud, hear the answer
+  // in the persona's voice) and "Speak replies" for typed messages.
+  import { onDestroy } from "svelte";
   import Icon from "../Icon.svelte";
   import { toast } from "../../lib/stores";
-  import { MODE, send, stopTab, streaming, visiblePanes, save, type Tab, type Target } from "../../lib/chat.svelte";
+  import { startRecording, toWav, audioError, elapsed, STT_RATE, type Recording } from "../../lib/audio";
+  import { MODE, send, sendVoice, stopTab, streaming, visiblePanes, save, type Tab, type Target } from "../../lib/chat.svelte";
 
   let { tab, targets, draft = $bindable("") }: { tab: Tab; targets: Target[]; draft?: string } = $props();
 
@@ -31,6 +35,61 @@
         : (MODE[mods[0]]?.ph ?? "Message the model…"),
   );
   const attachLabel = $derived(takesImage && takesAudio ? "Attach an image or audio file" : takesImage ? "Attach an image" : "Attach an audio file");
+
+  // ---- ask out loud (ensembles) ---------------------------------------------------------
+  const MAX_MS = 60000;
+  const hasEnsemble = $derived(mods.includes("ensemble"));
+  let rec: Recording | null = $state(null);
+  let now = $state(0);
+  let converting = $state(false);
+  let tick: ReturnType<typeof setInterval> | undefined;
+
+  async function mic() {
+    if (rec) return finish();
+    if (busy) return;
+    try {
+      rec = await startRecording(false);
+      now = performance.now();
+      tick = setInterval(() => {
+        now = performance.now();
+        if (rec && now - rec.started >= MAX_MS) finish();
+      }, 200);
+    } catch (e) {
+      rec = null;
+      toast(audioError(e), 8000);
+    }
+  }
+  async function finish() {
+    const r = rec;
+    if (!r) return;
+    rec = null;
+    clearInterval(tick);
+    converting = true;
+    try {
+      const { wav, seconds } = await toWav(await r.stop(), STT_RATE);
+      if (seconds < 0.6) {
+        toast("That was too short to hear a question. Click the mic, ask, then click it again to send.", 6000);
+        return;
+      }
+      const res = sendVoice(tab, wav);
+      if (res.notes.length) toast(res.notes.join(" "), 6500);
+    } catch (e) {
+      toast(audioError(e), 8000);
+    } finally {
+      converting = false;
+    }
+  }
+  function cancelMic() {
+    rec?.cancel();
+    rec = null;
+    clearInterval(tick);
+  }
+  onDestroy(cancelMic);
+
+  function toggleSpeak() {
+    tab.speakReplies = !tab.speakReplies;
+    save();
+  }
 
   function grow() {
     if (!ta) return;
@@ -93,6 +152,16 @@
 </script>
 
 <form class="comp" onsubmit={submit}>
+  {#if rec}
+    <div class="recbar" role="status">
+      <i aria-hidden="true"></i>
+      <span>Listening… {elapsed(now - rec.started)}</span>
+      <small>Click the mic again to send, up to 1 minute.</small>
+      <button class="small ghost" type="button" onclick={cancelMic}>Cancel</button>
+    </div>
+  {:else if converting}
+    <div class="recbar" role="status"><span class="spin" aria-hidden="true"></span><span>Preparing your question…</span></div>
+  {/if}
   {#if image || file}
     <div class="att">
       {#if image}<img src={image} alt="" />{:else}<Icon name="mic" size={14} />{/if}
@@ -116,6 +185,28 @@
       {#if accept}
         <input type="file" hidden {accept} bind:this={fileEl} onchange={onFile} />
         <button class="icon" type="button" aria-label={attachLabel} title={attachLabel} disabled={off} onclick={() => fileEl?.click()}><Icon name="attach" size={16} /></button>
+      {/if}
+      {#if hasEnsemble}
+        <button
+          class="icon"
+          class:on={!!tab.speakReplies}
+          type="button"
+          aria-pressed={!!tab.speakReplies}
+          aria-label="Speak replies to typed messages"
+          title={tab.speakReplies ? "Speaking replies in the persona's voice: click to stop" : "Also speak replies to typed messages, in the persona's voice"}
+          disabled={off}
+          onclick={toggleSpeak}><Icon name="speaker" size={16} /></button>
+        <button
+          class="icon mic"
+          class:live={!!rec}
+          type="button"
+          aria-pressed={!!rec}
+          aria-label={rec ? "Stop and send the question" : "Ask out loud"}
+          title={rec ? "Stop and send" : "Ask out loud: the answer comes back in the persona's voice"}
+          disabled={off || converting || (busy && !rec)}
+          onclick={mic}>
+          {#if rec}<Icon name="stopsq" size={15} />{:else}<Icon name="mic" size={16} />{/if}
+        </button>
       {/if}
       {#if hasVideo}
         <label class="len" title="Longer clips take more time and memory">
@@ -179,6 +270,16 @@
     max-width: 100%;
   }
   .att img { width: 32px; height: 32px; object-fit: cover; border-radius: 6px; }
+  .icon.on { background: var(--prs); color: var(--pr); border-color: color-mix(in srgb, var(--pr) 40%, var(--ln2)); }
+  .mic.live { background: var(--ers); color: var(--er); border-color: color-mix(in srgb, var(--er) 45%, var(--ln2)); }
+  .recbar { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; font-size: 13px; color: var(--ink); }
+  .recbar > i { width: 9px; height: 9px; border-radius: 50%; background: var(--er); animation: pulse 1.1s infinite ease-in-out; }
+  .recbar span { font-variant-numeric: tabular-nums; }
+  .recbar small { color: var(--fa); font-size: 12px; }
+  .recbar .spin { width: 13px; height: 13px; }
+  .recbar button { margin-left: auto; }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  @media (prefers-reduced-motion: reduce) { .recbar > i { animation: none; } }
   .att span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   @media (max-width: 760px) {
     .row { flex-wrap: wrap; }

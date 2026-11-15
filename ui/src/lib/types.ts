@@ -28,6 +28,7 @@ export interface Model {
   computes?: string[];        // compute targets this model's runtime can be built for
   legacy?: boolean;           // superseded; hidden in the Build picker by default
   compiles?: boolean;         // its build compiles a runtime from source (needs compile_min_gb on the engine)
+  voice_clone?: boolean;      // a TTS model that can speak a cloned voice from a reference clip
 }
 
 // Build identity from /api/version (stamped by the start scripts).
@@ -152,25 +153,86 @@ export interface ModelFile {
   on_disk_gb: number;
 }
 
-export interface Persona { id: string; name: string; prompt: string; }
+/**
+ * A persona's voice (internal/server personas.go). kind "" (or no voice) = the
+ * speech member's default voice; "builtin" = one of the speech model's own
+ * voices by name; "clone" = a reference clip saved under config/voices.
+ */
+export interface PersonaVoice { kind: "" | "builtin" | "clone"; name?: string; clip?: string; }
+export interface Persona { id: string; name: string; prompt: string; voice?: PersonaVoice; }
+
+/** A saved voice clip (config/voices/<id>.wav + metadata). Never leaves this machine. */
+export interface VoiceClip {
+  id: string;
+  name: string;
+  transcript: string;
+  seconds: number;
+  sample_rate: number;
+  created_at: number; // unix ms
+  consent_at: number; // unix ms: when "This is my voice, or I have permission" was ticked
+}
 
 export interface EnsembleMember {
-  tool: string;
+  tool: string;          // chat | see_image | transcribe | speak | generate_image | generate_video
   modality: string;
   image: string;
+  model?: string;        // catalog id, from the image's local-llm.model label
+  runtime?: string;      // cpp | python | audiocpp
+  compute?: string;      // the member image's compute (cpu | cuda | vulkan)
   port?: number;
-  vram_gb?: number;
+  vram_gb?: number;      // footprint toward the memory budget (VRAM on a GPU, RAM on CPU)
+  pinned?: boolean;      // keep warm: started with the ensemble, never evicted
+  voice_clone?: boolean; // a speech member that can speak a cloned voice (from the catalog)
 }
 export interface Ensemble {
   id: string;
   name: string;
-  package_mode: string;  // orchestrated | embedded
+  package_mode: string;  // orchestrated (embedded isn't built)
   routing: string;       // heuristic | tool-calling
   conductor?: string;
-  vram_budget_gb: number;
+  vram_budget_gb: number; // memory budget: what members may use at once
   engine?: string;
   compute?: string;
+  persona?: string;      // persona id
   members: EnsembleMember[];
+}
+
+/** A generated image, clip or sound in an ensemble's reply. */
+export interface MediaItem { type: "image" | "video" | "audio"; url: string; mime?: string; }
+
+/** One member as the running Conductor reports it (GET /ensemble/status). */
+export interface GateMember {
+  tool: string;
+  modality: string;
+  image: string;
+  model?: string;
+  state: "stopped" | "starting" | "ready" | "failed";
+  error?: string;
+  since?: number;        // unix ms of the last state change
+  port?: number;
+  mem_gb: number;
+  pinned?: boolean;
+  busy?: number;         // requests in flight
+  voice_clone?: boolean;
+}
+export interface GateStatus {
+  id: string;
+  name: string;
+  router: string;
+  budget_gb: number;
+  used_gb: number;
+  persona?: { name: string; voice: string; synced: boolean };
+  members: GateMember[];
+}
+/** /api/ensembles/status: one per saved ensemble. */
+export interface EnsembleLive {
+  id: string;
+  image: string;
+  built: boolean;
+  running: { container: string; port: number; engine: string; id: string } | null;
+  gate?: GateStatus;
+  gate_error?: string;
+  voice_error?: string;
 }
 
 export interface ChatMessage {
