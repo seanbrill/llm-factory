@@ -12,6 +12,8 @@
   import LogsDialog from "../components/library/LogsDialog.svelte";
   import ConfigDialog from "../components/library/ConfigDialog.svelte";
   import ConfirmDialog from "../components/library/ConfirmDialog.svelte";
+  import NativeDialog from "../components/library/NativeDialog.svelte";
+  import NativePackages from "../components/library/NativePackages.svelte";
   import CodeLine from "../components/CodeLine.svelte";
   import { live, watch, refresh } from "../lib/live.svelte";
   import { build } from "../lib/build.svelte";
@@ -20,6 +22,7 @@
   import { post, labelVal } from "../lib/api";
   import { addToPlan } from "../lib/plan.svelte";
   import { gb, engineName } from "../lib/format";
+  import { listPackages, listPackageJobs, deletePackage, type NativePackage, type NativeJobSummary } from "../lib/native";
   import {
     buildLibrary, candidates, findRow, sharedWeights, reclaimable,
     type LibRow, type LibImage, type LibContainer, type RowState, type Candidate, type ConfirmSpec, type RowActions,
@@ -146,6 +149,57 @@
   let confirmOpen = $state(false);
   let confirmSpec = $state<ConfirmSpec | null>(null);
 
+  // ---- native packages (docs/NATIVE.md) ----
+  let packages = $state<NativePackage[]>([]);
+  let packJobs = $state<NativeJobSummary[]>([]);
+  let nativeOpen = $state(false);
+  let nativeImage = $state<LibImage | null>(null);
+  let nativeModel = $state("");
+  let nativeName = $state("");
+  let nativeJob = $state("");
+
+  async function loadNative() {
+    try {
+      const [p, j] = await Promise.all([listPackages(), listPackageJobs()]);
+      packages = p.packages;
+      packJobs = j.jobs.filter((x) => x.active);
+    } catch {
+      /* an older factory without native packages: nothing to list */
+    }
+  }
+  // Listed on open, and followed every few seconds while one is being made.
+  $effect(() => {
+    loadNative();
+  });
+  $effect(() => {
+    if (!packJobs.length) return;
+    const t = setInterval(loadNative, 3000);
+    return () => clearInterval(t);
+  });
+
+  function openNative(r: LibRow | null, im: LibImage | null, jobId = "") {
+    nativeImage = im;
+    nativeModel = r?.modelId ?? "";
+    nativeName = r?.name ?? "";
+    nativeJob = jobId;
+    nativeOpen = true;
+  }
+
+  function removePackage(p: NativePackage) {
+    ask({
+      title: `Delete ${p.file}?`,
+      body: `Removes the package for ${p.target_label || p.target} from packages/. Copies already downloaded keep working.`,
+      frees: p.size_bytes > 0 ? `Frees ${gb(p.size_bytes / 1e9)}.` : undefined,
+      confirm: "Delete package",
+      danger: true,
+      run: async () => {
+        await deletePackage(p.name);
+        toast(`Deleted ${p.file}.`);
+        await loadNative();
+      },
+    });
+  }
+
   function ask(spec: ConfirmSpec) {
     confirmSpec = spec;
     confirmOpen = true;
@@ -263,6 +317,7 @@
       toast(`${r.name} is in the build plan. Check it, then queue it.`);
       go("plan");
     },
+    native: (r, im) => openNative(r, im),
   };
 
   function onCandidate(c: Candidate) {
@@ -365,6 +420,10 @@
     {/if}
   </section>
 
+  {#if packages.length || packJobs.length}
+    <NativePackages {packages} jobs={packJobs} onopen={(id) => openNative(null, null, id)} ondelete={removePackage} />
+  {/if}
+
   <div class="foot">
     <Cleanup bind:this={cleanupCard} storage={live.storage} loaded={live.loaded.storage} error={live.errors.storage} {cands} onaction={onCandidate} />
     <Budget />
@@ -375,6 +434,7 @@
 <LogsDialog bind:open={logsOpen} container={logsFor} name={logsName} />
 <ConfigDialog bind:open={cfgOpen} image={cfgImage} ontemplate={useTemplate} />
 <ConfirmDialog bind:open={confirmOpen} spec={confirmSpec} />
+<NativeDialog bind:open={nativeOpen} name={nativeName} image={nativeImage} modelId={nativeModel} jobId={nativeJob} onchange={loadNative} />
 
 <style>
   .lib {

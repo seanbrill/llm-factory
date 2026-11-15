@@ -111,7 +111,7 @@ type nativeSource struct {
 // or from a catalog entry (the defaults).
 func (n *nativeAPI) source(ctx context.Context, modelID, ref, engine string) (nativeSource, int, error) {
 	var src nativeSource
-	var harnessRaw string
+	var baked *agent.Config
 	if ref != "" {
 		labels, err := n.labels(ctx, normalizeEngine(engine), ref)
 		if err != nil {
@@ -125,7 +125,7 @@ func (n *nativeAPI) source(ctx context.Context, modelID, ref, engine string) (na
 		src.SystemPrompt = labels["local-llm.system_prompt"]
 		src.InjectMode = labels["local-llm.inject_mode"]
 		src.CtxSize, _ = strconv.Atoi(labels["local-llm.ctx"])
-		harnessRaw = labels[builder.LabelHarnessConfig]
+		baked = builder.BakedHarness(labels)
 	}
 	m, ok := n.s.cat.Get(modelID)
 	if !ok {
@@ -140,10 +140,8 @@ func (n *nativeAPI) source(ctx context.Context, modelID, ref, engine string) (na
 	if src.CtxSize <= 0 {
 		src.CtxSize = builder.DefaultNativeCtx
 	}
-	if strings.TrimSpace(harnessRaw) != "" {
-		if c, err := parseHarnessOption(json.RawMessage(harnessRaw)); err == nil {
-			src.Harness, src.ShellDropped, _ = builder.NormalizeNativeHarness(c)
-		}
+	if baked != nil {
+		src.Harness, src.ShellDropped, _ = builder.NormalizeNativeHarness(baked)
 	}
 	for _, t := range native.Targets() {
 		src.Names = append(src.Names, builder.DefaultPackageName(m.ID, t.ID))

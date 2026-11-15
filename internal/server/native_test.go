@@ -71,6 +71,7 @@ func newNativeTest(t *testing.T) (*nativeAPI, *fakePackager, http.Handler) {
 				"local-llm.system_prompt":  "You are Tiny.",
 				"local-llm.inject_mode":    "always",
 				"local-llm.ctx":            "16384",
+				builder.LabelHarness:       "1",
 				builder.LabelHarnessConfig: `{"tools":["files","shell"]}`,
 			}, nil
 		}}

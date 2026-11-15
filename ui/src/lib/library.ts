@@ -394,6 +394,8 @@ export interface RowActions {
   deleteImage: (row: LibRow, im: LibImage) => void;
   deleteWeights: (row: LibRow) => void;
   build: (row: LibRow) => void;
+  /** Make a native package (docs/NATIVE.md) of an image, or of the catalog entry when im is null. */
+  native: (row: LibRow, im: LibImage | null) => void;
 }
 
 /** "2.7", "0.85", "12" — a GB figure without its unit, for breakdowns. */

@@ -14,6 +14,7 @@
   import { homeOf, tildePath } from "../../lib/harness";
   import { live } from "../../lib/live.svelte";
   import type { ImageHarness } from "../../lib/types";
+  import { nativeWhy } from "../../lib/native";
 
   let {
     row,
@@ -82,6 +83,9 @@
       h.max_steps && `up to ${h.max_steps} steps`,
     );
   const home = $derived(homeOf(live.harness?.terminal));
+  // A native package: the model on its own, for macOS (or Linux, Windows).
+  const canPack = $derived(!!row.model && !nativeWhy(row.model));
+  const packTitle = "One download that runs this model without Docker or Podman, on macOS (Metal GPU), Linux or Windows";
 </script>
 
 <article class="row" class:open={expanded} class:flash id={rid} aria-label={row.name}>
@@ -167,7 +171,7 @@
           <button class="small" type="button" onclick={() => act.deleteWeights(row)}>Delete weights</button>
         {/if}
       {/if}
-      {#if !(row.model && weightsOnly && !failed)}
+      {#if !(row.model && weightsOnly && !failed) || canPack}
         <button class="small icon more-btn" class:on={expanded} type="button" onclick={ontoggle} aria-expanded={expanded} aria-controls={mid} aria-label="More for {row.name}" title="More for {row.name}"><Icon name="dots" size={15} /></button>
       {/if}
     </div>
@@ -196,6 +200,7 @@
                 <button class="small" type="button" onclick={() => act.config(im)}><Icon name="system" size={14} />Build settings</button>
                 <button class="small" type="button" onclick={() => act.template(im)} title="Start a new build with this image's settings"><Icon name="copy" size={14} />Use as template</button>
                 <button class="small" type="button" onclick={() => act.download(im)} title="Download the image as a .tar (docker save)"><Icon name="download" size={14} />Download .tar</button>
+                {#if canPack}<button class="small" type="button" onclick={() => act.native(row, im)} title={packTitle}><Icon name="box" size={14} />Native package</button>{/if}
                 <button class="small danger" type="button" disabled={inUse} title={inUse ? "Stop its container first" : "Delete the image and its saved .tar"} onclick={() => act.deleteImage(row, im)}><Icon name="trash" size={14} />Delete</button>
               </div>
             </div>
@@ -246,6 +251,9 @@
               </span>
             </div>
             <div class="ia">
+              {#if canPack && !row.images.length}
+                <button class="small" type="button" onclick={() => act.native(row, null)} title={packTitle}><Icon name="box" size={14} />Native package</button>
+              {/if}
               {#if row.model}
                 <button class="small danger" type="button" disabled={!!row.jobs.length} title={row.jobs.length ? "A build of this model needs them" : "Delete the weights file"} onclick={() => act.deleteWeights(row)}><Icon name="trash" size={14} />Delete weights</button>
               {/if}
