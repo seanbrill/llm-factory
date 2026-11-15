@@ -135,6 +135,45 @@ func (ms *Members) Chat(ctx context.Context, tool string, body map[string]any, p
 	return resp, l, nil
 }
 
+// ChatRaw posts a chat-completions body as is to the chat or vision member and
+// returns its response whatever the status. The member stays leased (not
+// evictable) until the response body is closed.
+func (ms *Members) ChatRaw(ctx context.Context, tool string, body []byte, progress func(string)) (*http.Response, error) {
+	l, err := ms.mg.Acquire(ctx, tool, progress)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, l.URL("/v1/chat/completions"), bytes.NewReader(body))
+	if err != nil {
+		l.Release()
+		return nil, err
+	}
+	req.ContentLength = int64(len(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := ms.http.Do(req)
+	if err != nil {
+		l.Release()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("%s isn't answering: %v", memberLabel(l.Member), err)
+	}
+	resp.Body = &leasedBody{ReadCloser: resp.Body, lease: l}
+	return resp, nil
+}
+
+// leasedBody releases its member's lease when closed.
+type leasedBody struct {
+	io.ReadCloser
+	lease *Lease
+}
+
+func (b *leasedBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.lease.Release()
+	return err
+}
+
 // ChatText runs a non-streaming chat and returns the whole completion and its
 // reply text.
 func (ms *Members) ChatText(ctx context.Context, tool string, body map[string]any, progress func(string)) (map[string]any, string, error) {
@@ -164,10 +203,13 @@ func completionText(out map[string]any) string {
 	return s
 }
 
-// ---- speech to text (whisper.cpp: POST /inference) -------------------------
+// ---- speech to text ---------------------------------------------------------
 
-// Transcribe turns speech into text with the speech-to-text member. A WAV is
-// sent as 16 kHz mono first, the shape every whisper.cpp version reads.
+// Transcribe turns speech into text with the speech-to-text member: whisper.cpp
+// at POST /inference, or an audio.cpp image (Moonshine; model "stt") at the
+// OpenAI-style POST /v1/audio/transcriptions, which is also tried when
+// /inference answers 404. A WAV is sent as 16 kHz mono first, the shape every
+// version of both reads (audio.cpp reads WAV only).
 func (ms *Members) Transcribe(ctx context.Context, audio []byte, filename, language string, progress func(string)) (string, error) {
 	if b, err := voice.ToSTT(audio); err == nil {
 		audio, filename = b, "speech.wav"
@@ -186,6 +228,7 @@ func (ms *Members) Transcribe(ctx context.Context, audio []byte, filename, langu
 	}
 	fw, _ := mw.CreateFormFile("file", filename)
 	_, _ = fw.Write(audio)
+	_ = mw.WriteField("model", "stt") // audio.cpp's id for its model; whisper.cpp ignores it
 	_ = mw.WriteField("response_format", "json")
 	_ = mw.WriteField("temperature", "0")
 	if language != "" {
@@ -195,7 +238,15 @@ func (ms *Members) Transcribe(ctx context.Context, audio []byte, filename, langu
 	if progress != nil {
 		progress("Transcribing…")
 	}
-	resp, err := ms.post(ctx, l, "/inference", mw.FormDataContentType(), buf.Bytes())
+	path := "/inference"
+	if l.Member.Runtime == "audiocpp" {
+		path = "/v1/audio/transcriptions"
+	}
+	resp, err := ms.post(ctx, l, path, mw.FormDataContentType(), buf.Bytes())
+	var me *memberError
+	if path == "/inference" && errors.As(err, &me) && me.status == http.StatusNotFound {
+		resp, err = ms.post(ctx, l, "/v1/audio/transcriptions", mw.FormDataContentType(), buf.Bytes())
+	}
 	if err != nil {
 		return "", err
 	}
@@ -219,7 +270,7 @@ func (ms *Members) SpeakStream(ctx context.Context, req voice.SpeechRequest, pro
 	if !ok {
 		return nil, "", nil, &missingError{ensemble.ToolSpeak}
 	}
-	call, err := voice.For(voice.Speaker{Runtime: m.Runtime, Model: m.Model, Clone: m.VoiceClone}).Call(req)
+	call, err := voice.For(speakerOf(m)).Call(req)
 	if err != nil {
 		return nil, "", nil, err // a CloneError or bad input, before starting anything
 	}
@@ -242,6 +293,12 @@ func (ms *Members) SpeakStream(ctx context.Context, req voice.SpeechRequest, pro
 		mime = "audio/wav"
 	}
 	return resp.Body, mime, func() { cancel(); l.Release() }, nil
+}
+
+// speakerOf is the adapters' view of a speech member.
+func speakerOf(m ensemble.Member) voice.Speaker {
+	return voice.Speaker{Runtime: m.Runtime, Model: m.Model, Clone: m.VoiceClone,
+		NeedsTranscript: m.CloneNeedsTranscript, CloneOnly: m.CloneOnly}
 }
 
 // Speak is SpeakStream collected into a data URL.

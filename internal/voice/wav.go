@@ -1,6 +1,7 @@
 package voice
 
 import (
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -184,6 +185,57 @@ func ToSTT(b []byte) ([]byte, error) {
 		return b, nil
 	}
 	return EncodePCM16(Resample(w.Mono(), w.SampleRate, STTRate), STTRate), nil
+}
+
+// MaxRefBytes is the largest reference clip audio.cpp takes (decoded).
+const MaxRefBytes = 5 << 20
+
+// ClipRate is the highest sample rate a stored clip keeps: 30 s of 16-bit mono
+// at 48 kHz is 2.9 MB, inside MaxRefBytes.
+const ClipRate = 48000
+
+// NormalizeClip returns a checked clip as 16-bit PCM mono at no more than
+// ClipRate, the form clips are stored and sent in.
+func NormalizeClip(b []byte) ([]byte, WAV, error) {
+	w, err := CheckClip(b)
+	if err != nil {
+		return nil, WAV{}, err
+	}
+	rate := w.SampleRate
+	if rate > ClipRate {
+		rate = ClipRate
+	}
+	if w.Bits == 16 && !w.Float && rate == w.SampleRate {
+		return b, w, nil
+	}
+	out := EncodePCM16(Resample(w.Mono(), w.SampleRate, rate), rate)
+	nw, err := ParseWAV(out)
+	return out, nw, err
+}
+
+// FitRef makes a base64 WAV reference fit maxBytes decoded, re-encoding it as
+// 16-bit mono at 24 kHz when it is larger. An unreadable or still too large
+// clip is an error.
+func FitRef(b64 string, maxBytes int) (string, error) {
+	if base64.StdEncoding.DecodedLen(len(b64)) <= maxBytes {
+		return b64, nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return "", fmt.Errorf("the voice clip isn't valid base64")
+	}
+	if len(raw) <= maxBytes {
+		return b64, nil
+	}
+	w, err := ParseWAV(raw)
+	if err != nil {
+		return "", fmt.Errorf("the voice clip can't be read: %v", err)
+	}
+	out := EncodePCM16(Resample(w.Mono(), w.SampleRate, 24000), 24000)
+	if len(out) > maxBytes {
+		return "", fmt.Errorf("the voice clip is too long (%.0f s); keep it to %.0f s", w.Seconds(), MaxClipSeconds)
+	}
+	return base64.StdEncoding.EncodeToString(out), nil
 }
 
 // CheckClip validates a voice reference clip: a mono WAV of 3–30 s. Errors are

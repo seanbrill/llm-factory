@@ -108,11 +108,21 @@ func (r SpeechRequest) IsClone() bool { return r.RefAudio != "" }
 // take a long time to speak, so callers trim to a sentence boundary first.
 const MaxInputChars = 4000
 
-// CloneCapable reports whether a speech runtime can speak a cloned voice.
-//
-// audio.cpp clones (Pocket TTS from the clip alone, Qwen3-TTS Base with the
-// transcript); Piper and Kokoro speak built-in voices only. This is the one
-// rule the factory and the Conductor share; when the catalog's per-model
-// voice_clone flag lands, the factory should set ensemble.Member.VoiceClone
-// from that flag instead of calling this.
+// CloneCapable is the fallback guess for a speech member the catalog doesn't
+// describe (a custom image): audio.cpp images may clone, Piper and Kokoro
+// don't. Catalog models carry their own voice_clone and clone_needs_transcript
+// flags, which the factory copies into ensemble.Member and which win.
 func CloneCapable(runtime string) bool { return runtime == "audiocpp" }
+
+// CloneOnly reports a cloning model with no built-in voices, which needs a
+// reference clip on every request: the Qwen3-TTS Base models and XTTS v2
+// (audio.cpp families qwen3_tts without a default voice, and xtts_v2).
+func CloneOnly(family, defaultVoice string) bool {
+	switch family {
+	case "xtts_v2":
+		return true
+	case "qwen3_tts":
+		return defaultVoice == ""
+	}
+	return false
+}

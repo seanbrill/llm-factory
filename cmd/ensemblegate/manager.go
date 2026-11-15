@@ -47,6 +47,11 @@ type member struct {
 	busy    int
 	wait    chan struct{}      // closed when the current start or stop ends (nil when settled)
 	cancel  context.CancelFunc // cancels the current start
+	// gen counts finished starts; result is the last one's outcome (nil:
+	// ready). A request waiting on a start reads the outcome of that start,
+	// even if the member was stopped or evicted since.
+	gen    int
+	result error
 }
 
 func newManager(mani ensemble.Manifest, eng Engine, logf func(string, ...any)) *Manager {
@@ -197,7 +202,7 @@ func (mg *Manager) ensure(ctx context.Context, tool string, progress func(string
 			}
 			mg.beginStartLocked(st, victims)
 		}
-		ch := st.wait
+		ch, gen := st.wait, st.gen
 		label := memberLabel(st.m)
 		mg.mu.Unlock()
 		say(fmt.Sprintf("Starting %s…", label))
@@ -205,14 +210,15 @@ func (mg *Manager) ensure(ctx context.Context, tool string, progress func(string
 			return err
 		}
 		mg.mu.Lock()
-		state, why := st.state, st.err
+		state, finished, result := st.state, st.gen != gen, st.result
 		mg.mu.Unlock()
-		switch state {
-		case ensemble.StateReady:
-			return nil
-		case ensemble.StateFailed:
-			return fmt.Errorf("%s didn't start: %s", label, why)
+		switch {
+		case finished && result != nil:
+			return fmt.Errorf("%s didn't start: %v", label, result)
+		case finished, state == ensemble.StateReady:
+			return nil // ready (if it was evicted since, Acquire goes round)
 		}
+		// An adoption that didn't work out: start it fresh.
 	}
 }
 
@@ -323,10 +329,11 @@ func (mg *Manager) runStart(ctx context.Context, cancel context.CancelFunc, st *
 	t0 := mg.now()
 	port, err := mg.startContainer(ctx, st)
 	mg.mu.Lock()
+	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
+		err = errors.New("stopped before it was ready")
+	}
+	st.gen, st.result = st.gen+1, err
 	if err != nil {
-		if errors.Is(ctx.Err(), context.Canceled) {
-			err = errors.New("stopped before it was ready")
-		}
 		st.state, st.err, st.port = ensemble.StateFailed, err.Error(), 0
 		mg.logf("%s failed to start: %v", toolText(st.m.Tool), err)
 	} else {
@@ -590,6 +597,7 @@ func (mg *Manager) adoptOne(st *member) {
 	}
 	mg.mu.Lock()
 	st.state, st.port, st.since, st.lastUse = ensemble.StateReady, port, mg.now(), mg.now()
+	st.gen, st.result = st.gen+1, nil
 	close(st.wait)
 	st.wait = nil
 	mg.mu.Unlock()

@@ -94,13 +94,18 @@ type PersonaStatus struct {
 
 // Status is GET /ensemble/status.
 type Status struct {
-	ID       string         `json:"id"`
-	Name     string         `json:"name"`
-	Router   string         `json:"router"`
-	BudgetGB float64        `json:"budget_gb"`
-	UsedGB   float64        `json:"used_gb"`
-	Persona  *PersonaStatus `json:"persona,omitempty"`
-	Members  []MemberStatus `json:"members"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Router string `json:"router"` // agent | heuristic | tool-calling
+	// RouterNote explains the routing in effect, e.g. why agent routing fell
+	// back to the heuristic.
+	RouterNote string `json:"router_note,omitempty"`
+	// AgentTools are the tools the brain can call (agent routing).
+	AgentTools []string       `json:"agent_tools,omitempty"`
+	BudgetGB   float64        `json:"budget_gb"`
+	UsedGB     float64        `json:"used_gb"`
+	Persona    *PersonaStatus `json:"persona,omitempty"`
+	Members    []MemberStatus `json:"members"`
 }
 
 // Media is a generated image, video or audio clip in a reply: a data URL from

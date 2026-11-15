@@ -10,7 +10,13 @@ import (
 type Speaker struct {
 	Runtime string // catalog runtime: "cpp" (Piper), "python" (Kokoro), "audiocpp", or "contract"
 	Model   string // catalog model id, for messages
-	Clone   bool   // the member can speak a cloned voice (ensemble.Member.VoiceClone)
+	Clone   bool   // the member can speak a cloned voice (catalog voice_clone)
+	// NeedsTranscript: a clone must come with the clip's transcript (catalog
+	// clone_needs_transcript: the Qwen3-TTS Base models).
+	NeedsTranscript bool
+	// CloneOnly: the model has no built-in voices, so every request needs a
+	// reference clip (Qwen3-TTS Base, XTTS v2; see CloneOnly).
+	CloneOnly bool
 }
 
 // Call is one HTTP request to a speech member: POST Path with Body.
@@ -28,10 +34,13 @@ type Adapter interface {
 	Call(r SpeechRequest) (Call, error)
 }
 
-// CloneError says a speech member can't speak a cloned voice.
+// CloneError says a speech member can't speak the voice asked for: it can't
+// clone (Reason ""), the clone lacks the transcript the model needs
+// ("transcript"), or the model has no built-in voice to fall back on ("clip").
 type CloneError struct {
 	Model   string
 	Runtime string
+	Reason  string
 }
 
 func (e *CloneError) Error() string {
@@ -39,8 +48,16 @@ func (e *CloneError) Error() string {
 	if who == "" {
 		who = "this speech model"
 	}
+	switch e.Reason {
+	case "transcript":
+		return fmt.Sprintf("the speech member (%s) needs the voice clip's transcript to clone it: "+
+			"type what the clip says in the persona's voice settings (or let the ensemble's speech-to-text fill it in)", who)
+	case "clip":
+		return fmt.Sprintf("the speech member (%s) has no built-in voices: it only speaks a cloned voice. "+
+			"Give the persona a voice clip (Personas, Voice, Clone)", who)
+	}
 	return fmt.Sprintf("the speech member (%s) can't clone voices: it only speaks its built-in voices. "+
-		"Give the persona a built-in voice, or make an audio.cpp speech model (e.g. Pocket TTS) the ensemble's speech member", who)
+		"Give the persona a built-in voice, or make a voice-cloning model (e.g. Pocket TTS) the ensemble's speech member", who)
 }
 
 // For picks the adapter for a speech member.
@@ -75,9 +92,15 @@ func checkInput(r SpeechRequest) error {
 	return nil
 }
 
+// refuseClone checks a request against what the speaker can do.
 func (s Speaker) refuseClone(r SpeechRequest) error {
-	if r.IsClone() && !s.Clone {
+	switch {
+	case r.IsClone() && !s.Clone:
 		return &CloneError{Model: s.Model, Runtime: s.Runtime}
+	case r.IsClone() && s.NeedsTranscript && strings.TrimSpace(r.RefText) == "":
+		return &CloneError{Model: s.Model, Runtime: s.Runtime, Reason: "transcript"}
+	case !r.IsClone() && s.CloneOnly:
+		return &CloneError{Model: s.Model, Runtime: s.Runtime, Reason: "clip"}
 	}
 	return nil
 }
@@ -127,11 +150,13 @@ func (a pygate) Call(r SpeechRequest) (Call, error) {
 
 // audioCpp: audio.cpp's server (docker/Dockerfile.audiocpp.cpu) serves its one
 // model as id "tts" and takes OpenAI's fields plus, for a clone, voice_ref
-// {"type":"base64","data":<wav>} and reference_text (Pocket TTS needs only the
-// clip; Qwen3-TTS Base also wants the transcript). It rejects a speed its model
-// doesn't support, so speed goes only when it isn't 1. stream_format ("sse" or
-// "audio", with response_format "pcm") streams from a model configured with
-// mode "streaming". See https://github.com/0xShug0/audio.cpp/blob/main/app/server/api.md.
+// {"type":"base64","data":<wav>} (at most 5 MiB decoded) and reference_text
+// (required by the Qwen3-TTS Base models, optional for the others). voice and
+// voice_ref never go together: Pocket TTS refuses a preset plus a clip, and the
+// clip already replaces the default preset. It rejects a speed its model
+// doesn't support, so speed goes only when it isn't 1. stream_format ("sse":
+// speech.audio.delta events; "audio": raw PCM), with response_format "pcm",
+// streams from a model built in streaming mode. See docs/VOICE-CLONING.md.
 type audioCpp struct{ s Speaker }
 
 func (audioCpp) Name() string   { return "audiocpp" }
@@ -145,7 +170,11 @@ func (a audioCpp) Call(r SpeechRequest) (Call, error) {
 	}
 	body := map[string]any{"model": "tts", "input": r.Input}
 	if r.IsClone() {
-		body["voice_ref"] = map[string]string{"type": "base64", "data": r.RefAudio}
+		ref, err := FitRef(r.RefAudio, MaxRefBytes)
+		if err != nil {
+			return Call{}, err
+		}
+		body["voice_ref"] = map[string]string{"type": "base64", "data": ref}
 		if strings.TrimSpace(r.RefText) != "" {
 			body["reference_text"] = r.RefText
 		}

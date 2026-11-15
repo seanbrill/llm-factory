@@ -20,6 +20,7 @@ var (
 	reEmphasis  = regexp.MustCompile(`[*_~]{1,3}`)
 	reTable     = regexp.MustCompile(`(?m)^\s*\|.*\|\s*$`)
 	reSpace     = regexp.MustCompile(`[ \t]+`)
+	reLineSpace = regexp.MustCompile(` *\n *`)
 	reBlank     = regexp.MustCompile(`\n{2,}`)
 )
 
@@ -57,6 +58,7 @@ func speakable(s string) string {
 	s = reBullet.ReplaceAllString(s, "")
 	s = reEmphasis.ReplaceAllString(s, "")
 	s = reSpace.ReplaceAllString(s, " ")
+	s = reLineSpace.ReplaceAllString(s, "\n")
 	s = strings.TrimSpace(reBlank.ReplaceAllString(s, "\n"))
 	if len(s) <= maxSpoken {
 		return s

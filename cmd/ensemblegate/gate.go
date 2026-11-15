@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/seanbrill/local-llm/internal/agent"
 	"github.com/seanbrill/local-llm/internal/ensemble"
 	"github.com/seanbrill/local-llm/internal/voice"
 )
@@ -22,7 +24,8 @@ import (
 //
 //	GET  /health                    the Conductor is up
 //	GET  /v1/models                 the ensemble, as one model
-//	POST /v1/chat/completions       routed: chat, vision, image/video generation, speech
+//	GET  /v1/harness                the brain's tools (agent routing), as llmgate reports them
+//	POST /v1/chat/completions       the brain with its member tools (agent routing), or one member picked by the router
 //	POST /v1/audio/transcriptions   speech to text (the STT member); /inference is an alias
 //	POST /v1/audio/speech           text to speech in the persona's voice (the voice contract)
 //	POST /ensemble/voice-chat       a spoken question in, a spoken answer out (STT -> chat -> TTS)
@@ -34,14 +37,19 @@ type Gate struct {
 	mg      *Manager
 	members *Members
 	router  Router
-	persona *personaState
-	logf    func(string, ...any)
+	// brain is agent routing (nil when it can't run: brainOff says why).
+	brain    *brain
+	brainOff string
+	persona  *personaState
+	logf     func(string, ...any)
 	// keepalive is how often a waiting stream gets a comment line, so clients
 	// and proxies don't time out while a member warms up or media generates.
 	keepalive time.Duration
 }
 
-func newGate(mani ensemble.Manifest, eng Engine, logf func(string, ...any)) *Gate {
+// newGate builds the Conductor. harness is the baked agent config (built-in
+// tools for the brain); nil offers the member tools only.
+func newGate(mani ensemble.Manifest, eng Engine, harness *agent.Config, logf func(string, ...any)) *Gate {
 	mg := newManager(mani, eng, logf)
 	g := &Gate{mani: mani, mg: mg, members: newMembers(mg), persona: &personaState{}, logf: logf, keepalive: 8 * time.Second}
 	h := Heuristic{has: mg.Has}
@@ -55,7 +63,33 @@ func newGate(mani ensemble.Manifest, eng Engine, logf func(string, ...any)) *Gat
 		}
 		g.router = Conductor{fallback: h, tools: tools, ask: g.askConductor}
 	}
+	if mani.Routing == "" || mani.Routing == ensemble.RoutingAgent {
+		g.brain, g.brainOff = newBrain(g, harness)
+		if g.brain == nil {
+			logf("agent routing is off: %s; routing with the %s", g.brainOff, g.router.Name())
+		}
+	}
 	return g
+}
+
+// agentOn reports whether the brain answers chat.
+func (g *Gate) agentOn() bool { return g.brain != nil && g.brain.on() }
+
+// routerStatus names the routing in effect and why.
+func (g *Gate) routerStatus() (name, note string, tools []string) {
+	switch {
+	case g.agentOn():
+		m, _ := g.mg.Member(g.brain.tool)
+		return ensemble.RoutingAgent, memberLabel(m) + " is the brain; the other members are its tools", g.brain.tools()
+	case g.brain != nil:
+		g.brain.mu.Lock()
+		why := g.brain.off
+		g.brain.mu.Unlock()
+		return g.router.Name(), "agent routing is off: " + why, nil
+	case g.brainOff != "":
+		return g.router.Name(), "agent routing is off: " + g.brainOff, nil
+	}
+	return g.router.Name(), "", nil
 }
 
 // askConductor asks the conductor model one short question.
@@ -74,6 +108,7 @@ func (g *Gate) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/v1/models", g.handleModels)
+	mux.HandleFunc("/v1/harness", g.handleHarness)
 	mux.HandleFunc("/v1/chat/completions", post(g.handleChat))
 	mux.HandleFunc("/v1/audio/transcriptions", post(g.handleTranscriptions))
 	mux.HandleFunc("/inference", post(g.handleTranscriptions)) // whisper.cpp's path, for clients that know it
@@ -119,8 +154,9 @@ func statusFor(err error) int {
 	var me *missingError
 	var ce *voice.CloneError
 	var mem *memberError
+	var br *badRequest
 	switch {
-	case errors.As(err, &me), errors.As(err, &ce):
+	case errors.As(err, &me), errors.As(err, &ce), errors.As(err, &br):
 		return http.StatusBadRequest
 	case errors.As(err, &mem):
 		return http.StatusBadGateway
@@ -158,11 +194,22 @@ func (g *Gate) handleModels(w http.ResponseWriter, r *http.Request) {
 	}}})
 }
 
+// handleHarness answers GET /v1/harness like llmgate: the tools the brain
+// can call, or "enabled": false.
+func (g *Gate) handleHarness(w http.ResponseWriter, r *http.Request) {
+	info := agent.DisabledInfo("ensemblegate")
+	if g.agentOn() {
+		info = g.brain.ag.Info()
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
 func (g *Gate) handleStatus(w http.ResponseWriter, r *http.Request) {
 	members, used := g.mg.Status()
+	router, note, tools := g.routerStatus()
 	writeJSON(w, http.StatusOK, ensemble.Status{
-		ID: g.mani.ID, Name: g.mani.Name, Router: g.router.Name(), BudgetGB: g.mani.VRAMBudgetGB,
-		UsedGB: used, Persona: g.persona.status(), Members: members,
+		ID: g.mani.ID, Name: g.mani.Name, Router: router, RouterNote: note, AgentTools: tools,
+		BudgetGB: g.mani.VRAMBudgetGB, UsedGB: used, Persona: g.persona.status(), Members: members,
 	})
 }
 
@@ -257,6 +304,24 @@ func (g *Gate) handleChat(w http.ResponseWriter, r *http.Request) {
 	req.Stream, _ = body["stream"].(bool)
 	if len(req.Messages) == 0 {
 		writeErr(w, http.StatusBadRequest, "messages is empty")
+		return
+	}
+	if err := g.hearAudio(r.Context(), req); err != nil {
+		writeErr(w, statusFor(err), err.Error())
+		return
+	}
+	if g.agentOn() {
+		g.logf("chat -> agent (brain: %s)", g.brain.tool)
+		w.Header().Set("X-Ensemble-Route", ensemble.RoutingAgent)
+		if req.Stream {
+			s := startSSE(w, g.mani.ID)
+			ctx, stop := context.WithCancel(r.Context())
+			defer stop()
+			go s.keepAlive(ctx, g.keepalive)
+			g.brain.serveStream(ctx, s, req)
+			return
+		}
+		g.brain.serveJSON(r.Context(), w, req)
 		return
 	}
 	d := g.router.Route(r.Context(), req)
@@ -563,6 +628,82 @@ func relaySSE(body io.Reader, s *sse) string {
 
 // ---- speech -----------------------------------------------------------------
 
+// badRequest is a request the client must fix (400).
+type badRequest struct{ msg string }
+
+func (e *badRequest) Error() string { return e.msg }
+
+// hearAudio turns the spoken parts of the last user message (OpenAI's
+// input_audio content parts: {"data": base64, "format": "wav"}) into text with
+// the speech-to-text member, so every route reads them. Audio in earlier
+// messages becomes a short note: it was heard when it was sent.
+func (g *Gate) hearAudio(ctx context.Context, req *ChatRequest) error {
+	last := -1
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i]["role"] == "user" {
+			last = i
+			break
+		}
+	}
+	changed := false
+	for i, m := range req.Messages {
+		parts, ok := m["content"].([]any)
+		if !ok {
+			continue
+		}
+		spoken := false
+		for _, p := range parts {
+			if pm, _ := p.(map[string]any); pm["type"] == "input_audio" {
+				spoken = true
+			}
+		}
+		if !spoken {
+			continue
+		}
+		out := make([]any, 0, len(parts))
+		for _, p := range parts {
+			pm, _ := p.(map[string]any)
+			if pm["type"] != "input_audio" {
+				out = append(out, p)
+				continue
+			}
+			if i != last {
+				out = append(out, map[string]any{"type": "text", "text": "[a voice message]"})
+				continue
+			}
+			ia, _ := pm["input_audio"].(map[string]any)
+			data, _ := ia["data"].(string)
+			format, _ := ia["format"].(string)
+			audio, err := base64.StdEncoding.DecodeString(data)
+			if err != nil || len(audio) == 0 {
+				return &badRequest{"input_audio.data must be base64-encoded audio"}
+			}
+			if !g.mg.Has(ensemble.ToolTranscribe) {
+				return &missingError{ensemble.ToolTranscribe}
+			}
+			if format == "" {
+				format = "wav"
+			}
+			text, err := g.members.Transcribe(ctx, audio, "speech."+format, "", nil)
+			if err != nil {
+				return fmt.Errorf("speech to text failed: %w", err)
+			}
+			out = append(out, map[string]any{"type": "text", "text": text})
+		}
+		c := make(map[string]any, len(m))
+		for k, v := range m {
+			c[k] = v
+		}
+		c["content"] = out
+		req.Messages[i] = c
+		changed = true
+	}
+	if changed {
+		req.Body["messages"] = anySlice(req.Messages)
+	}
+	return nil
+}
+
 // handleTranscriptions is OpenAI's /v1/audio/transcriptions (multipart: file,
 // language, response_format), answered by the speech-to-text member.
 func (g *Gate) handleTranscriptions(w http.ResponseWriter, r *http.Request) {
@@ -704,11 +845,19 @@ func (g *Gate) handleVoiceChat(w http.ResponseWriter, r *http.Request) {
 	}
 	msgs := append(history, map[string]any{"role": "user", "content": text})
 	req := &ChatRequest{Body: map[string]any{"messages": anySlice(msgs)}, Messages: msgs}
-	d := g.router.Route(ctx, req)
-	out.Route = d.Tool
-	g.logf("voice-chat -> %s (%s)", d.Tool, d.Why)
 	t1 := time.Now()
-	reply, err := g.answer(ctx, req, d, nil)
+	var reply Reply
+	if g.agentOn() {
+		// The whole answer is spoken anyway, so the speak tool isn't offered.
+		out.Route = ensemble.RoutingAgent
+		g.logf("voice-chat -> agent (brain: %s)", g.brain.tool)
+		_, reply, err = g.brain.reply(ctx, req, g.brain.narrowed(agentSpeak))
+	} else {
+		d := g.router.Route(ctx, req)
+		out.Route = d.Tool
+		g.logf("voice-chat -> %s (%s)", d.Tool, d.Why)
+		reply, err = g.answer(ctx, req, d, nil)
+	}
 	out.Timings["chat_ms"] = time.Since(t1).Milliseconds()
 	if err != nil {
 		writeJSON(w, statusFor(err), map[string]any{"error": map[string]any{"message": err.Error()}, "transcript": text})

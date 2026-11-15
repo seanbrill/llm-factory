@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/seanbrill/local-llm/internal/agent"
 	"github.com/seanbrill/local-llm/internal/ensemble"
 )
 
@@ -71,8 +72,16 @@ func main() {
 	if mani.PackageMode == "embedded" {
 		log.Printf("embedded packaging isn't built yet: running orchestrated (members start as containers)")
 	}
+	// The baked harness (built-in tools for the brain): the same file and
+	// HARNESS_* overrides as llmgate. Empty or missing: member tools only.
+	var harness *agent.Config
+	if cfg, ok, err := agent.Load(env("HARNESS_FILE", "/etc/llmgate/harness.json"), os.Getenv); err != nil {
+		log.Printf("harness: %v; the brain gets the member tools only", err)
+	} else if ok {
+		harness = &cfg
+	}
 	eng := cliEngine{bin: env("ENGINE", "docker")}
-	g := newGate(mani, eng, log.Printf)
+	g := newGate(mani, eng, harness, log.Printf)
 	g.persona.envPrompt = strings.TrimSpace(os.Getenv("SYSTEM_PROMPT"))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -85,8 +94,15 @@ func main() {
 
 	port := env("PORT", "8080")
 	srv := &http.Server{Addr: ":" + port, Handler: g.Handler(), ReadHeaderTimeout: 30 * time.Second}
+	router, note, tools := g.routerStatus()
 	log.Printf("ensemble %q (%s) on :%s: %d members, %s routing, %.0f GB budget, members reached at %s",
-		mani.Name, mani.ID, port, len(g.mg.order), g.router.Name(), mani.VRAMBudgetGB, mani.ModelHost)
+		mani.Name, mani.ID, port, len(g.mg.order), router, mani.VRAMBudgetGB, mani.ModelHost)
+	if note != "" {
+		log.Printf("routing: %s", note)
+	}
+	if len(tools) > 0 {
+		log.Printf("the brain's tools: %s", strings.Join(tools, ", "))
+	}
 	go func() {
 		<-ctx.Done()
 		// A graceful stop (docker stop) frees the members' memory too. The

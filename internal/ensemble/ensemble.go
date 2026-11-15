@@ -23,6 +23,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/seanbrill/local-llm/internal/agent"
 )
 
 // Member tools: what a member does for the ensemble. One member per tool.
@@ -90,8 +92,64 @@ type Member struct {
 	VRAMGB float64 `json:"vram_gb"`
 	// Pinned members ("keep warm") start with the ensemble and are never evicted.
 	Pinned bool `json:"pinned,omitempty"`
-	// VoiceClone: a speech member that can speak a cloned voice.
-	VoiceClone bool `json:"voice_clone,omitempty"`
+	// VoiceClone: a speech member that can speak a cloned voice (catalog
+	// voice_clone). CloneNeedsTranscript: the clone needs the clip's transcript
+	// (catalog clone_needs_transcript). CloneOnly: the model has no built-in
+	// voices, so it speaks only a clone (Qwen3-TTS Base, XTTS v2).
+	VoiceClone           bool `json:"voice_clone,omitempty"`
+	CloneNeedsTranscript bool `json:"clone_needs_transcript,omitempty"`
+	CloneOnly            bool `json:"clone_only,omitempty"`
+	// Family is the audio.cpp model family, for speech members (informational).
+	Family string `json:"family,omitempty"`
+}
+
+// Routing modes.
+const (
+	// RoutingAgent: the chat member is the brain and calls the other members
+	// as tools (internal/agent). The default. Falls back to the heuristic when
+	// there is no chat member or it can't call tools.
+	RoutingAgent = "agent"
+	// RoutingHeuristic: the request's signals and phrasing pick one member.
+	RoutingHeuristic = "heuristic"
+	// RoutingConductor: a small conductor model picks one member ("tool-calling"
+	// in saved definitions, kept for compatibility).
+	RoutingConductor = "tool-calling"
+)
+
+// shellTools are the built-in tools an ensemble never runs: its Conductor holds
+// the host's Docker socket, so a shell there would control the host.
+var shellTools = map[string]bool{agent.ToolsetShell: true, agent.ToolRunCommand: true}
+
+// Image paths of an ensemble's baked harness (the same as llmgate images).
+const (
+	HarnessWorkspace = "/workspace"
+	HarnessSkillsDir = "/etc/llmgate/skills"
+)
+
+// HarnessConfig returns the agent config an ensemble image bakes from h: its
+// own paths, defaults filled in, validated, and no shell. nil means no
+// built-in tools (the member tools are always offered).
+func HarnessConfig(h *agent.Config) (*agent.Config, error) {
+	if h == nil {
+		return nil, nil
+	}
+	c := *h
+	if c.Tools == nil {
+		c.Tools = []string{agent.ToolsetWebSearch, agent.ToolsetFetchURL}
+	}
+	for _, t := range c.Tools {
+		if shellTools[t] {
+			return nil, errors.New("the shell tool can't run in an ensemble: its Conductor controls Docker on this machine")
+		}
+	}
+	c.Workspace = HarnessWorkspace
+	c.SkillsDir = HarnessSkillsDir
+	c.Search.APIKey = ""
+	c = c.WithDefaults()
+	if err := c.Validate(); err != nil {
+		return nil, fmt.Errorf("tools: %v", err)
+	}
+	return &c, nil
 }
 
 // Ensemble is one saved multimodal super-model definition.
@@ -99,13 +157,16 @@ type Ensemble struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
 	PackageMode  string   `json:"package_mode"`      // orchestrated (embedded is reserved; runs orchestrated)
-	Routing      string   `json:"routing"`           // heuristic | tool-calling
+	Routing      string   `json:"routing"`           // agent | heuristic | tool-calling
 	Conductor    string   `json:"conductor"`         // image ref of the small router model (tool-calling only)
 	VRAMBudgetGB float64  `json:"vram_budget_gb"`    // memory budget the members stay under together
 	Engine       string   `json:"engine"`            // docker (members are started with Docker)
 	Compute      string   `json:"compute"`           // fallback compute for members without their own
 	Persona      string   `json:"persona,omitempty"` // persona id: its prompt and voice apply
 	Members      []Member `json:"members"`
+	// Harness turns on built-in agent tools for the brain (agent routing):
+	// web_search, fetch_url, files, skills. nil: member tools only.
+	Harness *agent.Config `json:"harness,omitempty"`
 }
 
 // Member returns the member backing tool.
@@ -135,10 +196,12 @@ const DefaultModelHost = "host.docker.internal"
 func (e *Ensemble) Normalize() {
 	e.Name = strings.TrimSpace(e.Name)
 	e.PackageMode = "orchestrated"
-	if e.Routing != "tool-calling" {
-		e.Routing = "heuristic"
+	switch e.Routing {
+	case RoutingHeuristic, RoutingConductor:
+	default:
+		e.Routing = RoutingAgent
 	}
-	if e.Routing == "heuristic" {
+	if e.Routing != RoutingConductor {
 		e.Conductor = ""
 	}
 	if e.VRAMBudgetGB <= 0 {
@@ -196,6 +259,9 @@ func (e Ensemble) Validate() error {
 	}
 	if len(e.Members) == 0 {
 		return errors.New("pick at least one member")
+	}
+	if _, err := HarnessConfig(e.Harness); err != nil {
+		return err
 	}
 	return nil
 }

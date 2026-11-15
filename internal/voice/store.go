@@ -104,7 +104,9 @@ func (s *Store) Add(name string, wav []byte, transcript string, consent bool) (C
 	if len(wav) > MaxClipBytes {
 		return Clip{}, fmt.Errorf("the clip is too large (%d MB); keep it to 30 s of mono audio", len(wav)>>20)
 	}
-	w, err := CheckClip(wav)
+	// Stored as 16-bit mono at no more than 48 kHz: the shape every speech
+	// runtime reads, and small enough for audio.cpp's 5 MiB reference limit.
+	wav, w, err := NormalizeClip(wav)
 	if err != nil {
 		return Clip{}, err
 	}
