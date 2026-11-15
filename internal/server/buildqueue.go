@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/seanbrill/local-llm/internal/agent"
 	"github.com/seanbrill/local-llm/internal/builder"
 )
 
@@ -55,6 +56,8 @@ type buildConfig struct {
 	MemoryGB     float64 `json:"memory_gb"`
 	Route        string  `json:"route"`
 	Autostart    bool    `json:"autostart"`
+	// Harness is the agent harness baked into the image (nil = none).
+	Harness *agent.Config `json:"harness,omitempty"`
 }
 
 // buildJob is one queued, running or finished image build.

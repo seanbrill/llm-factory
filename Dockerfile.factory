@@ -8,8 +8,10 @@
 #
 # At runtime the factory reads, from disk (besides the embedded UI), the
 # Dockerfiles under docker/ and the gate shim sources it stages into each model
-# image's build context: cmd/llmgate (text), cmd/videogate (video),
-# cmd/ensemblegate (Conductor). All are copied into the image below.
+# image's build context: cmd/llmgate (text) with internal/agent (the agent
+# harness it imports), cmd/videogate (video), cmd/ensemblegate (Conductor).
+# All are copied into the image below. The skills a harness bakes come from
+# the skills/ folder the start scripts mount at /app/skills.
 #
 # The image also bundles a Podman *remote* client so the factory can drive a host
 # Podman machine in addition to Docker — that's the macOS GPU path (a libkrun
@@ -64,6 +66,7 @@ RUN set -eux; \
 COPY --from=build /factory      /usr/local/bin/factory
 COPY docker/                    /app/docker/
 COPY cmd/llmgate/               /app/cmd/llmgate/
+COPY internal/agent/            /app/internal/agent/
 COPY cmd/videogate/             /app/cmd/videogate/
 COPY cmd/ensemblegate/          /app/cmd/ensemblegate/
 COPY cmd/pygate/                /app/cmd/pygate/

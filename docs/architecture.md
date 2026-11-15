@@ -101,6 +101,7 @@ OpenAI-compatible server.
 cmd/builder/      the control-panel program (entrypoint)
 cmd/llmgate/      the in-image shim baked into llama.cpp models
 internal/builder/ build/run/proxy logic (the core)
+internal/agent/   the agent harness llmgate bakes in (tool loop + built-in tools)
 internal/server/  HTTP API + embedded web UI
 internal/catalog/ the model list (+ embedded default seed)
 docker/           one Dockerfile per runtime + compute target
