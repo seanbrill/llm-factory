@@ -20,6 +20,8 @@
     speakModel = "",
     speakName = "",
     canClone = null,
+    needsTranscript = false,
+    cloneOnly = false,
     defaultClipName = "",
   }: {
     voice?: PersonaVoice;
@@ -27,6 +29,8 @@
     speakModel?: string; // catalog id of the speech member, when there is one
     speakName?: string; // its display name
     canClone?: boolean | null; // whether that member clones voices (null: no member to judge by)
+    needsTranscript?: boolean; // it clones only with the clip's transcript (Qwen3-TTS Base)
+    cloneOnly?: boolean; // it has no built-in voices: it speaks only a clone (Qwen3-TTS Base, XTTS v2)
     defaultClipName?: string;
   } = $props();
 
@@ -245,6 +249,16 @@
     </label>
   </div>
 
+  {#if cloneOnly && kind !== "clone"}
+    <div class="callout wa">
+      <Icon name="warn" size={16} />
+      <span>
+        <b>{speakName || modelName(speakModel) || "This speech model"} has no built-in voices: it speaks only a cloned voice.</b>
+        <p>Pick Cloned and a clip, or the ensemble can't speak.</p>
+      </span>
+    </div>
+  {/if}
+
   {#if kind === "builtin"}
     <div class="fl">
       <label for="{uid}-bv">Voice name</label>
@@ -319,6 +333,12 @@
           <textarea id="{uid}-tr" rows="3" bind:value={transcript} disabled={transcribing} placeholder="The exact words spoken in the clip"></textarea>
           <p class="hint">Cloning needs the exact words. Speech-to-text fills this in when one is running; fix anything it got wrong.</p>
         </div>
+        {#if needsTranscript && !transcribing && !(clip.transcript ?? "").trim()}
+          <div class="callout wa">
+            <Icon name="warn" size={16} />
+            <span><p>{speakName || modelName(speakModel) || "This speech model"} clones only with the transcript: type what the clip says and save it.</p></span>
+          </div>
+        {/if}
         {#if transcribeErr}
           <div class="callout wa"><Icon name="warn" size={16} /><span><p>{transcribeErr}</p></span></div>
         {/if}

@@ -42,7 +42,9 @@
   let name = $state(seed?.name ?? "");
   let pick = $state<Record<string, string>>(Object.fromEntries(SLOTS.map((s) => [s.tool, oldMember(s.tool)?.image ?? ""])));
   let pin = $state<Record<string, boolean>>(Object.fromEntries(SLOTS.map((s) => [s.tool, !!oldMember(s.tool)?.pinned])));
-  let routing = $state(seed?.routing || "heuristic");
+  let routing = $state(seed?.routing || "agent");
+  /** Built-in tools the brain may call besides the members (agent routing). */
+  let agentTools = $state<string[]>(seed?.harness?.tools ?? []);
   let conductor = $state(seed?.conductor ?? "");
   let budget = $state(seed?.vram_budget_gb || 12);
   let compute = $state(seed?.compute || dockerGpu || "cpu");
@@ -91,6 +93,9 @@
   const speakCand = $derived(speak ? candFor(speak.image) : undefined);
   const speakName = $derived(speakCand?.modelName ?? speak?.model ?? "");
   const canClone = $derived(speak ? (speakCand ? speakCand.voiceClone : !!speak.voice_clone) : null);
+  const needsTranscript = $derived(!!(speakCand ? speakCand.needsTranscript : speak?.clone_needs_transcript));
+  const cloneOnly = $derived(!!(speakCand ? speakCand.cloneOnly : speak?.clone_only));
+  const chatCand = $derived(pick.chat ? candFor(pick.chat) : undefined);
 
   // ---- what to tell them before saving --------------------------------------------
   const totalGB = $derived(members.reduce((s, m) => s + (m.vram_gb || 0), 0));
@@ -102,6 +107,10 @@
     if (!pick.chat) w.push("Pick a chat member: it answers everything that isn't an image, a picture to draw, a video or speech.");
     if (persona && voice.kind && !pick.speak) w.push(`${persona.name} has a voice, but the ensemble has no speech member to speak with it. Pick one under Speech.`);
     if (routing === "tool-calling" && !conductor) w.push("Tool-calling needs a conductor model; without one it routes with the heuristic.");
+    if (routing === "agent" && chatCand && chatCand.runtime && chatCand.runtime !== "cpp")
+      w.push(`Agent routing needs a llama.cpp chat model to call the others; ${chatCand.modelName} isn't one, so the ensemble routes with the heuristic.`);
+    if (persona && cloneOnly && voice.kind !== "clone" && pick.speak)
+      w.push(`${speakName || "The speech member"} has no built-in voices: give ${persona.name} a cloned voice, or pick another speech model.`);
     const b = Number(budget) || 0;
     for (const m of members) {
       if ((m.vram_gb || 0) > b) w.push(`${candFor(m.image)?.modelName ?? m.image} needs ~${gb(m.vram_gb, 0)}, more than the ${gb(b, 0)} budget: it can never start. Raise the budget.`);
@@ -163,6 +172,7 @@
       compute,
       persona: personaId || "",
       members,
+      harness: routing === "agent" && agentTools.length ? { tools: [...agentTools] } : null,
     };
     saving = true;
     try {
@@ -189,6 +199,13 @@
     e.preventDefault();
     onclose();
   }
+
+  const AGENT_TOOLS: [string, string, string][] = [
+    ["web_search", "Web search", "Search the web (DuckDuckGo unless set otherwise)"],
+    ["fetch_url", "Fetch pages", "Read a web page by its address"],
+    ["files", "Files", "Read and write files in the ensemble's /workspace"],
+    ["skills", "Skills", "Use the skills folder baked into the image"],
+  ];
 
   const optText = (c: Candidate) =>
     `${c.name.replace(/^(localhost\/)?local-llm\//, "")} · ${computeName(c.compute)}${c.footprint != null ? ` · ~${gb(c.footprint, 0)}` : ""}${usable(c) ? "" : " · Podman, can't be used"}`;
@@ -283,7 +300,7 @@
     {#if persona}
       <div class="voice">
         <span class="vl">{persona.name}'s voice</span>
-        <VoiceEditor bind:voice ensembleId={ens?.id ?? ""} speakModel={speak?.model ?? ""} {speakName} {canClone} defaultClipName={`${persona.name}'s voice`} />
+        <VoiceEditor bind:voice ensembleId={ens?.id ?? ""} speakModel={speak?.model ?? ""} {speakName} {canClone} {needsTranscript} {cloneOnly} defaultClipName={`${persona.name}'s voice`} />
         <p class="hint">
           The voice is saved with the persona{voiceDirty ? " when you save the ensemble" : ""}: every ensemble that uses {persona.name} speaks with it.
         </p>
@@ -295,6 +312,10 @@
   <fieldset class="grp">
     <legend>Routing</legend>
     <div class="segc" role="radiogroup" aria-label="Routing">
+      <label class:on={routing === "agent"}>
+        <input type="radio" name="{uid}-routing" value="agent" bind:group={routing} />
+        <b>Agent</b><span>The chat model calls the others</span>
+      </label>
       <label class:on={routing === "heuristic"}>
         <input type="radio" name="{uid}-routing" value="heuristic" bind:group={routing} />
         <b>Heuristic</b><span>Fast, no extra model</span>
@@ -304,7 +325,24 @@
         <b>Tool-calling</b><span>A small model picks the member</span>
       </label>
     </div>
-    {#if routing === "tool-calling"}
+    {#if routing === "agent"}
+      <p class="hint">
+        The chat member is the brain: it answers, and when you ask for a picture, a video or speech it calls that member as a
+        tool, then tells you what it made. If its model can't call tools, the ensemble routes with the heuristic.
+      </p>
+      <div class="fl">
+        <span class="lbl" id="{uid}-tools">Built-in tools it may also use</span>
+        <div class="tools" role="group" aria-labelledby="{uid}-tools">
+          {#each AGENT_TOOLS as [id, label, help] (id)}
+            <label class="kw" title={help}>
+              <input type="checkbox" class="tg" value={id} bind:group={agentTools} />
+              <span>{label}</span>
+            </label>
+          {/each}
+        </div>
+        <p class="hint">Off by default. Web search and fetching pages reach the internet; files stay in the ensemble's own /workspace.</p>
+      </div>
+    {:else if routing === "tool-calling"}
       <div class="fl">
         <label for="{uid}-cond">Conductor model</label>
         <select id="{uid}-cond" bind:value={conductor}>
@@ -408,7 +446,7 @@
   .voice { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid var(--ln); border-radius: 11px; }
   .vl { font-size: 12px; font-weight: 600; color: var(--ink); }
 
-  .segc { display: flex; padding: 3px; border: 1px solid var(--ln2); border-radius: 10px; gap: 2px; max-width: 520px; }
+  .segc { display: flex; padding: 3px; border: 1px solid var(--ln2); border-radius: 10px; gap: 2px; max-width: 680px; }
   .segc label {
     flex: 1;
     padding: 6px 10px;
@@ -423,6 +461,9 @@
   .segc label.on { background: var(--p3); color: var(--ink); }
   .segc input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
   .segc label:has(input:focus-visible) { outline: 2px solid var(--pr); outline-offset: 1px; }
+
+  .lbl { font-size: 12px; color: var(--fa); font-weight: 500; }
+  .tools { display: flex; flex-wrap: wrap; gap: 8px 18px; }
 
   .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 12px; }
   .two .fl { margin-top: 4px; }

@@ -38,6 +38,15 @@ export const TOOL_WHEN: Record<string, string> = {
   transcribe: "voice questions (the mic) and /v1/audio/transcriptions",
 };
 
+/** With agent routing: when the brain (the chat member) calls each member. */
+export const AGENT_WHEN: Record<string, string> = {
+  see_image: "the brain calls look_at_image (unless it sees images itself)",
+  generate_image: "the brain calls generate_image",
+  generate_video: "the brain calls generate_video",
+  speak: "spoken answers, /v1/audio/speech, and the brain's speak tool",
+  transcribe: "voice questions (the mic) and /v1/audio/transcriptions",
+};
+
 /** The member slots an ensemble is composed of: one member per tool. */
 export interface Slot {
   tool: string;
@@ -65,6 +74,9 @@ export interface Candidate {
   /** Its memory footprint toward the budget: VRAM on a GPU, RAM on CPU; null when the catalog has no figure. */
   footprint: number | null;
   voiceClone: boolean; // a speech model that clones voices
+  needsTranscript: boolean; // ...only with the clip's transcript
+  cloneOnly: boolean; // ...and has no built-in voices
+  family: string; // audio.cpp family ("" otherwise)
   engine: string;
   compute: string;
 }
@@ -97,6 +109,9 @@ export function candidates(images: ImageInfo[], catalog: Model[]): Candidate[] {
       runtime: labelVal(im.Labels, "local-llm.runtime") || cat?.runtime || "",
       footprint: fp > 0 ? fp : null,
       voiceClone: !!cat?.voice_clone,
+      needsTranscript: !!cat?.clone_needs_transcript,
+      cloneOnly: !!cat?.voice_clone && cloneOnly(cat?.audiocpp?.family ?? "", cat?.audiocpp?.default_voice ?? ""),
+      family: cat?.audiocpp?.family ?? "",
       engine: im.Engine || labelVal(im.Labels, "local-llm.engine") || "docker",
       compute,
     });
@@ -116,7 +131,15 @@ export function memberOf(slot: Slot, c: Candidate, pinned: boolean): EnsembleMem
     vram_gb: c.footprint ?? 0,
     pinned: pinned || undefined,
     voice_clone: c.voiceClone || undefined,
+    clone_needs_transcript: c.needsTranscript || undefined,
+    clone_only: c.cloneOnly || undefined,
+    family: c.family || undefined,
   };
+}
+
+/** A cloning model with no built-in voices (internal/voice CloneOnly): XTTS v2, and Qwen3-TTS without a default voice (the Base models). */
+export function cloneOnly(family: string, defaultVoice: string): boolean {
+  return family === "xtts_v2" || (family === "qwen3_tts" && !defaultVoice);
 }
 
 /** A persona voice in a few words. */

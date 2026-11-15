@@ -13,7 +13,7 @@
   import { post, type ApiError } from "../../lib/api";
   import { personas, voices, toast } from "../../lib/stores";
   import type { BuildJob, Ensemble, EnsembleLive, GateMember } from "../../lib/types";
-  import { TOOL_TEXT, TOOL_WHEN, ensembleRef, latestJob, builtImage, voiceText } from "./util";
+  import { TOOL_TEXT, TOOL_WHEN, AGENT_WHEN, ensembleRef, latestJob, builtImage, voiceText } from "./util";
 
   let {
     ens,
@@ -112,7 +112,14 @@
     starting: { text: "Starting…", cls: "chip pr" },
     failed: { text: "Failed", cls: "chip er" },
     stopped: { text: "Stopped", cls: "chip" },
+    stopping: { text: "Stopping…", cls: "chip" },
   };
+  const ROUTING: Record<string, string> = { agent: "Agent", heuristic: "Heuristic", "tool-calling": "Tool-calling" };
+  /** The routing in effect: the Conductor's when it runs (agent routing can fall back), else the saved one. */
+  const routing = $derived(gate?.router || ens.routing || "agent");
+  const fellBack = $derived(!!gate && (ens.routing || "agent") !== gate.router);
+  const memberTools = new Set(["generate_image", "generate_video", "speak", "look_at_image"]);
+  const builtinTools = $derived((gate?.agent_tools ?? []).filter((t) => !memberTools.has(t)));
   const usedPct = $derived(gate && gate.budget_gb > 0 ? Math.min(100, Math.round((gate.used_gb / gate.budget_gb) * 100)) : 0);
 </script>
 
@@ -122,7 +129,7 @@
       <h3 id="{uid}-name">{ens.name}</h3>
       <div class="chips">
         {#if running}<span class="chip ok"><span class="dot"></span>Running on :{running.port}</span>{:else if built}<span class="chip">Stopped</span>{/if}
-        <span class="chip">{ens.routing === "tool-calling" ? "Tool-calling" : "Heuristic"}</span>
+        <span class="chip" class:wa={fellBack} title={gate?.router_note || ""}>{ROUTING[routing] ?? routing}{fellBack ? " (fell back)" : ""}</span>
         <span class={computeChip(ens.compute)} title="Compute for member images that don't say">{computeName(ens.compute)}</span>
         <span class="chip" title="What its members may use at once">{gb(ens.vram_budget_gb, 0)} budget</span>
       </div>
@@ -177,7 +184,9 @@
         <span class="mi" title={modMeta(m.modality).label}><Icon name={modMeta(m.modality).icon} size={14} /></span>
         <span class="tool">
           {TOOL_TEXT[m.tool] ?? m.tool}
-          {#if (ens.routing !== "tool-calling" || m.tool === "transcribe" || m.tool === "speak") && TOOL_WHEN[m.tool]}<small>{TOOL_WHEN[m.tool]}</small>{/if}
+          {#if routing === "agent" && m.tool !== "chat" && AGENT_WHEN[m.tool]}<small>{AGENT_WHEN[m.tool]}</small>
+          {:else if routing === "agent" && m.tool === "chat"}<small>the brain: answers, and calls the others</small>
+          {:else if (routing !== "tool-calling" || m.tool === "transcribe" || m.tool === "speak") && TOOL_WHEN[m.tool]}<small>{TOOL_WHEN[m.tool]}</small>{/if}
         </span>
         <span class="img mono" title={m.image}>{m.image.replace(/^local-llm\//, "")}{#if m.pinned}<span class="pin" title="Kept warm: started with the ensemble, never stopped to make room"> · warm</span>{/if}</span>
         <span class="vr mono" title="Its share of the memory budget">{(g?.mem_gb ?? m.vram_gb) ? `~${gb(g?.mem_gb ?? m.vram_gb, 0)}` : "—"}</span>
@@ -229,6 +238,11 @@
       No persona: no system prompt, and the speech member's default voice.
     {/if}
   </p>
+  {#if gate?.router_note}
+    <p class="cond" class:wan={fellBack}>{gate.router_note}{#if builtinTools.length}; built-in tools: <span class="mono">{builtinTools.join(", ")}</span>{/if}.</p>
+  {:else if routing === "agent" && ens.harness?.tools?.length}
+    <p class="cond">Built-in tools for the brain: <span class="mono">{ens.harness.tools.join(", ")}</span>.</p>
+  {/if}
   {#if ens.routing === "tool-calling"}
     <p class="cond">
       {#if conductorName}Conductor model: <span class="mono">{conductorName}</span>{:else}No conductor model, so it routes with the heuristic.{/if}
@@ -339,6 +353,7 @@
   .lnkb { all: unset; color: var(--pr); cursor: pointer; text-decoration: underline; }
   .cond { font-size: 12.5px; color: var(--mu); }
   .cond .mono { color: var(--ink); font-size: 12px; }
+  .cond.wan { color: var(--wa); }
 
   .st {
     display: flex;

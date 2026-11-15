@@ -30,6 +30,7 @@ export interface Model {
   compiles?: boolean;         // its build compiles a runtime from source (needs compile_min_gb on the engine)
   voice_clone?: boolean;            // TTS that speaks in a voice cloned from a reference recording
   clone_needs_transcript?: boolean; // ...and that recording needs its transcript
+  audiocpp?: { family: string; default_voice?: string }; // audio.cpp models: loader family and default voice
   license?: string;                 // weights' license: SPDX id or short name ("CPML")
   commercial_use?: boolean;         // false = the license forbids commercial use; absent = not stated
 }
@@ -206,18 +207,23 @@ export interface EnsembleMember {
   vram_gb?: number;      // footprint toward the memory budget (VRAM on a GPU, RAM on CPU)
   pinned?: boolean;      // keep warm: started with the ensemble, never evicted
   voice_clone?: boolean; // a speech member that can speak a cloned voice (from the catalog)
+  clone_needs_transcript?: boolean; // its clone needs the clip's transcript
+  clone_only?: boolean;  // it has no built-in voices: it speaks only a clone
+  family?: string;       // audio.cpp model family
 }
 export interface Ensemble {
   id: string;
   name: string;
   package_mode: string;  // orchestrated (embedded isn't built)
-  routing: string;       // heuristic | tool-calling
+  routing: string;       // agent | heuristic | tool-calling
   conductor?: string;
   vram_budget_gb: number; // memory budget: what members may use at once
   engine?: string;
   compute?: string;
   persona?: string;      // persona id
   members: EnsembleMember[];
+  /** Built-in tools for the brain (agent routing): web_search, fetch_url, files, skills. */
+  harness?: { tools?: string[] } | null;
 }
 
 /** A generated image, clip or sound in an ensemble's reply. */
@@ -229,7 +235,7 @@ export interface GateMember {
   modality: string;
   image: string;
   model?: string;
-  state: "stopped" | "starting" | "ready" | "failed";
+  state: "stopped" | "starting" | "ready" | "failed" | "stopping";
   error?: string;
   since?: number;        // unix ms of the last state change
   port?: number;
@@ -241,10 +247,12 @@ export interface GateMember {
 export interface GateStatus {
   id: string;
   name: string;
-  router: string;
+  router: string;        // agent | heuristic | tool-calling
+  router_note?: string;  // the routing in effect, e.g. why agent routing fell back
+  agent_tools?: string[]; // what the brain can call (agent routing)
   budget_gb: number;
   used_gb: number;
-  persona?: { name: string; voice: string; synced: boolean };
+  persona?: { name: string; voice: string; hash?: string; synced: boolean };
   members: GateMember[];
 }
 /** /api/ensembles/status: one per saved ensemble. */
