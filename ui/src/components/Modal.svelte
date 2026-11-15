@@ -30,21 +30,25 @@
     position: fixed;
     inset: 0;
     z-index: 60;
-    background: rgba(0, 0, 0, 0.6);
+    background: color-mix(in srgb, var(--cv) 72%, transparent);
+    backdrop-filter: blur(3px);
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 20px;
   }
   .modal-box {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 20px;
+    background: var(--p2);
+    border: 1px solid var(--ln2);
+    border-radius: 18px;
+    padding: 22px;
     width: min(520px, 100%);
+    max-height: calc(100dvh - 40px);
+    overflow-y: auto;
+    box-shadow: var(--shadow);
   }
   .modal-box h3 {
-    margin: 0 0 4px;
-    font-size: 16px;
+    margin: 0 0 6px;
+    font-size: 17px;
   }
 </style>

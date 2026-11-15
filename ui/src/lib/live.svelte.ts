@@ -10,6 +10,7 @@
 import { api } from "./api";
 import { resources } from "./stores";
 import type { ContainerInfo, ImageInfo, Model, ResourceBudget, StorageInfo } from "./types";
+import type { HarnessStatus } from "./harness";
 
 export type ModelFileRow = Model & { downloaded: boolean; on_disk_gb: number };
 
@@ -18,13 +19,14 @@ export const live = $state({
   images: [] as ImageInfo[],
   files: [] as ModelFileRow[],
   storage: null as StorageInfo | null,
+  harness: null as HarnessStatus | null,
   /** Set once each source has answered at least once. */
-  loaded: { containers: false, images: false, files: false, storage: false, resources: false },
+  loaded: { containers: false, images: false, files: false, storage: false, resources: false, harness: false },
   /** Last error per source ("" = fine). */
-  errors: { containers: "", images: "", files: "", storage: "", resources: "" },
+  errors: { containers: "", images: "", files: "", storage: "", resources: "", harness: "" },
 });
 
-export type Source = "containers" | "images" | "files" | "storage" | "resources";
+export type Source = "containers" | "images" | "files" | "storage" | "resources" | "harness";
 
 const SOURCES: Record<Source, { every: number; fetch: () => Promise<void> }> = {
   containers: {
@@ -47,9 +49,13 @@ const SOURCES: Record<Source, { every: number; fetch: () => Promise<void> }> = {
     every: 10000,
     fetch: async () => { resources.set(await api<ResourceBudget>("/api/resources")); },
   },
+  harness: {
+    every: 15000,
+    fetch: async () => { live.harness = await api<HarnessStatus>("/api/harness/status"); },
+  },
 };
 
-const watchers: Record<Source, number> = { containers: 0, images: 0, files: 0, storage: 0, resources: 0 };
+const watchers: Record<Source, number> = { containers: 0, images: 0, files: 0, storage: 0, resources: 0, harness: 0 };
 const timers: Partial<Record<Source, ReturnType<typeof setTimeout>>> = {};
 const inflight: Partial<Record<Source, Promise<void>>> = {};
 

@@ -8,6 +8,14 @@ export interface ApiError extends Error {
   data: any;
 }
 
+// Called when the factory answers 401 auth_required: the page lacks the
+// factory's access token (see lib/auth.svelte.ts). Set by the auth module, so
+// this file needn't import it.
+let onAuthRequired: (() => void) | null = null;
+export function setAuthRequiredHandler(fn: () => void) {
+  onAuthRequired = fn;
+}
+
 export async function api<T = any>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
   const text = await res.text();
@@ -17,6 +25,7 @@ export async function api<T = any>(path: string, init?: RequestInit): Promise<T>
   } catch {
     data = { error: text };
   }
+  if (res.status === 401 && data?.code === "auth_required") onAuthRequired?.();
   if (!res.ok) {
     const err = new Error(data?.error || res.statusText) as ApiError;
     err.status = res.status;
@@ -62,7 +71,9 @@ export async function streamChat(
   if (!res.ok || !res.body) {
     let msg = res.statusText;
     try {
-      msg = JSON.parse(await res.text()).error || msg;
+      const data = JSON.parse(await res.text());
+      if (res.status === 401 && data?.code === "auth_required") onAuthRequired?.();
+      msg = data.error || msg;
     } catch {
       /* keep statusText */
     }
