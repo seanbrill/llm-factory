@@ -8,15 +8,22 @@
   import { computeName, engineName } from "../../lib/format";
   import { routingSentence } from "../../lib/overview";
   import { gpuEngine, hostMem, isMac } from "../../lib/system.svelte";
+  import { gpuEngines } from "../../lib/catalog";
 
   let { state }: { state: "loading" | "ok" | "error" } = $props();
 
   const mac = $derived(isMac($sysinfo));
   const g = $derived(gpuEngine($sysinfo));
+  // Both engines can give containers the GPU (a libkrun machine and Docker VMM).
+  const through = $derived(
+    gpuEngines($sysinfo, g?.gpu)
+      .map((e) => engineName(e.engine))
+      .join(" and "),
+  );
   const sub = $derived.by(() => {
     const parts: string[] = [];
     if (hostMem.gb) parts.push(`${hostMem.gb} GB`);
-    if ($sysinfo) parts.push(g ? `${computeName(g.gpu)} GPU through ${engineName(g.engine)}` : "No GPU for containers");
+    if ($sysinfo) parts.push(g ? `${computeName(g.gpu)} GPU through ${through}` : "No GPU for containers");
     return parts.join(" · ");
   });
 </script>

@@ -37,12 +37,14 @@
   const pct = $derived(usage ? Math.min(100, (usage.used_ram_gb / usage.total_ram_gb) * 100) : 0);
 
   const sub = $derived.by(() => {
-    const sys = engineSystem(e.engine);
+    const sys = engineSystem(e.engine, si);
     if (sys) return sys;
     if (down) return podman ? "Podman machine · not running" : "Not answering";
-    if (e.gpu === "vulkan") return "libkrun machine · Vulkan GPU";
+    if (e.gpu === "vulkan" && podman && e.gpu_from === "host") return "libkrun machine · Vulkan GPU";
     return `${e.cpus} CPUs · ${e.gpu ? computeName(e.gpu) + " GPU" : "no GPU"}`;
   });
+  // A GPU the GPU check found (Docker VMM, a krunkit VM) rather than the start script.
+  const gpuNote = $derived(e.gpu_experimental ? "Found by the GPU check; experimental with the factory's images." : "");
 
   // Another engine this one compiles GPU images for (the low-memory fallback).
   const compilesFor = $derived(
@@ -115,7 +117,7 @@
       <span class="chip">{e.cpus} CPUs</span>
       <span class="chip">{e.gpu ? "Runs GPU models" : "Builds for CPU"}</span>
       {#if compilesFor}<span class="chip pr">Compiles for {engineName(compilesFor.engine)}</span>{/if}
-      <span class={e.gpu ? "chip gpu" : "chip"}>{e.gpu ? computeName(e.gpu) : "No GPU"}</span>
+      <span class={e.gpu ? "chip gpu" : "chip"} title={gpuNote || undefined}>{e.gpu ? computeName(e.gpu) : "No GPU"}{e.gpu_experimental ? " · experimental" : ""}</span>
     </div>
   {/if}
 </div>

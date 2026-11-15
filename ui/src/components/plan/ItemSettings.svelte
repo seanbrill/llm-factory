@@ -7,6 +7,7 @@
   import Icon from "../Icon.svelte";
   import { ctxDefaultFor, fmtTokens } from "../../lib/util";
   import { contextFor } from "../../lib/meta";
+  import { computeName } from "../../lib/format";
   import { effectiveCompute, type PlanItem } from "../../lib/plan.svelte";
   import type { Model, Persona, SysInfo } from "../../lib/types";
 
@@ -38,11 +39,14 @@
     ["vulkan", "Vulkan GPU"],
     ["cuda", "CUDA GPU"],
   ];
+  // "Docker (18 GB, Vulkan GPU)": both engines can have the GPU, so say which do.
   const engineNote = (e: string) => {
     const x = si?.engines?.find((y) => y.engine === e);
     if (!x) return "";
-    if (!x.reachable) return " (not running)";
-    return x.mem_gb ? ` (${Math.max(1, Math.floor(x.mem_gb))} GB)` : "";
+    const gpu = x.gpu ? `${computeName(x.gpu)} GPU` : "";
+    if (!x.reachable) return ` (not running${gpu ? ", " + gpu : ""})`;
+    const parts = [x.mem_gb ? `${Math.max(1, Math.floor(x.mem_gb))} GB` : "", gpu].filter(Boolean);
+    return parts.length ? ` (${parts.join(", ")})` : "";
   };
   const ctxAuto = $derived(`Auto (${fmtTokens(ctxDefaultFor(compute))})`);
   const ctxMax = $derived(m && contextFor(m.id) ? `Max (${contextFor(m.id)})` : "Max for this model");

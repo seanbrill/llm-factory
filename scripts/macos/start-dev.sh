@@ -9,6 +9,9 @@
 #   PORT=9000 ./start-dev.sh
 #   BIND=0.0.0.0 ./start-dev.sh   # also reachable from your network (default:
 #                                 # this computer only)
+#   FACTORY_DOCKER_SOCK=~/.lima/docker/sock/docker.sock ./start-dev.sh
+#                             # drive another Docker Engine (default: the
+#                             # host's /var/run/docker.sock)
 #
 # The factory's API needs its access token (config/factory-token, saved on
 # first start); the "Open:" link printed at the end carries it.
@@ -26,6 +29,12 @@ mkdir -p models images config workspace
 
 echo "Building UI (Svelte -> internal/server/web)..."
 docker run --rm -v "$PWD:/app" -w /app/ui node:20-alpine sh -c "npm install --no-audit --no-fund --silent && npm run build" || { echo "ERROR: UI build failed."; exit 1; }
+
+# The FileFreak archive helper (docs/FILEFREAK.md): its SDK goes into
+# tools/filefreak/node_modules, which the dev container sees through the repo mount.
+echo "Installing the FileFreak archive helper (tools/filefreak)..."
+docker run --rm -v "$PWD:/app" -w /app/tools/filefreak node:20-alpine sh -c "npm ci --omit=dev --no-audit --no-fund --silent" \
+    || echo "WARN: npm ci in tools/filefreak failed, so the FileFreak archive is off: model files download from Hugging Face."
 
 # UI hot-reload: a background `vite build --watch` rebuilds internal/server/web on
 # every ui/src edit; the dev container serves it from disk, so just refresh the
@@ -55,6 +64,22 @@ if command -v podman >/dev/null 2>&1; then
     fi
 fi
 
+# The Docker engine the factory builds and runs models on: the host's default
+# socket, or another Docker Engine's when FACTORY_DOCKER_SOCK names its socket
+# on this computer — for example Docker Engine in a Lima or Colima VM started
+# with vmType krunkit, whose virtio-gpu can give containers the Mac's GPU
+# (experimental). It's mounted where the default one goes; the factory
+# container itself still runs on the default Docker.
+DOCKER_SOCK_ARGS=(-v //var/run/docker.sock:/var/run/docker.sock)
+if [ -n "${FACTORY_DOCKER_SOCK:-}" ]; then
+    if [ ! -S "$FACTORY_DOCKER_SOCK" ]; then
+        echo "FACTORY_DOCKER_SOCK=$FACTORY_DOCKER_SOCK isn't a socket. Start that VM, or unset FACTORY_DOCKER_SOCK to use the default Docker." >&2
+        exit 1
+    fi
+    DOCKER_SOCK_ARGS=(-v "$FACTORY_DOCKER_SOCK:/var/run/docker.sock")
+    echo "Docker engine for models: $FACTORY_DOCKER_SOCK (FACTORY_DOCKER_SOCK)"
+fi
+
 echo "Starting dev container (hot-reload)..."
 # HOST_HOME / FACTORY_PORT serve the agent harness (Harness page); the repo
 # mount already provides /app/skills and /app/workspace.
@@ -63,8 +88,10 @@ docker run -d --name "$NAME" \
     -e "HOST_DIR=$PWD" \
     -e "HOST_HOME=$HOME" \
     -e "FACTORY_PORT=$PORT" \
+    -e FILEFREAK_ARCHIVE_URL \
     -e "FACTORY_HOST_MEM_BYTES=$(sysctl -n hw.memsize 2>/dev/null || true)" \
-    -v //var/run/docker.sock:/var/run/docker.sock \
+    -e "FACTORY_HOST_OS=$(uname -s 2>/dev/null || true)" \
+    "${DOCKER_SOCK_ARGS[@]}" \
     -v "$PWD:/app" \
     -v local-llm-gocache:/root/.cache/go-build \
     --add-host host.docker.internal:host-gateway \

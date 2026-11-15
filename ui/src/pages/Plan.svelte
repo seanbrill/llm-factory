@@ -18,7 +18,9 @@
   import { build } from "../lib/build.svelte";
   import { openPalette } from "../lib/ui.svelte";
   import { computeName, engineName, plural } from "../lib/format";
-  import { cpuEngineId, family, isGPU, libFor, libraryIndex, schedule, shortName, type ScheduleItem } from "../lib/catalog";
+  import {
+    cpuEngineId, engineOf, family, gpuEngineFor, isGPU, libFor, libraryIndex, schedule, shortName, type ScheduleItem,
+  } from "../lib/catalog";
   import {
     plan, pre, checkPlan, planKey, preflightFor, queueItems, removeFromPlan, movePlanItem, clearPlan,
     updatePlanItem, cloneImage, effectiveCompute, type PlanItem,
@@ -113,16 +115,19 @@
   });
 
   function setCompute(it: PlanItem, c: string) {
-    // Picking a compute picks its route: a GPU runs on the engine that has that
-    // GPU; the CPU on the engine with the most room (Docker on a Mac).
+    // Picking a compute picks its route: a GPU runs on an engine that has that
+    // GPU — the one the build is already set to when it has it (Docker and
+    // Podman can both), else the one with more memory; the CPU on the engine
+    // with the most room (Docker on a Mac).
     let engine = it.engine;
-    if (isGPU(c)) engine = $sysinfo?.engines?.find((e) => e.gpu === c)?.engine ?? engine;
-    else if (isGPU(it.compute)) engine = cpuEngineId($sysinfo);
+    if (isGPU(c)) {
+      if (engineOf($sysinfo, it.engine)?.gpu !== c) engine = gpuEngineFor($sysinfo, c)?.engine ?? engine;
+    } else if (isGPU(it.compute)) engine = cpuEngineId($sysinfo);
     updatePlanItem(it.model_id, { compute: c, engine });
   }
 
   function switchEngine(from: string, to: string) {
-    const gpuThere = $sysinfo?.engines?.find((e) => e.engine === to)?.gpu ?? "";
+    const gpuThere = engineOf($sysinfo, to)?.gpu ?? "";
     let n = 0;
     for (const it of plan.items) {
       if (it.engine !== from) continue;

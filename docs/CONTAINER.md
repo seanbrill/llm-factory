@@ -27,6 +27,9 @@ needs no volumes. Ship the tag (push to a registry) or the `.tar`.
 - `llmgate` — the small Go entrypoint shim (supervisor + prompt injector)
 - `/models/model.gguf` — the baked model weights
 - `/etc/llmgate/system_prompt.txt` — the optional baked init prompt
+- `/etc/llmgate/harness.json` + `/etc/llmgate/skills/` — the optional baked
+  agent harness (empty without one), and an empty `/workspace` for its file
+  tools; see [HARNESS.md › Baked harness](HARNESS.md#baked-harness)
 
 **Not in the image (these live in *your* application, not here):**
 - ❌ No queue or worker — **no BullMQ**, no Redis, no job processing
@@ -60,6 +63,9 @@ local-llm.engine=<docker|podman>     # engine the image was built with; Run reus
 /usr/local/bin/llama-server         # inference engine (llama.cpp, statically linked)
 /models/model.gguf                  # the baked model weights
 /etc/llmgate/system_prompt.txt      # the baked initialization prompt (may be empty)
+/etc/llmgate/harness.json           # the baked agent harness config (empty = none)
+/etc/llmgate/skills/                # skills the harness can load (may be empty)
+/workspace                          # the harness's working folder (owned by llama)
 ```
 
 Two processes run inside the container:
@@ -74,6 +80,8 @@ client ──HTTP :8080──► llmgate ──HTTP 127.0.0.1:8081──► llam
 - **`llmgate`** binds the *public* port (`:8080`), proxies everything verbatim
   (including SSE streaming), and augments `POST /v1/chat/completions` with the
   baked system prompt. If no prompt was baked, it is a transparent passthrough.
+  In an image with a [baked harness](HARNESS.md#baked-harness) it also runs the
+  tool loop for chat requests and answers `GET /v1/harness`.
 - `llmgate` is PID 1, so `docker stop` (SIGTERM) triggers a clean shutdown of
   `llama-server`.
 
@@ -115,6 +123,7 @@ All tunables have baked defaults; override with `docker run -e KEY=VALUE`.
 | `SYSTEM_PROMPT_FILE` | `/etc/llmgate/system_prompt.txt` | Baked prompt location. |
 | `SYSTEM_PROMPT` | _(unset)_ | Inline prompt; overrides the file if set at run time. |
 | `EXTRA_ARGS` | _(unset)_ | Extra flags appended to `llama-server` (advanced). |
+| `HARNESS_FILE` | `/etc/llmgate/harness.json` | Baked agent harness config. `HARNESS=off` turns the harness off; the other `HARNESS_*` overrides are in [HARNESS.md](HARNESS.md#run-time-overrides). |
 
 ---
 
@@ -362,6 +371,11 @@ Key points:
   *host* daemon via the mounted socket. So **model images and containers it
   creates live on the host**, exactly as if you'd built them yourself — not
   nested inside the factory container.
+- **Another Docker Engine:** `FACTORY_DOCKER_SOCK=<socket path>` makes the start
+  scripts mount that socket instead of the default one (for example Docker Engine
+  in a Lima VM, `~/.lima/docker/sock/docker.sock`), so models build and run there
+  while the factory container stays on the default Docker. The scripts also pass
+  `FACTORY_HOST_OS` (from `uname -s`) so the factory knows it's on a Mac.
 - **Published ports are on the host.** When you click *Run* for a model on port
   `8080`, that port is published by the host daemon → reach it at
   `http://localhost:8080` from your machine.

@@ -254,6 +254,7 @@
       }, "containers");
     }
     cmd("gpu", "chip", "Check GPU access", () => { close(); go("system", "gpu"); }, "vulkan podman docker");
+    cmd("archive", "download", "FileFreak archive settings", () => { close(); go("system", "archive"); }, "filefreak upload key mirror huggingface");
     cmd("cleanup", "trash", "Clean up leftover build folders", async () => {
       close();
       try {

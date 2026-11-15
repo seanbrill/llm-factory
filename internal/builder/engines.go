@@ -157,6 +157,19 @@ type EngineResources struct {
 	MemGB     float64 `json:"mem_gb"`
 	CPUs      int     `json:"cpus"`
 	GPU       string  `json:"gpu"` // compute it gives containers: "" | "vulkan" | "cuda"
+	// GPUFrom is how the factory knows about GPU: "host" (the start script saw
+	// it: a libkrun Podman machine, an NVIDIA card) or "probe" (the last GPU
+	// check got a usable render node into a container on this engine).
+	GPUFrom string `json:"gpu_from,omitempty"`
+	// GPUExperimental marks a GPU path the factory's images aren't verified on:
+	// one found by the GPU check, such as Docker VMM on a Mac.
+	GPUExperimental bool `json:"gpu_experimental,omitempty"`
+	// GPUCheck is the engine's last saved GPU check (nil = never checked),
+	// with whether it still describes the engine's machine.
+	GPUCheck *GPUCheckInfo `json:"gpu_check,omitempty"`
+	// System is the engine's machine in a line ("Docker Desktop · kernel
+	// 7.0.14-linuxkit"), "" when it didn't answer.
+	System string `json:"system,omitempty"`
 	// LowMemory flags a GPU engine with less memory than compiling a GPU image
 	// needs: its GPU builds compile on the other engine and are transferred, and
 	// only models that fit in MemGB can run on its GPU.
@@ -166,9 +179,9 @@ type EngineResources struct {
 
 // SysInfo reports the engines' machines so the UI can show "fits your system"
 // guidance and pick sensible build defaults. The top-level fields are kept for
-// older UIs: they describe the GPU engine when it's reachable (where GPU models
-// run), else the first engine that answers. Best-effort: zero/empty fields when
-// undeterminable.
+// older UIs: they describe the preferred GPU engine when one is reachable
+// (where GPU models run), else the first engine that answers. Best-effort:
+// zero/empty fields when undeterminable.
 type SysInfo struct {
 	MemGB  float64 `json:"mem_gb"`
 	CPUs   int     `json:"cpus"`
@@ -177,8 +190,10 @@ type SysInfo struct {
 	Engine string  `json:"engine"`  // engine the numbers came from
 
 	Engines []EngineResources `json:"engines"`
-	// Build-form defaults for this machine: a Mac with a libkrun Podman machine
-	// gets podman + vulkan, an NVIDIA host docker + cuda, anything else docker + cpu.
+	// Build-form defaults for this machine: the preferred GPU engine and its
+	// compute (Podman + Vulkan on a Mac with a libkrun machine, Docker + CUDA on
+	// an NVIDIA host, whichever GPU engine has more memory when two do), else
+	// the first engine that answers + CPU.
 	DefaultEngine  string `json:"default_engine"`
 	DefaultCompute string `json:"default_compute"`
 	// CompileMinGB is the least engine memory a from-source build needs, per compute.
@@ -186,28 +201,43 @@ type SysInfo struct {
 	// HostMemGB is the computer's own memory (GiB), which both engine VMs
 	// share; 0 when the factory can't tell (see HostMemGB).
 	HostMemGB float64 `json:"host_mem_gb,omitempty"`
+	// HostOS is the computer's OS ("darwin", "linux", "windows"), "" when the
+	// factory can't tell (see HostOS).
+	HostOS string `json:"host_os,omitempty"`
 }
 
-// engineGPU maps FACTORY_GPU onto the engine that provides it: start.sh sets
-// "vulkan" when it finds a libkrun Podman machine (the Mac GPU path, a Podman-only
-// device), start.ps1 sets "cuda" on NVIDIA hosts (Docker + the NVIDIA Container
-// Toolkit).
-func engineGPU(factoryGPU, engine string) string {
+// Where an engine's GPU is known from (EngineResources.GPUFrom).
+const (
+	gpuFromHost  = "host"
+	gpuFromProbe = "probe"
+)
+
+// engineGPU is the compute an engine gives containers, and how that's known.
+// FACTORY_GPU comes first: start.sh sets "vulkan" when it finds a libkrun
+// Podman machine (the Mac GPU path), start.ps1 "cuda" on NVIDIA hosts (Docker +
+// the NVIDIA Container Toolkit). Otherwise an engine whose saved GPU check saw
+// a usable render node (probeDRI, see probeGPU) gives Vulkan — Docker VMM or
+// Docker Engine in a krunkit VM on a Mac, an engine on a Linux AMD/Intel GPU —
+// except on an NVIDIA host, whose /dev/dri is the NVIDIA card that the Vulkan
+// images' Mesa can't drive.
+func engineGPU(factoryGPU, engine string, probeDRI bool) (gpu, from string) {
 	switch {
 	case factoryGPU == "vulkan" && engine == enginePodman:
-		return "vulkan"
+		return "vulkan", gpuFromHost
 	case factoryGPU == "cuda" && engine == engineDocker:
-		return "cuda"
+		return "cuda", gpuFromHost
+	case probeDRI && factoryGPU != "cuda":
+		return "vulkan", gpuFromProbe
 	}
-	return ""
+	return "", ""
 }
 
 // SysInfo queries every installed engine (concurrently) and summarizes them.
-// GPU comes from FACTORY_GPU (set by the start scripts, which can see the host),
-// VRAM from FACTORY_VRAM.
+// GPU comes from FACTORY_GPU (set by the start scripts, which can see the host)
+// and the saved GPU checks, VRAM from FACTORY_VRAM.
 func (b *Builder) SysInfo(ctx context.Context) SysInfo {
 	factoryGPU := os.Getenv("FACTORY_GPU")
-	si := SysInfo{CompileMinGB: CompileFloors(), HostMemGB: HostMemGB(ctx)}
+	si := SysInfo{CompileMinGB: CompileFloors(), HostMemGB: HostMemGB(ctx), HostOS: HostOS()}
 	if v, err := strconv.ParseFloat(os.Getenv("FACTORY_VRAM"), 64); err == nil {
 		si.VRAMGB = v
 	}
@@ -218,44 +248,90 @@ func (b *Builder) SysInfo(ctx context.Context) SysInfo {
 		wg.Add(1)
 		go func(i int, e string) {
 			defer wg.Done()
-			r := EngineResources{Engine: e, GPU: engineGPU(factoryGPU, e), Fix: MemoryFix(e)}
-			if mem, cpus, err := EngineMemory(ctx, e); err == nil {
-				r.Reachable, r.MemGB, r.CPUs = true, mem, cpus
+			r := EngineResources{Engine: e, Fix: MemoryFix(e)}
+			var id EngineIdentity
+			if in, err := readEngineInfo(ctx, e); err == nil && in.MemBytes > 0 {
+				r.Reachable, r.MemGB, r.CPUs = true, float64(in.MemBytes)/1e9, in.CPUs
+				id = in.Identity
+				r.System = id.describe()
+			} else if err != nil && !transientEngineErr(err) && ctx.Err() == nil {
+				// It answered, but not with JSON we could read: its memory the old way.
+				if mem, cpus, err := EngineMemory(ctx, e); err == nil {
+					r.Reachable, r.MemGB, r.CPUs = true, mem, cpus
+				}
+			}
+			rec, have := b.savedGPUCheck(e)
+			r.GPU, r.GPUFrom = engineGPU(factoryGPU, e, probeGPU(rec, have, id))
+			r.GPUExperimental = r.GPUFrom == gpuFromProbe
+			if have {
+				r.GPUCheck = checkInfo(rec, id)
 			}
 			si.Engines[i] = r
 		}(i, e)
 	}
 	wg.Wait()
-	si.summarize(factoryGPU)
+	si.summarize()
 	return si
 }
 
 // summarize flags low-memory GPU engines, fills the legacy top-level fields, and
 // picks the build form's defaults.
-func (si *SysInfo) summarize(factoryGPU string) {
+func (si *SysInfo) summarize() {
 	var top *EngineResources
 	for i := range si.Engines {
 		e := &si.Engines[i]
 		e.LowMemory = e.Reachable && e.GPU != "" && e.MemGB < gpuCompileFloorGB
-		if e.Reachable && (top == nil || (e.GPU != "" && top.GPU == "")) {
+		if top == nil && e.Reachable {
 			top = e
 		}
+	}
+	if g := preferredGPUEngine(si.Engines, ""); g != nil && g.Reachable {
+		top = g
 	}
 	if top != nil {
 		si.MemGB, si.CPUs, si.GPU, si.Engine = top.MemGB, top.CPUs, top.GPU, top.Engine
 	}
-	si.DefaultEngine, si.DefaultCompute = defaultTarget(factoryGPU, si.Engines)
+	si.DefaultEngine, si.DefaultCompute = defaultTarget(si.Engines)
 }
 
-// defaultTarget is the build form's starting engine + compute: the engine that
-// provides FACTORY_GPU when it's installed (podman + vulkan on a Mac with a
-// libkrun machine, docker + cuda on an NVIDIA host), else CPU on the first engine
-// that answers (docker first) — CPU images run anywhere.
-func defaultTarget(factoryGPU string, engines []EngineResources) (engine, compute string) {
-	for _, e := range engines {
-		if e.GPU != "" && e.GPU == factoryGPU {
-			return e.Engine, e.GPU
+// betterGPUEngine reports whether a is a better place than b for GPU work: one
+// that answers beats one that doesn't, then the one with more memory to compile
+// and run in (a GPU in a VM shares the VM's memory), then the one the start
+// script saw on the host (the verified path) over one a GPU check found.
+func betterGPUEngine(a, b EngineResources) bool {
+	if a.Reachable != b.Reachable {
+		return a.Reachable
+	}
+	if a.MemGB != b.MemGB {
+		return a.MemGB > b.MemGB
+	}
+	return a.GPUFrom == gpuFromHost && b.GPUFrom != gpuFromHost
+}
+
+// preferredGPUEngine is the best engine that gives containers compute ("" =
+// any GPU), nil when none does. When two engines give it — a libkrun Podman
+// machine and Docker VMM — GPU work defaults to the one betterGPUEngine picks;
+// an engine named in a build request is never overridden.
+func preferredGPUEngine(engines []EngineResources, compute string) *EngineResources {
+	var best *EngineResources
+	for i := range engines {
+		e := &engines[i]
+		if e.GPU == "" || (compute != "" && e.GPU != compute) {
+			continue
 		}
+		if best == nil || betterGPUEngine(*e, *best) {
+			best = e
+		}
+	}
+	return best
+}
+
+// defaultTarget is the build form's starting engine + compute: the preferred
+// GPU engine, even when it isn't running (the build then says so), else CPU on
+// the first engine that answers (docker first) — CPU images run anywhere.
+func defaultTarget(engines []EngineResources) (engine, compute string) {
+	if g := preferredGPUEngine(engines, ""); g != nil {
+		return g.Engine, g.GPU
 	}
 	for _, e := range engines {
 		if e.Reachable {
@@ -578,10 +654,18 @@ func oomHint(engine string, memGB float64) string {
 		engineLabel(engine), have, memoryFixSentence(engine))
 }
 
+// dockerWhere is where the docker engine's VM runs, for the /dev/dri hint.
+type dockerWhere int
+
+const (
+	dockerElsewhere    dockerWhere = iota // Docker Engine on a Linux host, or unknown
+	dockerDesktopOnMac                    // Docker Desktop's VM on a Mac
+	dockerVMOnMac                         // Docker Engine in another VM on a Mac (Lima, Colima)
+)
+
 // gpuDeviceHint explains a Vulkan run that failed because the engine has no GPU
 // render node (/dev/dri) to give the container; "" for any other failure.
-// macDocker says the docker engine is Docker Desktop's Linux VM on a Mac.
-func gpuDeviceHint(engine, compute, output string, macDocker bool) string {
+func gpuDeviceHint(engine, compute, output string, where dockerWhere) string {
 	if compute != "vulkan" {
 		return ""
 	}
@@ -593,22 +677,49 @@ func gpuDeviceHint(engine, compute, output string, macDocker bool) string {
 	if resolveEngine(engine) == enginePodman {
 		return "This Podman machine has no GPU device (/dev/dri). GPU containers need a libkrun (krunkit) machine: podman machine init --provider libkrun — see the README's \"Running on a Mac\"."
 	}
-	if macDocker {
-		return "Docker Desktop on this Mac has no GPU device under Apple Virtualization. Run this image on Podman, or switch Docker Desktop to Docker VMM (Settings → General → Virtual Machine Manager) and try again."
+	switch where {
+	case dockerDesktopOnMac:
+		return "Docker Desktop on this Mac gave the container no GPU device (/dev/dri): its default VM manager, Apple Virtualization, has none. " +
+			"To try Docker's GPU (experimental), switch Docker Desktop to Docker VMM (Settings → General → Virtual Machine Manager → Docker VMM, then Apply & restart), " +
+			"start the factory again, and run Check GPU access on the System page again. Or run this image on Podman."
+	case dockerVMOnMac:
+		return "This Docker VM gave the container no GPU device (/dev/dri). Docker Engine needs a VM with a virtio-gpu device, such as a Lima VM with vmType krunkit (experimental); " +
+			"after switching, run Check GPU access on the System page again. Or run this image on Podman."
 	}
 	return "Docker has no GPU device (/dev/dri) on this host to give the container. Install the GPU's Mesa/Vulkan driver so /dev/dri exists, or run the image on another engine."
 }
 
-// dockerDesktopMac reports whether the docker engine is Docker Desktop's Linux
-// VM on a Mac.
-func dockerDesktopMac(ctx context.Context) bool {
+// dockerLocation says where the docker engine runs (from the host OS the start
+// scripts pass, and whether `docker info` names Docker Desktop) and what its
+// machine is now.
+func dockerLocation(ctx context.Context) (dockerWhere, EngineIdentity) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	out, err := engineCmd(ctx, engineDocker, "info", "--format", "{{.OperatingSystem}}|{{.KernelVersion}}|{{json .Labels}}").Output()
-	return err == nil && isDockerDesktopMac(string(out))
+	out, err := engineCmd(ctx, engineDocker, "info", "--format", "{{json .}}").Output()
+	if err != nil {
+		return dockerWhereOf(HostOS(), engineInfo{}), EngineIdentity{}
+	}
+	in, _ := parseEngineInfo(out)
+	return dockerWhereOf(HostOS(), in), in.Identity
 }
 
-// isDockerDesktopMac reads dockerDesktopMac's info line: Docker Desktop runs a
+// dockerWhereOf classifies the docker engine from the host OS ("" = unknown)
+// and its info. With the host OS unknown, Docker Desktop's own marks still
+// tell a Mac (see isDockerDesktopMac).
+func dockerWhereOf(hostOS string, in engineInfo) dockerWhere {
+	desktop := strings.EqualFold(in.Identity.System, "Docker Desktop")
+	switch {
+	case hostOS == "darwin" && desktop:
+		return dockerDesktopOnMac
+	case hostOS == "darwin":
+		return dockerVMOnMac
+	case hostOS == "" && isDockerDesktopMac(in.Identity.System+"|"+in.Identity.Kernel+"|"+strings.Join(in.Labels, ",")):
+		return dockerDesktopOnMac
+	}
+	return dockerElsewhere
+}
+
+// isDockerDesktopMac reads Docker Desktop's marks from `docker info`: it runs a
 // LinuxKit kernel on macOS and Linux (WSL2's on Windows), and labels its CLI
 // socket with the user's home — /Users/… on a Mac, /home/… on Linux.
 func isDockerDesktopMac(info string) bool {

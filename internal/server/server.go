@@ -21,9 +21,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/seanbrill/local-llm/internal/agent"
 	"github.com/seanbrill/local-llm/internal/builder"
 	"github.com/seanbrill/local-llm/internal/catalog"
 	"github.com/seanbrill/local-llm/internal/ensemble"
+	"github.com/seanbrill/local-llm/internal/filefreak"
 	"github.com/seanbrill/local-llm/internal/llm"
 	"github.com/seanbrill/local-llm/internal/version"
 )
@@ -50,6 +52,9 @@ type Server struct {
 	ens *ensemble.Store // saved Ensemble (multimodal super-model) definitions
 
 	mediaDir string // where generated clips/images are saved + served from
+
+	ff    *filefreak.Archive // the FileFreak model archive (filefreak.go); nil if its config can't be read
+	ffErr error
 
 	// Cached global GPU VRAM usage (nvidia-smi via a throwaway container is slow,
 	// so we cache for a few seconds across /api/resources polls).
@@ -148,6 +153,8 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.mux.HandleFunc("/api/resources", s.handleResources)
 	s.mux.HandleFunc("/api/system/reclaim", s.handleReclaimMemory)
 	s.registerHarness() // model gateway (/v1) + /api/harness (harness.go)
+	s.openArchive()     // the FileFreak archive, asked before every weight download (filefreak.go)
+	s.registerFileFreak()
 	return s, nil
 }
 
@@ -393,9 +400,17 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		MemoryGB     float64 `json:"memory_gb"`
 		Route        string  `json:"route"`
 		Autostart    bool    `json:"autostart"`
+		// Harness bakes the agent harness: a harness.json object, true for
+		// the defaults, or false/null/absent for none.
+		Harness json.RawMessage `json:"harness"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	harnessCfg, err := parseHarnessOption(req.Harness)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	model, ok := s.cat.Get(req.ModelID)
@@ -425,12 +440,14 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		MemoryGB:     req.MemoryGB,
 		Route:        route,
 		Autostart:    req.Autostart,
+		Harness:      harnessCfg,
 	}
 
 	cfg := buildConfig{
 		ModelID: req.ModelID, ImageName: req.ImageName, Tag: req.Tag,
 		Engine: engine, Compute: compute, SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode,
 		CtxSize: req.CtxSize, MemoryGB: req.MemoryGB, Route: route, Autostart: req.Autostart,
+		Harness: harnessCfg,
 	}
 	// The job runs on a context of its own (not the request's), so a client
 	// refresh/disconnect can't cancel it; POST /api/builds/cancel can.
@@ -593,6 +610,24 @@ func normalizeCompute(compute string) string {
 	default:
 		return "cpu"
 	}
+}
+
+// parseHarnessOption reads a build request's "harness" field: a harness.json
+// object (unknown fields are an error, so a typo or a key in the wrong place
+// is caught), true for the default harness, or false/null/absent for none.
+// It returns the config as it will be baked.
+func parseHarnessOption(raw json.RawMessage) (*agent.Config, error) {
+	switch strings.TrimSpace(string(raw)) {
+	case "", "null", "false":
+		return nil, nil
+	case "true":
+		raw = json.RawMessage("{}")
+	}
+	c, err := agent.ParseConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	return builder.NormalizeHarness(&c)
 }
 
 // sanitizeRoute normalizes a user-typed URL alias into a hostname label:

@@ -14,12 +14,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +34,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/seanbrill/local-llm/internal/agent"
 	"github.com/seanbrill/local-llm/internal/catalog"
 	"github.com/seanbrill/local-llm/internal/ensemble"
 )
@@ -49,9 +53,29 @@ type Builder struct {
 	// containers (the Caddy proxy) that run on the host daemon.
 	HostDir string
 
+	// Archive, when set, is asked before every weight download: it may fill the
+	// file from the FileFreak archive, and queues what came from Hugging Face
+	// for it (internal/filefreak).
+	Archive WeightArchive
+
 	// One `<engine> build` per engine machine at a time (see acquireBuildSlot).
 	slotMu sync.Mutex
 	slots  map[string]chan struct{}
+
+	// Saved GPU check results per engine (gpustate.go), read from
+	// config/gpu-probe.json on first use.
+	gpuMu    sync.Mutex
+	gpuState map[string]GPUCheckRecord
+}
+
+// WeightArchive is a second source for model weights (internal/filefreak).
+// Fetch runs before a download from url into dest. done: dest now holds the
+// file. Otherwise the builder downloads from url itself; wantSHA256 (when
+// not "") is the SHA-256 that download must match, and downloaded (when not
+// nil) is called after it with the file's SHA-256 and size. It never fails a
+// build: a problem is a line in log and a download from url as before.
+type WeightArchive interface {
+	Fetch(ctx context.Context, url, dest, label string, log func(string)) (done bool, wantSHA256 string, downloaded func(sha256 string, size int64))
 }
 
 // LogFunc receives one human-readable progress line at a time.
@@ -411,43 +435,81 @@ func audioCppServerConfig(m catalog.Model) ([]byte, error) {
 	}, "", "  ")
 }
 
-// downloadTo streams url -> dest atomically (via a .part file) with progress
-// logging. Shared by the model and projector downloaders.
+// downloadTo fetches a weight into dest: from the FileFreak archive when it
+// has the file (b.Archive), otherwise from url. Every model, projector and
+// extra weight download comes through here.
 func (b *Builder) downloadTo(ctx context.Context, url, dest, label string, log LogFunc) error {
-	log(fmt.Sprintf("Downloading %s ...", label))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	var want string
+	var downloaded func(string, int64)
+	if b.Archive != nil {
+		var done bool
+		if done, want, downloaded = b.Archive.Fetch(ctx, url, dest, label, log); done {
+			return nil
+		}
+	}
+	sum, size, err := httpDownload(ctx, url, dest, label, want, log)
 	if err != nil {
 		return err
 	}
+	if downloaded != nil {
+		downloaded(sum, size)
+	}
+	return nil
+}
+
+// httpDownload streams url -> dest atomically (via a .part file) with progress
+// logging, and returns the file's SHA-256 and size. With want, a download
+// whose SHA-256 differs is deleted and is an error.
+func httpDownload(ctx context.Context, url, dest, label, want string, log LogFunc) (string, int64, error) {
+	host := url
+	if u, err := neturl.Parse(url); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	log(fmt.Sprintf("Downloading %s from %s ...", label, host))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", 0, err
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return "", 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("download failed: HTTP %d (%s)", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return "", 0, fmt.Errorf("download failed: HTTP %d (%s)", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 	tmp := dest + ".part"
 	f, err := os.Create(tmp)
 	if err != nil {
-		return err
+		return "", 0, err
 	}
+	h := sha256.New()
 	pr := &progressReader{r: resp.Body, total: resp.ContentLength, log: log, label: label}
-	if _, err := io.Copy(f, pr); err != nil {
+	n, err := io.Copy(io.MultiWriter(f, h), pr)
+	if err != nil {
 		f.Close()
 		os.Remove(tmp)
-		return fmt.Errorf("download interrupted: %w", err)
+		return "", 0, fmt.Errorf("download interrupted: %w", err)
 	}
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
-		return err
+		return "", 0, err
+	}
+	sum := hex.EncodeToString(h.Sum(nil))
+	if want != "" && sum != want {
+		os.Remove(tmp)
+		return "", 0, fmt.Errorf("the download of %s doesn't match the SHA-256 %s publishes for it (got %s, want %s), so it was deleted: try the build again", label, host, sum, want)
 	}
 	if err := os.Rename(tmp, dest); err != nil {
-		return err
+		return "", 0, err
 	}
-	log("Saved " + label + " to models/")
-	return nil
+	if want != "" {
+		log(fmt.Sprintf("Saved %s to models/ from %s (SHA-256 checked)", label, host))
+	} else {
+		log(fmt.Sprintf("Saved %s to models/ from %s", label, host))
+	}
+	return sum, n, nil
 }
 
 // BuildOptions configures a single image build.
@@ -465,6 +527,12 @@ type BuildOptions struct {
 	MemoryGB  float64 // container memory limit at run time (0 = no limit)
 	Route     string  // local URL alias -> http://<route>.localhost
 	Autostart bool    // run with --restart unless-stopped
+
+	// Harness, when set, bakes the agent harness (harness.json plus the
+	// skills folder) into a llama.cpp chat image: llmgate then runs the tool
+	// loop itself. Its workspace and skills paths are replaced by the image's
+	// (see NormalizeHarness). nil builds a plain model image.
+	Harness *agent.Config
 
 	// OnPlan, when set, learns which engine runs the build once the memory
 	// preflight has chosen: the target, or the other engine when the target is
@@ -499,6 +567,15 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	// Select the runtime family, and the compute variant it actually ships (a
 	// GPU request for a CPU-only runtime such as Piper TTS builds the CPU image).
 	family := modelFamily(o.Model)
+
+	// The harness runs inside llmgate, so only llama.cpp chat models take it.
+	harnessCfg, err := NormalizeHarness(o.Harness)
+	if err != nil {
+		return err
+	}
+	if harnessCfg != nil && (family != "llama" || o.Model.Mod() == "embedding") {
+		return fmt.Errorf("the agent harness needs a llama.cpp chat model; %s is a %s model", o.Model.Name, o.Model.Mod())
+	}
 	resolved, err := b.resolveCompute(o.Model, compute)
 	if err != nil {
 		return err
@@ -658,6 +735,10 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		if err := stageGate(b.BaseDir, work); err != nil {
 			return err
 		}
+		// The agent harness config and skills (placeholders without one).
+		if err := stageHarness(b.BaseDir, work, harnessCfg, log); err != nil {
+			return err
+		}
 	}
 
 	// The python family runs a PyTorch model behind the pygate shim (interpreted,
@@ -701,6 +782,9 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	if o.CtxSize > 0 {
 		buildArgs = append(buildArgs, "--build-arg", fmt.Sprintf("CTX_SIZE=%d", o.CtxSize))
 	}
+	// A baked harness is labeled so the factory can tell the model runs its own
+	// tool loop (and clone the build with the same harness).
+	buildArgs = append(buildArgs, harnessLabels(harnessCfg)...)
 	// Podman remote (macOS GPU path): the client forwards its default seccomp
 	// profile *path* (/etc/containers/seccomp.json on Alpine) to the machine VM,
 	// which ships the profile at /usr/share/containers/seccomp.json instead, so
@@ -874,6 +958,37 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 	// Best-effort removal of a stale container occupying the same name/port.
 	_ = engineCmd(ctx, engine, "rm", "-f", name).Run()
 
+	group := -1
+	if o.Compute == "vulkan" {
+		group = vulkanGroup(b.savedGPUCheck(engine))
+	}
+	out, err := engineCmd(ctx, engine, runArgs(engine, name, o, group)...).CombinedOutput()
+	if err != nil {
+		err = fmt.Errorf("%s run: %v: %s", engine, err, strings.TrimSpace(string(out)))
+		// A Vulkan image needs the engine's GPU render node. Docker Desktop on a Mac
+		// (Apple Virtualization) and a non-libkrun Podman machine have none, and
+		// the raw "error gathering device information" says nothing about why.
+		if o.Compute == "vulkan" && strings.Contains(string(out), "/dev/dri") {
+			where, id := dockerElsewhere, EngineIdentity{}
+			if engine == engineDocker {
+				where, id = dockerLocation(ctx)
+			}
+			if hint := gpuDeviceHint(engine, o.Compute, string(out), where); hint != "" {
+				// A saved GPU check that said otherwise is out of date: stop
+				// routing GPU work here until the next check.
+				b.noteVulkanRunFailed(engine, id, string(out), hint)
+				return "", &HintError{Hint: hint, Err: err}
+			}
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// runArgs is the `<engine> run` command line for o, as container name. group
+// is the render node's group a Vulkan container joins (-1 = none, see
+// vulkanGroup).
+func runArgs(engine, name string, o RunOptions, group int) []string {
 	args := []string{
 		"run", "-d", "--name", name,
 		// Bind the published port to loopback only so the model isn't reachable
@@ -890,10 +1005,16 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 	case "cuda":
 		args = append(args, "--gpus", "all")
 	case "vulkan":
-		// Paravirtualized GPU: a libkrun/krunkit Podman machine (macOS) or a host
-		// GPU on Linux exposes the DRI render node. llama.cpp's Vulkan backend then
-		// finds the (virtio) device. Requires Podman+libkrun on macOS — see README.
+		// Paravirtualized GPU: a libkrun/krunkit Podman machine, Docker VMM or a
+		// krunkit Lima VM (macOS), or a host GPU on Linux exposes the DRI render
+		// node, and llama.cpp's Vulkan backend finds the (virtio) device. The
+		// node keeps the VM's owner and mode, and the Vulkan images run as an
+		// unprivileged user: when only the node's group may open it (the GPU
+		// check saw that), the container joins that group.
 		args = append(args, "--device", "/dev/dri")
+		if group >= 0 {
+			args = append(args, "--group-add", strconv.Itoa(group))
+		}
 	}
 	if o.MemoryGB > 0 {
 		// MB so fractional GB (e.g. 4.5) is accepted by the engine.
@@ -913,7 +1034,9 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 	// seccomp-unconfined on Podman; it's trusted local llama.cpp. label=disable
 	// turns off SELinux confinement so the container can reach the GPU at /dev/dri
 	// on the (SELinux-enforcing) libkrun machine — the Venus/krunkit GPU path needs
-	// it (matches RamaLama). Both are no-ops/irrelevant on Docker.
+	// it (matches RamaLama). Docker needs neither: its client sends no profile
+	// path, and Docker Engine runs without SELinux labels unless its daemon is
+	// set up for them (Docker Desktop's VMs and Lima's default Ubuntu aren't).
 	if engine == enginePodman {
 		args = append(args, "--security-opt", "seccomp=unconfined", "--security-opt", "label=disable")
 	}
@@ -935,23 +1058,7 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 			args = append(args, "--label", "local-llm.persona="+p)
 		}
 	}
-	args = append(args, o.Ref)
-
-	out, err := engineCmd(ctx, engine, args...).CombinedOutput()
-	if err != nil {
-		err = fmt.Errorf("%s run: %v: %s", engine, err, strings.TrimSpace(string(out)))
-		// A Vulkan image needs the engine's GPU render node. Docker Desktop on a Mac
-		// (Apple Virtualization) and a non-libkrun Podman machine have none, and
-		// the raw "error gathering device information" says nothing about why.
-		if o.Compute == "vulkan" && strings.Contains(string(out), "/dev/dri") {
-			mac := engine == engineDocker && dockerDesktopMac(ctx)
-			if hint := gpuDeviceHint(engine, o.Compute, string(out), mac); hint != "" {
-				return "", &HintError{Hint: hint, Err: err}
-			}
-		}
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
+	return append(args, o.Ref)
 }
 
 // personaName pulls a persona out of a system prompt ("You are FinBot, a terse…"
@@ -1700,7 +1807,7 @@ func ClassifyEngineError(err error) string {
 	}
 	switch {
 	case strings.Contains(msg, "/dev/dri") && contains("no such file", "error gathering device"):
-		return "This engine has no GPU device (/dev/dri) to give the container. On a Mac, run GPU (Vulkan) images on a Podman libkrun machine — Docker Desktop under Apple Virtualization has no GPU device."
+		return "This engine has no GPU device (/dev/dri) to give the container. On a Mac, run GPU (Vulkan) images on a Podman libkrun machine — Docker Desktop's default VM (Apple Virtualization) has no GPU device; to try Docker's GPU, switch Docker Desktop to Docker VMM and run Check GPU access on the System page again."
 	case contains("connection refused", "cannot connect to podman", "cannot connect to the docker daemon"),
 		strings.Contains(msg, "sock") && strings.Contains(msg, "no such file"):
 		return "Container engine unreachable — the Podman machine or Docker isn't responding. Restart the factory (scripts/<your-os>/start.sh) so it reconnects, then retry."
@@ -1787,23 +1894,13 @@ func injectMode(m string) string {
 	return "missing"
 }
 
-// stageGate copies the llmgate shim source into <work>/gate so the Dockerfile's
-// `gate` stage can compile it. The shim is stdlib-only, so a minimal go.mod with
-// no requires is enough (the in-container build needs no network).
+// stageGate copies the llmgate shim source and the agent harness package it
+// imports into <work>/gate, laid out as in this repo (cmd/llmgate,
+// internal/agent), so the Dockerfile's `gate` stage can compile
+// ./cmd/llmgate. Both are stdlib-only, so a go.mod with no requires is enough
+// (the in-container build needs no network).
 func stageGate(baseDir, work string) error {
-	src := filepath.Join(baseDir, "cmd", "llmgate", "main.go")
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return fmt.Errorf("read llmgate source (%s): %w", src, err)
-	}
-	gateDir := filepath.Join(work, "gate")
-	if err := os.MkdirAll(gateDir, 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(gateDir, "main.go"), data, 0o644); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(gateDir, "go.mod"), []byte("module llmgate\n\ngo 1.22\n"), 0o644)
+	return stageGoPackages(baseDir, work, "cmd/llmgate", "internal/agent")
 }
 
 // stageVideogate copies the videogate shim source into <work>/gate so the video

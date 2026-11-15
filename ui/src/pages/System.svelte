@@ -2,14 +2,16 @@
   // System (sheet frame f13): which engine has the GPU and why the other
   // doesn't, how this Mac's memory is split between the two engine machines,
   // the build rules that keep builds from running out of memory, live memory
-  // use with the cache drop, and versions. #system/gpu jumps to the engines and
-  // GPU check, #system/memory to the memory plan.
+  // use with the cache drop, versions, and the FileFreak model archive.
+  // #system/gpu jumps to the engines and GPU check, #system/memory to the
+  // memory plan, #system/archive to the archive.
   import { onMount, tick } from "svelte";
   import EngineDetail from "../components/system/EngineDetail.svelte";
   import MemoryPlan from "../components/system/MemoryPlan.svelte";
   import BuildRules from "../components/system/BuildRules.svelte";
   import UsageCard from "../components/system/UsageCard.svelte";
   import VersionsCard from "../components/system/VersionsCard.svelte";
+  import ArchiveCard from "../components/system/ArchiveCard.svelte";
   import { loadSysInfo, sysinfo } from "../lib/stores";
   import { routeArg } from "../lib/router";
   import { watch } from "../lib/live.svelte";
@@ -35,7 +37,7 @@
 
   // Deep links: scroll to the section after App has scrolled the page to the
   // top, move focus there, and highlight it for a moment.
-  const TARGETS: Record<string, string> = { gpu: "sys-gpu", memory: "sys-memory" };
+  const TARGETS: Record<string, string> = { gpu: "sys-gpu", memory: "sys-memory", archive: "sys-archive" };
   let flash = $state("");
   $effect(() => {
     const id = TARGETS[$routeArg];
@@ -79,6 +81,9 @@
       <section id="sys-memory" class="card plan" class:flash={flash === "sys-memory"} tabindex="-1">
         <MemoryPlan />
       </section>
+      <section id="sys-archive" class="card arc" class:flash={flash === "sys-archive"} tabindex="-1" aria-label="FileFreak archive">
+        <ArchiveCard />
+      </section>
     </div>
     <div class="col side">
       <section class="card rules"><BuildRules /></section>
@@ -107,7 +112,8 @@
     55% { box-shadow: 0 0 0 2px var(--cv), 0 0 0 4px var(--gpu); }
     100% { box-shadow: 0 0 0 2px var(--cv), 0 0 0 4px transparent; }
   }
-  .plan.flash { animation-name: flash-pr; }
+  .plan.flash,
+  .arc.flash { animation-name: flash-pr; }
   @keyframes flash-pr {
     0%,
     55% { box-shadow: 0 0 0 2px var(--cv), 0 0 0 4px var(--pr); }
@@ -138,6 +144,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .flash,
-    .plan.flash { animation: none; box-shadow: 0 0 0 2px var(--cv), 0 0 0 4px var(--gpu); }
+    .plan.flash,
+    .arc.flash { animation: none; box-shadow: 0 0 0 2px var(--cv), 0 0 0 4px var(--gpu); }
   }
 </style>

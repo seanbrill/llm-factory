@@ -161,13 +161,35 @@ CPU** runs anywhere. Otherwise pick the row that matches your machine:
 | Anything, anywhere (portable, slower) | Docker | **CPU** | nothing (and it's arm64-native on a Mac) |
 | Windows / Linux with an **NVIDIA** GPU | Docker *or* Podman | **NVIDIA CUDA** | NVIDIA Container Toolkit (WSL2 on Windows) |
 | **macOS** GPU (Apple Metal) | **Podman** | **GPU (Vulkan/Metal)** | a `krunkit`/libkrun Podman machine |
+| **macOS** GPU on Docker (*experimental*) | Docker | **GPU (Vulkan/Metal)** | Docker Desktop on **Docker VMM** (or Docker Engine in a krunkit VM), and **System → Check GPU access** finding the GPU |
 | Linux with an **AMD/Intel** GPU | Docker *or* Podman | **GPU (Vulkan/Metal)** | `/dev/dri` + Mesa Vulkan drivers |
 
-Why Podman for the Mac GPU: Docker Desktop and Apple's own `container` tool can't
-reach the Metal GPU (Apple Silicon GPUs have no IOMMU, so there's nothing to "pass
-through"). A Podman **libkrun** machine paravirtualizes the GPU into the container
-as a Vulkan device — the only way to GPU-accelerate a *container* on a Mac (~70–80%
-of native). More in [Running on a Mac](#running-on-a-mac-apple-silicon) below.
+Why Podman for the Mac GPU: Docker Desktop's default VM and Apple's own
+`container` tool can't reach the Metal GPU (Apple Silicon GPUs have no IOMMU, so
+there's nothing to "pass through"). A Podman **libkrun** machine paravirtualizes
+the GPU into the container as a Vulkan device — the verified way to GPU-accelerate
+a *container* on a Mac (~70–80% of native). More in
+[Running on a Mac](#running-on-a-mac-apple-silicon) below.
+
+**Docker as a GPU engine (experimental).** Docker gets the GPU only when its VM
+gives containers a GPU device: Docker Desktop on **Docker VMM**, or Docker Engine
+in a Lima/Colima VM with `vmType: krunkit`. The factory doesn't guess: **System →
+Check GPU access** starts a throwaway container on each engine with `--device
+/dev/dri` and saves each engine's answer in `config/gpu-probe.json`. When Docker's
+last check found a GPU render node the images can open, Docker counts as a Vulkan
+engine. The System page shows that its GPU came from the check, when it ran, and
+marks it experimental. When Docker's machine changes (a different system, kernel
+or daemon), the factory stops using that answer and asks you to check again;
+always check again after switching Docker's VM, since Docker Desktop can keep the
+same kernel. A Vulkan run that finds no GPU device clears it too. None of this has
+been confirmed with the factory's images yet; the steps to try it are in
+[GPU on a Mac](docs/concepts/02-gpu-on-mac.md#try-docker-vmm-experimental).
+
+**Two GPU engines.** When Docker and Podman both have the GPU, GPU builds go to the
+one with more memory (on a tie, Podman's verified path). A build you set to the
+other one under **Runs on** stays there. When the GPU engine is too small to
+compile the Vulkan image, the other engine compiles it and the image moves over,
+whichever way round.
 
 > You don't have to choose up front: the factory image bundles **both** the
 > `docker` and `podman` clients, and the start scripts mount whichever engines are
@@ -223,7 +245,9 @@ Requires Docker (Desktop on Windows/macOS, Engine on Linux). The *Run* action pi
 the GPU flags from the image automatically: `--gpus all` for **CUDA** (needs an
 NVIDIA GPU + the NVIDIA Container Toolkit, via WSL2 on Windows) and `--device
 /dev/dri` for **Vulkan** (needs a Podman libkrun machine on macOS, or `/dev/dri` on
-Linux). See [Choosing an engine & compute](#choosing-an-engine--compute).
+Linux; on Docker in a Mac VM only when the GPU check found a GPU there). Podman
+runs also get `--security-opt label=disable` and `seccomp=unconfined`; Docker
+doesn't need them. See [Choosing an engine & compute](#choosing-an-engine--compute).
 
 ## Running on a Mac (Apple Silicon)
 - **CPU container — supported and now native.** The factory builds a native
@@ -236,14 +260,21 @@ Linux). See [Choosing an engine & compute](#choosing-an-engine--compute).
   unsupported with no roadmap. The **CUDA image is NVIDIA-only**. *Direct* Metal
   passthrough into a Linux container is genuinely impossible. Docker Desktop runs
   its VM on **Apple Virtualization** by default, which has no GPU device at all —
-  run a Vulkan image there and the factory says so and points you to Podman.
+  run a Vulkan image there and the factory says so and points you to Podman or
+  Docker VMM.
   *Experimental, unverified:* Docker Desktop's other VM manager, **Docker VMM**
   (Settings → General → Virtual Machine Manager), has a `virtio-gpu` device with a
-  Vulkan host, so the factory's Vulkan image *might* work on it; and Docker Desktop
-  advertises an undocumented WebGPU device (`docker.com/gpu=webgpu`, API remoting to
-  the host's Dawn/Metal) that llama.cpp can't use yet (its WebGPU backend needs Dawn
-  in the container). **System → Check GPU access** shows what each engine gives
-  a container.
+  Vulkan host, so the factory's Vulkan image *might* work on it. To try it: pick
+  **Docker VMM** there and click **Apply & restart**, start the factory again
+  (`./scripts/macos/start.sh`), then **System → Check GPU access**. If Docker's
+  container got a usable GPU device, the factory builds and runs Vulkan images on
+  Docker too ([details](docs/concepts/02-gpu-on-mac.md#try-docker-vmm-experimental)).
+  Docker Engine in a Lima/Colima VM with `vmType: krunkit` works the same way: start
+  the factory with `FACTORY_DOCKER_SOCK=<that engine's socket>
+  ./scripts/macos/start.sh` (also untried). Docker Desktop also advertises an
+  undocumented WebGPU device (`docker.com/gpu=webgpu`, API remoting to the host's
+  Dawn/Metal) that llama.cpp can't use yet (its WebGPU backend needs Dawn in the
+  container).
 - **GPU container — possible via Podman + libkrun (krunkit), and the factory builds
   it for you.** The community route around the passthrough wall is
   paravirtualization: a `virtio-gpu` device plus a Vulkan→Metal (MoltenVK) bridge,
@@ -285,6 +316,7 @@ Linux). See [Choosing an engine & compute](#choosing-an-engine--compute).
 |---|---|
 | `config/models.json` | The model catalog — **edit this to add/remove models** (seeded on first run). |
 | `models/` | Downloaded GGUF weight files (one copy per model, reused across builds). |
+| `config/filefreak.json` | FileFreak archive settings and upload key (0600, not committed). The upload queue is `config/filefreak-queue.json`. |
 | `images/` | Exported image tarballs (`docker`/`podman save`), one `.tar` per build. |
 | `docker/Dockerfile.cpu` / `.cuda` / `.vulkan` | The image recipes (editable). |
 
@@ -298,9 +330,13 @@ cmd/ensemblegate/    the Conductor: routes a request to the right specialist and
                      starts/stops them within a VRAM budget (see docs/ENSEMBLE.md)
 internal/catalog/    config-driven model list (+ embedded default; multi-file models)
 internal/builder/    download / build / save / run / stop / list (docker|podman)
+internal/agent/      agent harness baked into llmgate: tool loop, web search,
+                     fetch, workspace files, shell, skills (docs/HARNESS.md)
 internal/ensemble/   Ensemble model + store (multimodal super-models)
 internal/server/     HTTP API + embedded vanilla-JS UI (internal/server/web)
 internal/llm/        OpenAI-compatible client (generic Chat + typed example)
+internal/filefreak/  the FileFreak model archive: lookup, license rule, upload queue
+tools/filefreak/     Node.js helper the archive runs (FileFreak SDK, pinned)
 docker/              per-runtime Dockerfiles: llama (CPU/CUDA/Vulkan), sd (image),
                      video (Wan/LTX), whisper (STT), tts (Piper), audiocpp (Pocket
                      TTS / Qwen3-TTS via audio.cpp), and ensemble (Conductor)
@@ -404,6 +440,38 @@ setup, the security model and troubleshooting, see
 > `BIND=0.0.0.0 ./scripts/macos/start.sh` or
 > `.\scripts\windows\start.ps1 -Bind 0.0.0.0`. Plain HTTP sends the token
 > unencrypted, so do that only on a network you trust.
+
+## FileFreak model archive
+The factory can keep a public copy of the open-licensed model files it downloads in
+a **FileFreak archive**, a public folder on [FileFreak.io](https://filefreak.io).
+It works like a mirror for when a Hugging Face repository is renamed, a file changes
+or Hugging Face is down.
+
+- **Reading** (any install, no key): before each download the factory looks in the
+  archive. It uses the archive's copy only when its SHA-256 matches the one Hugging
+  Face publishes. Otherwise it downloads from Hugging Face, as before. The build log
+  says which source it used. Turn it off with **Download from the archive first** on
+  the System page.
+- **Uploading** (only with an upload key): files the archive lacks are uploaded in
+  the background after a build downloads them, as public files with no Shard
+  Protection. Builds never wait for an upload, and a failed one never fails a build.
+- **License rule:** a file is uploaded only if its repository isn't gated and its
+  license is `apache-2.0`, `mit`, `bsd-2-clause`, `bsd-3-clause`, `cc-by-4.0`,
+  `cc-by-sa-4.0`, `cc0-1.0` or OpenRAIL. Llama, Gemma and other custom licenses are
+  never uploaded, and the System page says why. Reading isn't limited by license.
+- **What FileFreak sees:** which model repositories, revisions and files this install
+  looks up (from the folders it lists and the files it downloads). With a key it
+  also gets the files themselves, their LICENSE and README files, and a provenance
+  record per file.
+- **Setting the key:** paste a FileFreak API key that can create folders and upload
+  into **System → FileFreak archive → Upload key**. The account's public page must
+  be on. The key is kept in `config/filefreak.json` (mode 0600). The page shows only
+  `ffk_live_…` and the last four characters, and it is never logged.
+
+The archive runs through a small Node.js helper (`tools/filefreak`, Node 20+). The
+factory image includes it. For a native run, the start script installs it when
+Node.js is there, and warns otherwise. Details, the archive layout and the
+environment variables: **[docs/FILEFREAK.md](docs/FILEFREAK.md)**.
 
 ## Optional: cloud deploy
 `deploy/ecs-task-definition.json` runs a built image on AWS Fargate (2 vCPU /

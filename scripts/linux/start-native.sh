@@ -10,6 +10,8 @@
 #   ./start-native.sh                 # http://127.0.0.1:8799
 #   PORT=9000 ./start-native.sh
 #   OPEN=0 ./start-native.sh          # don't auto-open the browser
+#   FACTORY_DOCKER_SOCK=$XDG_RUNTIME_DIR/docker.sock ./start-native.sh
+#                                     # drive another Docker Engine
 #
 # The factory's API needs its access token (config/factory-token, saved on
 # first start, or FACTORY_TOKEN). The factory logs an "Open:" link carrying it
@@ -26,6 +28,17 @@ for d in /opt/podman/bin /usr/local/bin /opt/homebrew/bin; do
   [ -d "$d" ] && case ":$PATH:" in *":$d:"*) ;; *) PATH="$d:$PATH";; esac
 done
 
+# Another Docker Engine to build and run models on, by its socket — for example
+# rootless Docker's. The docker CLI the factory runs follows DOCKER_HOST.
+if [ -n "${FACTORY_DOCKER_SOCK:-}" ]; then
+  if [ ! -S "$FACTORY_DOCKER_SOCK" ]; then
+    echo "FACTORY_DOCKER_SOCK=$FACTORY_DOCKER_SOCK isn't a socket. Start that engine, or unset FACTORY_DOCKER_SOCK to use the default Docker." >&2
+    exit 1
+  fi
+  export DOCKER_HOST="unix://$FACTORY_DOCKER_SOCK"
+  echo "Docker engine for models: $FACTORY_DOCKER_SOCK (FACTORY_DOCKER_SOCK)"
+fi
+
 PORT="${PORT:-8799}"
 mkdir -p models images config
 
@@ -37,6 +50,18 @@ if command -v podman >/dev/null 2>&1; then
   echo "podman: $(podman --version 2>/dev/null || echo installed)"
 else
   echo "WARN: podman not on PATH — install it if the Containers tab is empty (docker still works)."
+fi
+
+# The FileFreak archive (docs/FILEFREAK.md) runs tools/filefreak with Node.js 20
+# or later. Without it the factory still works: model files come from Hugging Face.
+if command -v node >/dev/null 2>&1 && node -e 'process.exit(+process.versions.node.split(".")[0] >= 20 ? 0 : 1)'; then
+  if [ ! -f tools/filefreak/node_modules/.package-lock.json ] || [ tools/filefreak/package-lock.json -nt tools/filefreak/node_modules/.package-lock.json ]; then
+    echo "Installing the FileFreak archive helper (tools/filefreak)..."
+    (cd tools/filefreak && npm ci --omit=dev --no-audit --no-fund --silent) \
+      || echo "WARN: npm ci in tools/filefreak failed, so the FileFreak archive is off: model files download from Hugging Face."
+  fi
+else
+  echo "WARN: Node.js 20 or later isn't on PATH, so the FileFreak archive is off: model files download from Hugging Face. Install it (nodejs.org, or your package manager) to use the archive."
 fi
 
 echo "Factory (native — sees host podman + docker): http://127.0.0.1:$PORT   (Ctrl-C to stop)"

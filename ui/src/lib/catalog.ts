@@ -96,6 +96,35 @@ export const engineOf = (si: SysInfo | null, e: string): EngineResources | undef
   si?.engines?.find((x) => x.engine === e);
 
 /**
+ * Whether a is a better engine than b for GPU work — the server's rule
+ * (engines.go betterGPUEngine): one that's running, then more memory (a GPU in
+ * a VM shares the VM's memory), then the GPU the start script saw on the host
+ * (the libkrun machine) over one the GPU check found.
+ */
+function betterGPU(a: EngineResources, b: EngineResources): boolean {
+  if (a.reachable !== b.reachable) return a.reachable;
+  if ((a.mem_gb || 0) !== (b.mem_gb || 0)) return (a.mem_gb || 0) > (b.mem_gb || 0);
+  return a.gpu_from === "host" && b.gpu_from !== "host";
+}
+
+/** Engines that give containers a GPU (compute "" = any), best first. */
+export function gpuEngines(si: SysInfo | null, compute = ""): EngineResources[] {
+  return (si?.engines ?? [])
+    .filter((e) => !!e.gpu && (!compute || e.gpu === compute))
+    .sort((a, b) => (betterGPU(a, b) ? -1 : betterGPU(b, a) ? 1 : 0));
+}
+
+/**
+ * The engine GPU work for `compute` goes to by default: when Docker and Podman
+ * both give containers the GPU (Docker VMM beside a libkrun machine), the one
+ * with more usable memory. A build already set to an engine that has the GPU
+ * keeps it.
+ */
+export function gpuEngineFor(si: SysInfo | null, compute = ""): EngineResources | undefined {
+  return gpuEngines(si, compute)[0];
+}
+
+/**
  * The engine CPU images go to: Docker when it answers (on a Mac it has far more
  * memory than the Podman machine), else Podman, else the machine's default.
  */
@@ -332,13 +361,14 @@ export function gpuPath(m: Model, si: SysInfo | null): PathFit {
   const engines: EngineResources[] = si.engines ?? [
     { engine: si.engine || "docker", reachable: true, mem_gb: si.mem_gb, cpus: si.cpus, gpu: si.gpu, fix: "" },
   ];
-  const withGPU = engines.filter((e) => e.gpu);
+  const withGPU = gpuEngines({ ...si, engines });
   if (!withGPU.length) {
     return {
       state: "na", tone: "mu", icon: "info", text: "No GPU engine on this machine",
       detail: "Neither engine gives containers a GPU here, so models run on the CPU.", engine: "", compute: "",
     };
   }
+  // Best first: with two GPU engines, the one with more memory.
   const g = withGPU.find((e) => gpus.includes(e.gpu));
   if (!g) {
     const have = computeName(withGPU[0].gpu);
@@ -373,7 +403,13 @@ export function gpuPath(m: Model, si: SysInfo | null): PathFit {
   const have = cuda ? si.vram_gb || 0 : g.mem_gb;
   const need = cuda ? m.min_vram_gb || m.size_gb || 0 : needGB(m);
   const needTxt = Math.ceil(need - 1e-9);
-  const via = pr.transfer ? ` It compiles on ${engineName(pr.buildEngine)} (${eng} is too small to compile), then loads into ${eng}.` : "";
+  // A GPU the GPU check found (Docker VMM, a krunkit VM) is experimental, and
+  // with two GPU engines the other one stays a choice.
+  const other = withGPU.find((e) => e.engine !== g.engine && e.gpu === g.gpu);
+  const about =
+    (g.gpu_experimental ? ` ${eng}'s GPU was found by the GPU check and is experimental with the factory's images.` : "") +
+    (other ? ` ${engineName(other.engine)} has the GPU too (${other.reachable ? memLabel(other.mem_gb) : "not running"}); set the build to it to use that one.` : "");
+  const via = (pr.transfer ? ` It compiles on ${engineName(pr.buildEngine)} (${eng} is too small to compile), then loads into ${eng}.` : "") + about;
   const transfer = pr.transfer ? pr.buildEngine : undefined;
   if (!have || !need) {
     return { state: "fits", tone: "gpu", icon: "bolt", text: `GPU on ${eng}`, detail: `Runs on the GPU (${C}) in ${eng}.${via}`, engine: g.engine, compute: g.gpu, transfer };
@@ -382,7 +418,7 @@ export function gpuPath(m: Model, si: SysInfo | null): PathFit {
   if (need > have) {
     return {
       state: "later", tone: "wa", icon: "warn", text: cuda ? `GPU needs ${needTxt} GB of VRAM` : `GPU once ${eng} has ${needTxt} GB`,
-      detail: `${eng} has the GPU (${C}) but ${cuda ? "the card has" : "only"} ${memLabel(have)}${cuda ? " of VRAM" : ""}; ${name} needs about ${needTxt} GB there.`,
+      detail: `${eng} has the GPU (${C}) but ${cuda ? "the card has" : "only"} ${memLabel(have)}${cuda ? " of VRAM" : ""}; ${name} needs about ${needTxt} GB there.${about}`,
       engine: g.engine, compute: g.gpu, fix: cuda ? undefined : memoryFixFor(g.engine, need), transfer,
     };
   }
@@ -440,9 +476,11 @@ export function defaultPath(m: Model, si: SysInfo | null): { engine: string; com
   const gpuWanted = si?.default_compute && si.default_compute !== "cpu" ? si.default_compute : "";
   const canCPU = !m.computes?.length || m.computes.includes("cpu");
   if (gpuWanted) {
+    // The machine's GPU compute on the GPU engine with the most memory (two
+    // engines can have it: a libkrun Podman machine and Docker VMM).
     const compute = effectiveCompute(m, gpuWanted);
     if (isGPU(compute)) {
-      const g = si?.engines?.find((e) => e.gpu === compute);
+      const g = gpuEngineFor(si, compute);
       const engine = g?.engine ?? (compute === "cuda" ? "docker" : si?.default_engine || "docker");
       const p = gpuPath(m, si);
       if (!canCPU || p.state === "fits" || p.state === "tight" || p.state === "unknown") return { engine, compute };
@@ -451,7 +489,7 @@ export function defaultPath(m: Model, si: SysInfo | null): { engine: string; com
   const compute = effectiveCompute(m, "cpu");
   if (isGPU(compute)) {
     // GPU-only (image generation): its GPU's engine when there is one.
-    const g = si?.engines?.find((e) => e.gpu === compute);
+    const g = gpuEngineFor(si, compute);
     return { engine: g?.engine ?? cpuEngine, compute };
   }
   return { engine: cpuEngine, compute };
@@ -473,7 +511,7 @@ const PERF_RANK = ["impossible", "poor", "warning", "fair", "good", "excellent"]
 /** hwPerf levels on the engines each path would use (expected speed on this machine). */
 export function perfHere(m: Model, si: SysInfo | null): { cpu: string; gpu: string } {
   const cpu = hwPerf(m, engineSys(si, cpuEngineId(si))).cpu;
-  const g = si?.engines?.find((e) => e.gpu);
+  const g = gpuEngineFor(si);
   const gpu = hwPerf(m, engineSys(si, g?.engine ?? si?.engine ?? "docker")).gpu;
   return { cpu, gpu };
 }

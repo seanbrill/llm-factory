@@ -78,8 +78,9 @@ RUN set -eu; \
 # ----------------------------------------------------------------------------
 FROM golang:1.22-bookworm AS gate
 WORKDIR /src
+# gate/ mirrors the repo: go.mod, cmd/llmgate/, internal/agent/ (stdlib only).
 COPY gate/ ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /llmgate .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /llmgate ./cmd/llmgate
 
 # ----------------------------------------------------------------------------
 # Stage 3: Vulkan runtime (Fedora + PATCHED Venus Mesa) + baked weights + prompt
@@ -92,6 +93,9 @@ ARG CTX_SIZE=8192
 # (and confirm the COPR has a matching build) when you update krunkit. Stock Mesa
 # here = silent CPU fallback; see the header for why.
 ARG MESA_VULKAN_VERSION=25.3.6-102.fc44
+# /workspace is where the harness's file and shell tools work; it belongs to the
+# unprivileged llama user the container runs as. Mount a host folder there with
+# -v to keep the files (see docs/HARNESS.md, "Baked harness").
 RUN dnf install -y dnf-plugins-core 'dnf-command(copr)' 'dnf-command(versionlock)' \
     && dnf copr enable -y slp/mesa-libkrun-vulkan \
     && dnf install -y \
@@ -100,7 +104,8 @@ RUN dnf install -y dnf-plugins-core 'dnf-command(copr)' 'dnf-command(versionlock
     && dnf versionlock add mesa-vulkan-drivers \
     && dnf clean all \
     && useradd --system --uid 10001 llama \
-    && mkdir -p /etc/llmgate
+    && mkdir -p /etc/llmgate /workspace \
+    && chown llama /workspace
 
 COPY --from=builder /src/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 COPY --from=gate    /llmgate                              /usr/local/bin/llmgate
@@ -109,6 +114,9 @@ COPY model.gguf         /models/model.gguf
 # llmgate ignores; a real mmproj for VLMs). Enables --mmproj without a 2nd build path.
 COPY mmproj.gguf        /models/mmproj.gguf
 COPY system_prompt.txt  /etc/llmgate/system_prompt.txt
+# Agent harness: harness.json (empty = no harness) and skills/, root-owned so
+# the model can read but not change them.
+COPY harness/           /etc/llmgate/
 
 # NGL = layers offloaded to GPU (99 = all). XDG_RUNTIME_DIR silences a Venus
 # init warning. THREADS is intentionally unset — llmgate defaults it to the
@@ -125,7 +133,8 @@ ENV MODEL_PATH=/models/model.gguf \
     XDG_RUNTIME_DIR=/tmp \
     MODALITY=${MODALITY} \
     SYSTEM_PROMPT_FILE=/etc/llmgate/system_prompt.txt \
-    INJECT_MODE=${INJECT_MODE}
+    INJECT_MODE=${INJECT_MODE} \
+    HARNESS_FILE=/etc/llmgate/harness.json
 
 EXPOSE 8080
 USER llama

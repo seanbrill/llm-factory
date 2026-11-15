@@ -1,0 +1,16 @@
+{
+  "name": "llm-factory-filefreak",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The factory's FileFreak archive helper: looks model files up in the public archive, downloads them checked, and uploads new ones. The Go factory runs ff.mjs as a child process.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/lib.test.mjs"
+  },
+  "dependencies": {
+    "@filefreak.io/sdk": "0.20.0"
+  }
+}

@@ -22,10 +22,14 @@ The harness has four parts:
 4. **Connect Open WebUI**: one click that adds the parts above to Open WebUI
    through its admin API and reports every change it makes.
 
+A model image can also carry its own tools, without Open WebUI: see
+[Baked harness](#baked-harness).
+
 Contents: [Quick start](#quick-start) · [How it fits together](#how-it-fits-together) ·
 [The parts](#the-parts) · [What Connect changes](#what-connect-changes-in-open-webui) ·
 [Manual setup](#manual-setup) · [Security model](#security-model) ·
-[Harness API](#harness-api-reference) · [Troubleshooting](#troubleshooting)
+[Harness API](#harness-api-reference) · [Baked harness](#baked-harness) ·
+[Troubleshooting](#troubleshooting)
 
 ## Quick start
 
@@ -351,6 +355,272 @@ access token, and they all go through the guard described above.
 | GET | `/api/harness/terminal/logs?tail=N` | Returns the container's logs with keys hidden (N up to 2000). |
 | POST | `/api/harness/openwebui/check` | `{url, api_key, reach_host}`: returns a read-only report. |
 | POST | `/api/harness/openwebui/connect` | The same, plus `{models, terminal, web_search}` to choose the parts. Applies the changes and returns the report. |
+
+## Baked harness
+
+Everything above gives tools to models *through Open WebUI*. A **baked harness**
+puts the tool loop inside the model image instead. `llmgate`, the image's front
+door, adds its own tools to each chat request, runs the tool calls the model
+makes, feeds the results back and returns the final answer. Any
+OpenAI-compatible client then gets an agent from a plain
+`POST /v1/chat/completions`, without Open WebUI, the terminal container or the
+factory.
+
+It is opt-in for each build. An image built without it behaves as before.
+Don't confuse the baked `/etc/llmgate/harness.json` with the factory's own
+`config/harness.json`, which holds the Harness page's keys.
+
+### What's in the image
+
+| Path | What it is |
+|---|---|
+| `/usr/local/bin/llmgate` | The gateway, now with the harness loop (Go, standard library only). |
+| `/etc/llmgate/harness.json` | The baked harness config. Empty means no harness. |
+| `/etc/llmgate/skills/` | The skills baked from the repo's `skills/` folder, when the skills tools are on. Owned by root, so the model can read them but not change them. |
+| `/workspace` | Where the file and shell tools work. Owned by the `llama` user (uid 10001) the container runs as. |
+
+Images with a harness also carry these labels:
+
+```
+local-llm.harness=1
+local-llm.harness_tools=web_search,fetch_url,files,skills   # the enabled toolsets
+local-llm.harness_config={"version":1,"tools":[...],...}     # the baked harness.json
+```
+
+`GET /v1/harness` on the container reports what is active: the tools, any tool
+that can't run and why, the limits, the search backend, the workspace and the
+skills. Without a harness it answers with `"enabled": false` and no tools. Every other endpoint is passed through to llama-server unchanged, as
+before.
+
+### Baking one
+
+The build page doesn't offer it yet. Use the build API: add `"harness": true`
+for the defaults, or a `harness.json` object, to `POST /api/build`.
+
+```bash
+curl -X POST http://localhost:8799/api/build \
+  -H "Authorization: Bearer $(cat config/factory-token)" \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "qwen3.5-9b", "image_name": "local-llm/qwen-agent",
+       "harness": {"tools": ["web_search", "fetch_url", "files", "skills"]}}'
+```
+
+- Only llama.cpp chat models can have one (text, code, reasoning, vision), not
+  embedding models.
+- The factory checks the config before it queues the build. A typo, an unknown
+  tool or a value out of range returns `400` with every problem listed.
+- `workspace` and `skills_dir` are always set to `/workspace` and
+  `/etc/llmgate/skills`. API keys are refused: they are only read from the
+  environment at run time, so they never end up in an image.
+- The build log says what was baked, for example `Baking the agent harness:
+  web_search, fetch_url, files, skills (4 skills)`, and adds `the shell tool is
+  ON` when it is.
+
+### harness.json
+
+Every field is optional. `{}` is the default harness.
+
+```json
+{
+  "version": 1,
+  "tools": ["web_search", "fetch_url", "files", "skills"],
+  "limits": {
+    "max_steps": 8,
+    "max_calls_per_step": 8,
+    "tool_timeout": "60s",
+    "max_output_bytes": 8192
+  },
+  "search": {
+    "backend": "duckduckgo",
+    "searxng_url": "",
+    "max_results": 5
+  },
+  "fetch": { "max_bytes": 2097152 },
+  "shell": { "program": ["/bin/sh", "-c"], "env": [], "allow_root": false },
+  "workspace": "/workspace",
+  "skills_dir": "/etc/llmgate/skills",
+  "instructions": ""
+}
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `tools` | `web_search`, `fetch_url`, `files`, `skills` | Toolsets or single tool names (table below). `[]` turns every tool off. |
+| `limits.max_steps` | 8 (1 to 50) | Model turns whose tool calls are run. After the last one the model gets one more turn without the harness tools, so it has to answer. |
+| `limits.max_calls_per_step` | 8 (1 to 32) | Tool calls run per turn. Extra calls get an error result. |
+| `limits.tool_timeout` | `60s` (1s to 30m) | Time limit for each tool call. Takes `"90s"`, `"2m"` or a number of seconds. |
+| `limits.max_output_bytes` | 8192 (512 to 1 MiB) | A tool result longer than this is cut, with a note saying so. `read_file` and `fetch_url` tell the model how to read the next part. |
+| `search.backend` | `duckduckgo` | `duckduckgo` (no key; it can answer with a bot check under heavy use), `searxng` (needs `searxng_url`, with `json` in its `search.formats`) or `brave` (needs `HARNESS_BRAVE_API_KEY`). |
+| `search.max_results` | 5 (1 to 20) | Results per search. |
+| `fetch.max_bytes` | 2 MiB (1 KiB to 32 MiB) | The most `fetch_url` downloads from one page. |
+| `shell.program` | `/bin/sh -c` | The shell that runs commands, followed by its flags; the command is added last. On Windows the default is `powershell.exe -NoProfile -NonInteractive -Command`. |
+| `shell.env` | none | Names of extra environment variables the shell may see (names only, the values come from the container). |
+| `shell.allow_root` | `false` | The shell refuses to run as root unless this is set. |
+| `workspace`, `skills_dir` | | Absolute paths. Required for the file, shell and skills tools. Set by the factory when it bakes. |
+| `instructions` | none | Extra text added to the system message whenever the tools are offered. |
+
+| Toolset | Tools the model sees | Notes |
+|---|---|---|
+| `web_search` | `search_web` | Searches the configured backend. |
+| `fetch_url` | `fetch_url` | Reads a web page as text. |
+| `files` | `list_files`, `read_file`, `write_file`, `replace_file_content`, `glob_search`, `grep_search` | Works inside the workspace only. |
+| `shell` | `run_command` | **Off by default.** |
+| `skills` | `list_skills`, `view_skill` | The skill names and descriptions also go into the system message. |
+
+The tool names match Open WebUI's terminal and web search tools, so the skills
+in `skills/` work in both places.
+
+### Run-time overrides
+
+These environment variables (`docker run -e`) change the baked config when the
+container starts. A bad value stops the container with an error in its log.
+
+| Variable | Effect |
+|---|---|
+| `HARNESS=off` | Turns the harness off: llmgate is a plain proxy again. |
+| `HARNESS_FILE` | The config file to read (default `/etc/llmgate/harness.json`). |
+| `HARNESS_TOOLS` | `web_search,files` replaces the tool list, `+shell` or `-web_search` adds or removes one, `none` turns every tool off. |
+| `HARNESS_SEARCH_BACKEND` | `duckduckgo`, `searxng` or `brave`. |
+| `HARNESS_SEARXNG_URL` | A SearXNG instance. Also selects the `searxng` backend, unless `HARNESS_SEARCH_BACKEND` is set. |
+| `HARNESS_BRAVE_API_KEY` | A Brave Search API key. Also selects `brave`, unless a backend or a SearXNG URL is set. |
+| `HARNESS_WORKSPACE`, `HARNESS_SKILLS_DIR` | Other folders inside the container. |
+| `HARNESS_MAX_STEPS`, `HARNESS_TOOL_TIMEOUT`, `HARNESS_MAX_OUTPUT_BYTES` | Override the limits. |
+
+A tool that can't run, for example `brave` without a key, a skills folder that
+is missing, or a shell that isn't installed, is left out and logged, and the
+other tools still work. If none can run, llmgate serves without the harness.
+
+Every llmgate image built from this version has the harness code, so you can
+also give an image built without a harness one at run time by mounting a config:
+`-v "$PWD/harness.json:/etc/llmgate/harness.json:ro"`.
+
+### Running a container with a workspace
+
+The image has no `VOLUME`, so `/workspace` lasts only as long as the container.
+To keep the files, mount a folder from your computer:
+
+```bash
+mkdir -p work
+docker run --rm -p 8080:8080 \
+  -v "$PWD/work:/workspace" \
+  -e HARNESS_SEARXNG_URL=http://host.docker.internal:8888 \
+  local-llm/qwen-agent:latest
+```
+
+- **Linux**: a bind mount keeps the host folder's owner, and the container runs
+  as uid 10001. Make the folder writable for it (`sudo chown 10001 work`), or run
+  the container as yourself with `--user "$(id -u)"`. Docker Desktop on macOS and
+  Windows maps the owner for you.
+- **Context size**: tool results fill the context quickly. Give the model room,
+  for example `-e CTX_SIZE=16384` if your memory allows it.
+- **Model choice**: use a model that is good at tool calling (Qwen 3.x, Gemma 4,
+  a recent Mistral or Llama). llama-server already runs with `--jinja`, which
+  tool calls need.
+
+Then call it like any OpenAI endpoint:
+
+```bash
+curl http://localhost:8080/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Find the latest llama.cpp release and save a summary to notes.md"}]}'
+```
+
+### Using it from a client
+
+- **Your own tools still work.** The harness adds its tools to the ones in your
+  request. When the model calls one of *yours*, the reply comes back as usual
+  (`finish_reason: "tool_calls"`) for your code to run. When it calls a harness
+  tool, llmgate runs it and keeps going. If your tool has the same name as a
+  harness tool, yours wins.
+- **The `harness` request field** controls the loop for one request and is
+  removed before the request reaches the model:
+  - `"harness": false` sends the request through unchanged.
+  - `"harness": {"tools": ["web_search"], "max_steps": 3}` offers only some
+    tools (toolsets or tool names) or lowers the step limit (it can't raise it).
+- `tool_choice: "none"` or `n` greater than 1 also skip the loop. A forced
+  `tool_choice` applies to the first turn only.
+- The model sees a short system note about the tools (added to your system
+  message, or as a new one).
+
+**Streaming** (`"stream": true`). The answer streams token by token as normal
+`chat.completion.chunk` events. Each tool step shows up two ways:
+
+- as readable text in `delta.reasoning_content`, such as
+  `[tool] search_web {"query":"llama.cpp release"}` and
+  `[tool] search_web -> ok, 1.2 KB in 840ms`. Chat UIs that show reasoning show
+  these too;
+- as a machine-readable `harness` field on the same chunk:
+
+```
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"\n[tool] search_web {\"query\":\"llama.cpp release\"}\n"},"finish_reason":null}],
+       "harness":{"type":"tool_call","step":1,"id":"call_1","name":"search_web","toolset":"web_search","arguments":{"query":"llama.cpp release"}}}
+
+data: {…,"harness":{"type":"tool_result","step":1,"id":"call_1","name":"search_web","toolset":"web_search","ok":true,"output":"Search results for …","bytes":1214,"duration_ms":840}}
+…
+data: {…,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"harness":{"type":"done","steps":2}}
+
+data: [DONE]
+```
+
+(Each `data:` line is one line on the wire. They are wrapped here to fit.)
+
+| `harness.type` | When | Fields |
+|---|---|---|
+| `tool_call` | The model asked for a harness tool. | `step`, `id`, `name`, `toolset`, `arguments` |
+| `tool_result` | The tool finished. | `step`, `id`, `name`, `ok`, `output` (as the model got it, already cut to `max_output_bytes`) or `error`, `bytes`, `truncated`, `duration_ms` |
+| `limit` | The step limit stopped the loop. | `step`, `message` |
+| `done` | On the final chunk. | `steps` |
+
+Clients that don't know the field ignore it. While a tool runs, llmgate sends
+`: keepalive` comments every 15 seconds. With `stream_options.include_usage`, the
+usage chunk adds up all the model turns.
+
+**Without streaming**, the response is a normal `chat.completion`. Its `usage`
+adds up all the turns, `message.reasoning_content` holds the tool trace, and an
+extra `harness` object lists the same events:
+`{"version": "1", "steps": 2, "events": [...]}`.
+
+### Security
+
+The harness runs tools on what a model decides, and a model can be talked into
+things by the pages and files it reads. The defaults assume that.
+
+- **Tool output is untrusted.** Results reach the model inside
+  `<tool_output tool="…">…</tool_output>`, and any such tag inside a result is
+  defused. The system note tells the model that this text is data, never
+  instructions. Only the skills tools, whose text comes from the image, aren't
+  wrapped. This makes prompt injection less likely to work; it can't rule it
+  out.
+- **The shell is off by default.** Turned on, `run_command` runs as the
+  unprivileged `llama` user, refuses to run as root unless
+  `shell.allow_root` is set, starts in the workspace with `HOME` set to it, and
+  sees only a minimal environment (`PATH`, locale and time zone, plus the names
+  in `shell.env`), so `HARNESS_BRAVE_API_KEY` and similar values stay hidden.
+  Every command has the tool timeout and the output cap, and its whole process
+  group is killed when the time runs out. The shell can still reach the network
+  and read anything the `llama` user can read in the container, so turn it on
+  only for models and inputs you trust.
+- **`fetch_url` can't reach your network.** It refuses loopback, private
+  (10/8, 172.16/12, 192.168/16, fc00::/7), link-local (169.254/16, which holds
+  the cloud metadata address), CGNAT and other reserved addresses, and names
+  such as `localhost`, `*.internal`, `*.local` and `metadata`. It checks the
+  addresses a name resolves to, connects only to an address it checked (so DNS
+  rebinding can't swap one in), checks the address of the socket itself, checks
+  every redirect (5 at most, http and https only), and ignores proxy settings.
+  Pages are capped at `fetch.max_bytes` and the tool timeout.
+- **Search** sends only the query, and only to the backend in the config, which
+  may be a SearXNG on your network.
+- **The files tools stay in the workspace.** Paths are resolved inside it, `..`
+  that leaves it is refused, and symbolic links are followed only when they
+  stay inside. Writes to `.git` are refused (that's where hooks live), and files
+  are written to a temporary file first, then renamed. The checks run before
+  each operation, so a process changing links at the same moment could still
+  race them; that only matters with the shell on, which can read the same files
+  anyway.
+- **Keys** come only from the environment and are never baked, logged or shown
+  in `/v1/harness`.
+- **The port.** llmgate has no authentication, as before. Anyone who can reach
+  the container's port can use its tools, so publish it on `127.0.0.1` (the
+  factory does) or put it behind something that checks a key.
 
 ## Troubleshooting
 

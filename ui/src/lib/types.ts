@@ -45,8 +45,23 @@ export interface EngineResources {
   mem_gb: number;
   cpus: number;
   gpu: string;          // compute it gives containers: "" | "vulkan" | "cuda"
+  // How the factory knows: "host" = the start script saw it (a libkrun Podman
+  // machine, an NVIDIA card); "probe" = the GPU check got /dev/dri into a
+  // container here (Docker VMM, a krunkit VM).
+  gpu_from?: "host" | "probe" | "";
+  gpu_experimental?: boolean; // a GPU path the factory's images aren't verified on
+  gpu_check?: GPUCheckInfo;   // the last saved GPU check on this engine
+  system?: string;      // "Docker Desktop · kernel 7.0.14-linuxkit", when it answered
   low_memory?: boolean; // a GPU engine too small to compile GPU images
   fix: string;          // how to give this machine more memory
+}
+
+// An engine's saved GPU check, as /api/sysinfo reports it.
+export interface GPUCheckInfo extends GPUProbe {
+  checked_at: number;     // unix ms
+  source: "probe" | "run"; // the GPU check, or a Vulkan run that found no /dev/dri
+  stale?: boolean;        // the engine's machine changed since
+  stale_reason?: string;  // "its kernel changed (… → …)"
 }
 
 export interface SysInfo {
@@ -61,6 +76,7 @@ export interface SysInfo {
   default_compute?: string;
   compile_min_gb?: Record<string, number>; // compute -> least engine memory to compile
   host_mem_gb?: number; // the computer's own memory (GiB), when the factory can tell
+  host_os?: string;     // "darwin" | "linux" | "windows", when the factory can tell
 }
 
 // Build queue (/api/builds). Mirrors internal/server/buildqueue.go.
@@ -117,6 +133,10 @@ export interface GPUProbe {
   dri: boolean;
   dri_devices?: string[];
   dri_error?: string;
+  // Who could open the render node: "all", "group" (render_gid; runs join it),
+  // "root" (the images' user can't), "none" (no render node), "" (unknown).
+  render_access?: string;
+  render_gid?: number;
   cdi_devices?: string[];
   webgpu: boolean;
   verdict: string;
