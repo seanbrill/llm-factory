@@ -524,3 +524,25 @@ func TestAcquireBuildSlot(t *testing.T) {
 		t.Fatal("slot not released")
 	}
 }
+
+// A mount source the engine can't use is reported as that folder's problem,
+// never as an unreachable engine.
+func TestClassifyMountErrors(t *testing.T) {
+	share := errors.New(`podman run: exit status 125: Error: statfs /Users/sean/source/ProjectAutonomous/llm-factory/workspace: connection refused`)
+	if got := ClassifyEngineError(share); !strings.Contains(got, "shared folders stopped answering") || !strings.Contains(got, "podman machine stop") {
+		t.Errorf("dead share: %q", got)
+	}
+	missing := errors.New(`podman run: exit status 125: Error: statfs /Users/sean/source/workspaces/local-llm: no such file or directory`)
+	if got := ClassifyEngineError(missing); !strings.Contains(got, "/Users/sean/source/workspaces/local-llm doesn't exist") {
+		t.Errorf("missing folder: %q", got)
+	}
+	// Sockets and devices keep their own rules.
+	sock := errors.New(`podman ps: Cannot connect to Podman: dial unix /run/podman/podman.sock: connect: no such file or directory`)
+	if got := ClassifyEngineError(sock); !strings.Contains(got, "unreachable") {
+		t.Errorf("socket: %q", got)
+	}
+	dri := errors.New(`podman run: exit status 125: Error: stat /dev/dri: no such file or directory`)
+	if got := ClassifyEngineError(dri); !strings.Contains(got, "/dev/dri") {
+		t.Errorf("device: %q", got)
+	}
+}

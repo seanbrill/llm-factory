@@ -64,6 +64,24 @@ func (p Paths) HostSkillsDir() string { return hostJoin(p.HostDir, "skills") }
 // DefaultWorkspace is <repo>/workspace on the host.
 func (p Paths) DefaultWorkspace() string { return hostJoin(p.HostDir, "workspace") }
 
+// ExpandHome turns a leading ~ (the host home folder) into the full path, so a
+// folder typed as ~/projects/x works. The path is returned unchanged when the
+// home folder is unknown or it doesn't start with ~ or ~/ (~user isn't
+// supported); ValidateWorkspace then explains that.
+func (p Paths) ExpandHome(ws string) string {
+	ws = strings.TrimSpace(ws)
+	if p.HostHome == "" || !strings.HasPrefix(ws, "~") {
+		return ws
+	}
+	if ws == "~" {
+		return NormalizeHostPath(p.HostHome)
+	}
+	if ws[1] == '/' || ws[1] == '\\' {
+		return NormalizeHostPath(hostJoin(p.HostHome, ws[2:]))
+	}
+	return ws
+}
+
 // Workspace is the configured workspace host folder (or the default).
 func (p Paths) Workspace(t TerminalConfig) string {
 	if w := strings.TrimSpace(t.Workspace); w != "" {

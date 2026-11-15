@@ -51,6 +51,17 @@ docker rm -f "$NAME" >/dev/null 2>&1 || true
 # when Podman isn't installed, so Docker-only users are unaffected.
 PODMAN_ARGS=()
 if command -v podman >/dev/null 2>&1; then
+    # A Podman machine whose shared folders stopped answering (it can happen
+    # after the Mac sleeps) can't mount anything from this Mac: every run then
+    # fails with "statfs ...: connection refused". A restart brings them back.
+    # (A machine that isn't running answers differently and is left alone.)
+    SHARE_CHECK="$(podman machine ssh "ls -d '$PWD'" 2>&1 || true)"
+    case "$SHARE_CHECK" in *[Cc]onnection\ refused*)
+        echo "The Podman machine can't see this Mac's folders (its shared folders stopped answering). Restarting it..."
+        { podman machine stop && podman machine start; } ||
+            echo "WARNING: couldn't restart the Podman machine. Run: podman machine stop && podman machine start" >&2
+        ;;
+    esac
     PSOCK="$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null | head -n1)"
     if [ -z "${PSOCK:-}" ] && [ -S /run/podman/podman.sock ]; then PSOCK=/run/podman/podman.sock; fi
     if [ -n "${PSOCK:-}" ] && [ -S "$PSOCK" ]; then

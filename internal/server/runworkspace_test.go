@@ -58,8 +58,20 @@ func TestRunWorkspace(t *testing.T) {
 		t.Errorf("inside workspace/ = %q %v", ws, err)
 	}
 
+	// ~ is the host home folder; ~ alone (the whole home) is still refused.
+	if ws, err := s.runWorkspace(files, " ~/source/workspaces/local-llm "); err != nil || ws != "/Users/tester/source/workspaces/local-llm" {
+		t.Errorf("~ path = %q %v", ws, err)
+	}
+	if ws, err := s.runWorkspace(files, `~\projects\site`); err != nil || ws != "/Users/tester/projects/site" {
+		t.Errorf("~ with backslashes = %q %v", ws, err)
+	}
+
 	// Never a system, hidden or home folder, nor the rest of the factory.
 	for _, bad := range []string{
+		"~",
+		"~/",
+		"~/.ssh",
+		"~other/projects",
 		"/etc",
 		"/var/run",
 		"/Users/tester",
@@ -149,5 +161,17 @@ func TestCatalogSaysWhoCanTakeTools(t *testing.T) {
 		if m.CanHarness != want[m.ID] {
 			t.Errorf("%s: can_harness = %v", m.ID, m.CanHarness)
 		}
+	}
+}
+
+// Without a known home folder, ~ can't be expanded: the error says to type
+// the full path instead of calling it relative.
+func TestRunWorkspaceTildeWithoutHome(t *testing.T) {
+	t.Setenv("HOST_HOME", "")
+	s := &Server{b: &builder.Builder{BaseDir: t.TempDir(), HostDir: "/Users/tester/llm-factory"}}
+	files := map[string]string{builder.LabelHarness: "1", builder.LabelHarnessTools: "files"}
+	_, err := s.runWorkspace(files, "~/projects/site")
+	if err == nil || !strings.Contains(err.Error(), "full path") {
+		t.Fatalf("err = %v, want the full-path message", err)
 	}
 }

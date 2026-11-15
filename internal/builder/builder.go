@@ -1800,6 +1800,11 @@ func transientEngineErr(err error) bool {
 		(strings.Contains(msg, "sock") && strings.Contains(msg, "no such file"))
 }
 
+// mountErrRe finds a mount source the engine couldn't use: Go's "statfs
+// <path>: <reason>" (Podman checks bind mounts this way). Device nodes and
+// sockets have their own rules.
+var mountErrRe = regexp.MustCompile(`(?i)\b(?:statfs|lstat|stat) ((?:/|[a-z]:[\\/])[^:\n]*): (connection refused|no such file or directory)`)
+
 // ClassifyEngineError maps a raw engine failure to a short, human, actionable
 // message — or "" if it doesn't recognize it. Callers keep the raw error as a
 // collapsible detail. This is what turns a bare "exit status 125" surfaced in the
@@ -1826,6 +1831,16 @@ func ClassifyEngineError(err error) string {
 			}
 		}
 		return false
+	}
+	// A folder the container mounts, as the engine saw it ("statfs <path>: …").
+	// Checked before the generic rules: a Podman machine whose shared folders
+	// stopped answering says "connection refused" about the folder, not the
+	// engine, and a missing folder isn't a missing socket.
+	if m := mountErrRe.FindStringSubmatch(err.Error()); m != nil && !strings.HasPrefix(m[1], "/dev/") && !strings.HasSuffix(m[1], ".sock") {
+		if strings.EqualFold(m[2], "connection refused") {
+			return "The container engine can't see the folders on this computer right now: the Podman machine's shared folders stopped answering (this can happen after the computer sleeps). Restart the Podman machine (podman machine stop, then podman machine start), restart the factory (scripts/<your-os>/start.sh), then retry."
+		}
+		return fmt.Sprintf("The folder %s doesn't exist on this computer, so it can't be mounted. Create it first (or leave the workspace blank to use the factory's workspace/ folder), then retry.", m[1])
 	}
 	switch {
 	case strings.Contains(msg, "/dev/dri") && contains("no such file", "error gathering device"):

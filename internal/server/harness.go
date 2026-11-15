@@ -816,7 +816,7 @@ func (h *harnessAPI) handleTerminalConfig(w http.ResponseWriter, r *http.Request
 			t.Port = *req.Port
 		}
 		if req.Workspace != nil {
-			ws := strings.TrimSpace(*req.Workspace)
+			ws := h.paths.ExpandHome(*req.Workspace)
 			if ws != "" && harness.NormalizeHostPath(ws) == harness.NormalizeHostPath(h.paths.DefaultWorkspace()) {
 				ws = "" // the default; keep following the repo if it moves
 			}

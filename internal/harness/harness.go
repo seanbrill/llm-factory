@@ -381,6 +381,10 @@ func ValidateWorkspace(p, hostDir, hostHome string) error {
 	}
 	n := NormalizeHostPath(raw)
 	drive, rest := splitDrive(n)
+	if strings.HasPrefix(raw, "~") {
+		// Callers expand ~ and ~/ (Paths.ExpandHome) when they know the home folder.
+		return fmt.Errorf("type the workspace's full path (got %q): the factory couldn't turn ~ into your home folder", raw)
+	}
 	if drive == "" && !strings.HasPrefix(n, "/") {
 		return fmt.Errorf("workspace must be an absolute path on this computer (got %q)", raw)
 	}

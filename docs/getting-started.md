@@ -112,6 +112,15 @@ use **CPU**.
 - **An error like "Container engine unreachable"** — your Docker/Podman isn't
   running. On macOS, make sure the Podman machine is **Running** in Podman Desktop,
   then re-run `./scripts/macos/start.sh`.
+- **"The container engine can't see the folders on this computer"** — the Podman
+  machine is running, but its shared folders (`/Users` on a Mac) stopped answering,
+  which can happen after the computer sleeps. Run `podman machine stop`, then
+  `podman machine start`, then `./scripts/macos/start.sh` again. The start script
+  checks for this and restarts the machine on its own when it finds it.
+- **"The folder … doesn't exist on this computer"** — a run's workspace folder must
+  exist before the run (Podman doesn't create it the way Docker does). Create it, or
+  leave the workspace blank to use the factory's `workspace/` folder. `~/…` means a
+  folder inside your home folder.
 - **Build fails** — **Builds** explains the cause in a sentence (out of memory, out
   of disk, port in use, etc.) with its fixes, and the log opens on the line that
   matters. **Retry** queues it again. See [Architecture](architecture.md) for what a

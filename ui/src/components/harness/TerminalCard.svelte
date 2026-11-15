@@ -179,7 +179,8 @@
         autocomplete="off"
         onkeydown={(e) => onEditorKey(e, () => saveWorkspace(wsDraft))} />
       <p class="hint">
-        A folder on this computer, shared read-write as <span class="mono">~/workspace</span>. Leave it empty for the
+        A folder on this computer (its full path, or <span class="mono">~/…</span> inside your home folder), shared
+        read-write as <span class="mono">~/workspace</span>. Leave it empty for the
         factory's own <span class="mono">workspace/</span> folder. Your home folder, hidden folders, system folders and the
         rest of the factory folder are refused. Create the folder first.
       </p>

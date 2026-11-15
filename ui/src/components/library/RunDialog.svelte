@@ -157,7 +157,8 @@
         <p class="hint" id="run-ws">
           Mounted read-write at <span class="mono">/workspace</span>, where the file{h.tools.includes("shell") ? " and shell" : ""} tools work, so what the
           model writes stays after the container stops. Blank means the factory's <span class="mono">workspace/</span> folder. Another project folder
-          works too (its full path); system, hidden and whole home folders don't.
+          works too: its full path, or <span class="mono">~/…</span> inside your home folder. Create it first. System, hidden and whole home
+          folders are refused.
         </p>
         {#if linux}
           <p class="hint">On Linux the model runs as user 10001, which needs to be able to write there. In the factory folder:</p>

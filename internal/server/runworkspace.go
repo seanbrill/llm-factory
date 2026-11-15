@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/seanbrill/local-llm/internal/builder"
 	"github.com/seanbrill/local-llm/internal/harness"
@@ -22,7 +21,7 @@ func (s *Server) runWorkspace(labels map[string]string, requested string) (strin
 		return "", nil
 	}
 	p := harness.DetectPaths(s.b.BaseDir, s.b.HostDir)
-	ws := strings.TrimSpace(requested)
+	ws := p.ExpandHome(requested)
 	if ws == "" {
 		ws = p.DefaultWorkspace()
 	}
