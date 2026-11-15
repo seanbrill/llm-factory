@@ -405,26 +405,60 @@ func sdServerArgs(extras []StagedWeight) ([]string, error) {
 	return args, nil
 }
 
+// The ids an audio.cpp image serves its one model under: clients send them as
+// the request's "model". "tts" is what the ensemble Conductor and /api/tts send.
+const (
+	AudioCppTTSModelID = "tts"
+	AudioCppSTTModelID = "stt"
+)
+
+// audioCppRoute is the server-side id and audio.cpp task for a model's modality:
+// speech synthesis (POST /v1/audio/speech) or transcription (POST
+// /v1/audio/transcriptions and /v1/audio/transcriptions/live).
+func audioCppRoute(m catalog.Model) (id, task string, err error) {
+	switch m.Mod() {
+	case "tts":
+		return AudioCppTTSModelID, "tts", nil
+	case "audio-stt":
+		return AudioCppSTTModelID, "asr", nil
+	}
+	return "", "", fmt.Errorf("model %s: the audiocpp runtime serves tts and audio-stt models here, not %q", m.ID, m.Mod())
+}
+
 // audioCppServerConfig is the audio.cpp server config baked into an audiocpp
-// image. Its one model has id "tts" (the id the ensemble Conductor sends), and
-// the default voice answers both requests that name no voice and the preset
-// "default" (also what the Conductor sends).
+// image. Its one model has id "tts" or "stt" (audioCppRoute). A streaming model
+// runs in audio.cpp's streaming mode, which still answers a plain request with
+// one WAV (or one transcript), so it needs no second entry (each entry loads
+// its own copy of the weights). A TTS model's default voice answers both
+// requests that name no voice and the preset "default" (what the Conductor
+// sends); a request with a voice_ref gets no preset unless it names one.
 func audioCppServerConfig(m catalog.Model) ([]byte, error) {
 	ac := m.AudioCpp
 	if ac == nil || ac.Family == "" {
 		return nil, fmt.Errorf("model %s uses runtime audiocpp but sets no audiocpp.family", m.ID)
 	}
-	if m.Mod() != "tts" {
-		return nil, fmt.Errorf("model %s: the audiocpp runtime only serves tts models here, not %q", m.ID, m.Mod())
+	id, task, err := audioCppRoute(m)
+	if err != nil {
+		return nil, err
+	}
+	mode := "offline"
+	if ac.Streaming {
+		mode = "streaming"
 	}
 	model := map[string]any{
-		"id": "tts", "family": ac.Family, "path": "/models/model.gguf",
-		"task": "tts", "mode": "offline",
+		"id": id, "family": ac.Family, "path": "/models/model.gguf",
+		"task": task, "mode": mode,
 	}
 	if len(ac.LoadOptions) > 0 {
 		model["load_options"] = ac.LoadOptions
 	}
+	if len(ac.RequestOptions) > 0 {
+		model["default_request_options"] = ac.RequestOptions
+	}
 	if ac.DefaultVoice != "" {
+		if task != "tts" {
+			return nil, fmt.Errorf("model %s: audiocpp.default_voice is for tts models only", m.ID)
+		}
 		voice := map[string]string{"voice_id": ac.DefaultVoice}
 		model["default_voice_preset"] = voice
 		model["voice_presets"] = map[string]any{"default": voice}
@@ -433,6 +467,57 @@ func audioCppServerConfig(m catalog.Model) ([]byte, error) {
 		"host": "0.0.0.0", "port": 8080, "backend": "cpu", "threads": 4,
 		"lazy_load": false, "ui": false, "models": []any{model},
 	}, "", "  ")
+}
+
+// audioCppExtraPath is where an audiocpp model's extra file goes under the
+// build context's extra/, which the image copies to /models beside model.gguf.
+// audio.cpp looks voice states up by name in embeddings/ next to the GGUF
+// (Pocket TTS), and finds other sidecars next to the GGUF itself (XTTS v2's
+// vocoder), so role "voice" lands in embeddings/ and any other role at the top.
+func audioCppExtraPath(w StagedWeight) (string, error) {
+	name := w.ImageName()
+	switch {
+	case name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`):
+		return "", fmt.Errorf("extra file %s: %q is not a plain file name", w.File, name)
+	case name == "model.gguf" || name == "audiocpp.json" || name == "embeddings":
+		return "", fmt.Errorf("extra file %s: %q would replace the image's own %s", w.File, name, name)
+	}
+	if w.Role == "voice" {
+		return "embeddings/" + name, nil
+	}
+	return name, nil
+}
+
+// stageAudioCppExtras downloads an audiocpp model's extra files and links each
+// into <work>/extra at its audioCppExtraPath. extra/ always exists (with a
+// placeholder) so the Dockerfile's COPY extra/ works for a model with none.
+func (b *Builder) stageAudioCppExtras(ctx context.Context, m catalog.Model, work string, log LogFunc) error {
+	extras, err := b.EnsureExtraFiles(ctx, m, log)
+	if err != nil {
+		return err
+	}
+	extraDir := filepath.Join(work, "extra")
+	if err := os.MkdirAll(extraDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(extraDir, ".keep"), nil, 0o644); err != nil {
+		return err
+	}
+	for _, w := range extras {
+		rel, err := audioCppExtraPath(w)
+		if err != nil {
+			return fmt.Errorf("model %s: %w", m.ID, err)
+		}
+		dst := filepath.Join(extraDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if _, _, err := linkOrCopyReport(w.Path, dst); err != nil {
+			return fmt.Errorf("stage extra file %s: %w", w.File, err)
+		}
+		log("Staged extra file: " + w.File + " as " + rel)
+	}
+	return nil
 }
 
 // downloadTo fetches a weight into dest: from the FileFreak archive when it
@@ -685,11 +770,12 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		}
 	}
 
-	// audio.cpp serves the model from a baked config file. Extra weights (Pocket
-	// TTS voice states) land in /models/embeddings, beside the model, where the
-	// runtime looks voices up by name.
+	// audio.cpp serves the model from a baked config file. Extra files land in
+	// /models beside the model: voice states (Pocket TTS) in embeddings/, where
+	// the runtime looks voices up by name, and sidecars (XTTS's vocoder) next to
+	// the GGUF.
 	if family == "audiocpp" {
-		if _, err := b.stageExtraWeights(ctx, o.Model, work, log); err != nil {
+		if err := b.stageAudioCppExtras(ctx, o.Model, work, log); err != nil {
 			return err
 		}
 		cfg, err := audioCppServerConfig(o.Model)

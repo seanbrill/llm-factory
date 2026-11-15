@@ -308,6 +308,7 @@ export const browse = $state({
   maxSize: 0,
   legacy: false,
   fitsOnly: false,
+  clones: false, // only models that clone a voice
   sort: "recommended",
   filtersOpen: false,
 });

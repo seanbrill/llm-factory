@@ -1,17 +1,24 @@
 # syntax=docker/dockerfile:1
 #
 # audio.cpp runtime (CPU): a ggml-based C++ engine for speech models, used here
-# for TTS models Piper/Kokoro don't cover (Pocket TTS, Qwen3-TTS). Built on the
-# project's published multi-arch image (amd64 + arm64), so nothing compiles.
-# audiocpp_server exposes an OpenAI-style POST /v1/audio/speech and GET /health.
+# for the TTS models Piper/Kokoro don't cover (Pocket TTS, Qwen3-TTS, VoxCPM2,
+# Ming TTS, XTTS v2: most of them clone a voice) and for Moonshine streaming
+# speech-to-text. Built on the project's published multi-arch image (amd64 +
+# arm64), so nothing compiles. audiocpp_server exposes an OpenAI-style
+# POST /v1/audio/speech (TTS) or POST /v1/audio/transcriptions (STT), and
+# GET /health.
 #
-# The builder stages the model GGUF as model.gguf, any extra weights (Pocket TTS
-# voice states) under extra/, and writes audiocpp.json: one model with id "tts",
-# its loader family, and its default voice (also reachable as voice "default").
+# The builder stages the model GGUF as model.gguf, any extra files under extra/
+# (voice states under extra/embeddings, other sidecars such as XTTS's vocoder
+# beside the GGUF) and writes audiocpp.json: one model with id "tts" (or "stt"),
+# its loader family, its mode (streaming when the family streams), and its
+# default voice (also reachable as voice "default").
 #
-# Pinned to a dated nightly (the project publishes no release-versioned images);
-# bump the tag deliberately. Tags: ghcr.io/0xshug0/audio.cpp, full-cpu-<date>-<sha>.
-FROM ghcr.io/0xshug0/audio.cpp:full-cpu-20261014-26b8927
+# Pinned to a dated nightly (the project publishes no release-versioned images):
+# full-cpu-20261115-0a71e38 is v0.9.5 (2026-11-14) plus six commits, among them
+# "Fix PocketTTS streaming quality". Bump the tag deliberately.
+# Tags: ghcr.io/0xshug0/audio.cpp, full-cpu-<date>-<sha>.
+FROM ghcr.io/0xshug0/audio.cpp:full-cpu-20261115-0a71e38
 
 # Passed uniformly by the builder; declared to avoid "unused ARG" warnings.
 ARG INJECT_MODE=missing
@@ -19,7 +26,7 @@ ARG MODALITY=tts
 ARG CTX_SIZE=0
 
 COPY model.gguf /models/model.gguf
-COPY extra/ /models/embeddings/
+COPY extra/ /models/
 COPY audiocpp.json /models/audiocpp.json
 
 ENV PORT=8080

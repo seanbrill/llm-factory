@@ -958,8 +958,9 @@ func (s *Server) handleVideoGenerate(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(out)
 }
 
-// handleTranscribe proxies an uploaded audio file to a running whisper-server as
-// a fresh multipart body and returns the transcript text.
+// handleTranscribe proxies an uploaded audio file to a running whisper-server
+// (or an audio.cpp speech-to-text image, which takes WAV only) as a fresh
+// multipart body and returns the transcript text.
 func (s *Server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -985,18 +986,31 @@ func (s *Server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mw.WriteField("response_format", "json")
+	// audio.cpp images (Moonshine) need the id they serve their model under;
+	// whisper-server ignores the field.
+	mw.WriteField("model", builder.AudioCppSTTModelID)
 	for _, k := range []string{"temperature", "language"} {
 		if v := r.FormValue(k); v != "" {
 			mw.WriteField(k, v)
 		}
 	}
 	mw.Close()
+	payload := buf.Bytes()
 
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	upReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.modelURL(port, "/inference"), &buf)
-	upReq.Header.Set("Content-Type", mw.FormDataContentType())
-	resp, err := (&http.Client{}).Do(upReq)
+	post := func(path string) (*http.Response, error) {
+		upReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.modelURL(port, path), bytes.NewReader(payload))
+		upReq.Header.Set("Content-Type", mw.FormDataContentType())
+		return (&http.Client{}).Do(upReq)
+	}
+	// whisper.cpp answers /inference; an audio.cpp image has no such route and
+	// takes the same upload at the OpenAI-style /v1/audio/transcriptions.
+	resp, err := post("/inference")
+	if err == nil && resp.StatusCode == http.StatusNotFound {
+		resp.Body.Close()
+		resp, err = post("/v1/audio/transcriptions")
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, engineErrPayload(err))
 		return
