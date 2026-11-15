@@ -13,6 +13,7 @@
   import { href } from "../../lib/router";
   import { ui } from "../../lib/ui.svelte";
   import { needLabel, perfHere, perfTone, isMoE, type Fit, type LibEntry, type PathFit } from "../../lib/catalog";
+  import { canHarness } from "../../lib/baked";
   import type { Model, SysInfo } from "../../lib/types";
 
   let {
@@ -92,7 +93,19 @@
       {#if isMoE(m)}<span class="chip" title="Mixture of experts: only part of the model works on each token, so it runs faster than its size suggests.">MoE</span>{/if}
       {#if m.runtime === "python"}<span class="chip" title="Runs on the Python/PyTorch runtime: a bigger image, no quantization, and a hard memory floor (it can't page to the CPU like GGUF).">Python runtime</span>{/if}
       {#if m.legacy}<span class="chip" title="Superseded by a newer model in the catalog. Kept so images built from it and its downloaded weights still work.">Older model</span>{/if}
+      {#if m.voice_clone}<span class="chip" title="Speaks in a voice copied from a short recording you give it."><Icon name="mic" size={12} />Clones voices</span>{/if}
+      {#if m.commercial_use === false}<span class="chip wa"><Icon name="warn" size={12} />Non-commercial license</span>{/if}
     </div>
+
+    {#if m.commercial_use === false}
+      <div class="callout wa">
+        <Icon name="warn" size={18} />
+        <span>
+          <b>Non-commercial use only.</b>
+          <p>The terms of its weights or its training data rule out commercial use: personal and research use only. Read them on its source page before you use it in anything you sell or ship.</p>
+        </span>
+      </div>
+    {/if}
 
     <section>
       <h3 class="lbl">On this machine</h3>
@@ -177,8 +190,18 @@
         {#if ctx}<dt>Context</dt><dd>{ctx} tokens</dd>{/if}
         {#if m.computes?.length}<dt>Builds for</dt><dd>{m.computes.map(computeName).join(", ")}</dd>{/if}
         <dt>Runtime</dt><dd>{RUNTIME[m.runtime ?? "cpp"] ?? m.runtime}</dd>
+        {#if m.license}<dt>License</dt><dd>{m.license}{#if m.commercial_use === false} · non-commercial only{/if}</dd>{/if}
+        {#if m.modality === "tts"}<dt>Voice cloning</dt><dd>{m.voice_clone ? (m.clone_needs_transcript ? "Yes, from a short recording and its transcript" : "Yes, from a short recording") : "No, built-in voices only"}</dd>{/if}
+        {#if canHarness(m)}
+          <dt>Tools</dt>
+          <dd>
+            Can carry its own tools: web search, web pages, files and skills, for any client.
+            {#if selected}<a href={href("plan", m.id)}>Turn them on in its build settings</a>{:else}Turn them on in its build settings once it's in the plan.{/if}
+          </dd>
+        {/if}
         {#if m.repo}<dt>Source</dt><dd><a href="https://huggingface.co/{m.repo}" target="_blank" rel="noreferrer noopener">{m.repo} <Icon name="external" size={12} /></a></dd>{/if}
       </dl>
+      {#if m.voice_clone}<p class="note">Clone only your own voice, or a voice whose speaker has agreed to it.</p>{/if}
     </section>
   </div>
 

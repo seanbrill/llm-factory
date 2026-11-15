@@ -12,6 +12,7 @@
     effectiveCompute, isGPU, cpuEngineId, predictRoute, type LibEntry,
   } from "../../lib/catalog";
   import type { PlanItem } from "../../lib/plan.svelte";
+  import { canHarness, harnessProblem, toolsText } from "../../lib/baked";
   import type { Model, Persona, PreflightItem, SysInfo } from "../../lib/types";
 
   interface Msg {
@@ -71,6 +72,9 @@
   } = $props();
 
   const name = $derived(m?.name ?? it.model_id);
+  // Tools baked into the image (its settings say which).
+  const tools = $derived(it.harness?.on && canHarness(m) ? it.harness.tools : null);
+  const toolsIssue = $derived(harnessProblem(it.harness, m));
 
   // Moving a row moves its DOM nodes, which drops focus: put it back on the grip.
   let grip: HTMLButtonElement | undefined = $state();
@@ -136,6 +140,16 @@
   const callouts = $derived.by((): Msg[] => {
     const out: Msg[] = [];
     if (failure) out.push({ tone: "er", title: `It didn't queue: ${failure}`, actions: [{ label: "Remove it from the plan", run: onremove }] });
+    if (toolsIssue) {
+      out.push({
+        tone: "er",
+        title: toolsIssue,
+        actions: [
+          ...(expanded ? [] : [{ label: "Open its settings", run: ontoggle }]),
+          { label: "Turn tools off", run: () => (it.harness.on = false) },
+        ],
+      });
+    }
     if (!m) {
       out.push({ tone: "er", title: "This model isn't in the factory's catalog any more.", actions: [{ label: "Remove it from the plan", run: onremove }] });
       return out;
@@ -204,6 +218,9 @@
     <b>{name}</b>
     <span class="l2">
       <span class="mono" title={ref}>{ref.endsWith(":latest") ? ref.slice(0, -7) : ref}</span>
+      {#if tools}
+        <span class="chip tl" class:wa={tools.includes("shell")} title={tools.length ? `Baked tools: ${toolsText(tools)}${tools.includes("shell") ? " (the shell is on)" : ""}` : "Tools are on, but none is picked"}><Icon name="wrench" size={11} />Tools</span>
+      {/if}
       {#if lib.failed && !lib.active}
         <span class="chip er" title="Its last build failed{lib.failed.finished_at ? ' ' + ago(lib.failed.finished_at) : ''}: {lib.failed.error || 'see its log'}">Retry</span>
       {/if}
@@ -237,7 +254,7 @@
   </td>
   <td class="ac">
     <span class="acts">
-      <button type="button" class="ghost small icon" class:on={expanded} onclick={ontoggle} aria-expanded={expanded} aria-label="Settings for {name}" title="Image name, system prompt, context, memory…"><Icon name="sliders" size={15} /></button>
+      <button type="button" class="ghost small icon" class:on={expanded} onclick={ontoggle} aria-expanded={expanded} aria-label="Settings for {name}" title="Image name, system prompt, tools, context, memory…"><Icon name="sliders" size={15} /></button>
       <button type="button" class="ghost small icon" onclick={onremove} aria-label="Remove {name}" title="Remove from the plan"><Icon name="xmark" size={15} /></button>
     </span>
   </td>
@@ -302,6 +319,7 @@
   .l2 { display: flex; align-items: center; gap: 6px; margin-top: 2px; flex-wrap: wrap; }
   .l2 .mono { color: var(--mu); font-size: 11.5px; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .l2 .chip { height: 20px; padding: 0 7px; font-size: 11px; }
+  .l2 .chip.tl { gap: 4px; }
   .segc { display: inline-flex; padding: 3px; border: 1px solid var(--ln2); border-radius: 9px; gap: 2px; }
   .segc button {
     min-height: 0;

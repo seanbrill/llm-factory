@@ -39,6 +39,8 @@ you've never touched a container before.
 10. [The FileFreak model archive](FILEFREAK.md) — a public mirror of open-licensed
     model files: how builds read from it, the license rule for uploads, what
     FileFreak sees, and how to set an upload key.
+11. [Voice cloning](VOICE-CLONING.md) — the text-to-speech models that copy a voice
+    from a recording, their licenses, the consent rule, and how to call them.
 
 ## The 30-second mental model
 

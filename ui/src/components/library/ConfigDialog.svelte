@@ -7,6 +7,8 @@
   import { catalog } from "../../lib/stores";
   import { engineName, computeName } from "../../lib/format";
   import type { LibImage } from "../../lib/library";
+  import type { HarnessConfig } from "../../lib/types";
+  import { DEFAULT_TOOLS, searchName, seconds, toolsText, toolsetsOf } from "../../lib/baked";
 
   interface ImageConfig {
     repository: string;
@@ -20,6 +22,7 @@
     memory_gb: string;
     route: string;
     autostart: boolean;
+    harness?: HarnessConfig | null;
   }
 
   let {
@@ -53,6 +56,17 @@
   const modelName = $derived(cfg ? $catalog.find((m) => m.id === cfg!.model_id)?.name ?? cfg.model_id : "");
   const ctx = (s: string) => (parseInt(s, 10) > 0 ? `${parseInt(s, 10).toLocaleString()} tokens` : "The model's default");
   const mem = (s: string) => (parseFloat(s) > 0 ? `${parseFloat(s)} GB` : "No limit");
+  // The baked harness: its toolsets, search engine and limits.
+  const tools = $derived(cfg?.harness ? toolsetsOf(cfg.harness.tools ?? DEFAULT_TOOLS) : null);
+  const toolsNote = $derived.by(() => {
+    const hc = cfg?.harness;
+    if (!hc || !tools) return "";
+    const l = hc.limits ?? {};
+    return [
+      tools.includes("web_search") && hc.search?.backend ? `Searches with ${searchName(hc.search.backend)}${hc.search.searxng_url ? ` at ${hc.search.searxng_url}` : ""}.` : "",
+      l.max_steps ? `Up to ${l.max_steps} tool steps per answer, ${seconds(l.tool_timeout) || 60} s per call.` : "",
+    ].filter(Boolean).join(" ");
+  });
 </script>
 
 <Dialog bind:open title="Build settings" sub={image?.ref ?? ""}>
@@ -71,6 +85,13 @@
       <dt>Memory limit</dt><dd>{mem(cfg.memory_gb)}</dd>
       <dt>Local URL</dt><dd>{#if cfg.route}<span class="mono">{cfg.route}.localhost</span>{:else}—{/if}</dd>
       <dt>Starts with the engine</dt><dd>{cfg.autostart ? "Yes" : "No"}</dd>
+      <dt>Tools</dt>
+      <dd>
+        {#if tools}
+          {tools.length ? toolsText(tools).replace(/^./, (c) => c.toUpperCase()) : "Baked in, with every tool off"}{#if tools.includes("shell")}{" · "}<b class="wa">the shell is on</b>{/if}
+          {#if toolsNote}<span class="sub">{toolsNote}</span>{/if}
+        {:else}None{/if}
+      </dd>
       <dt>System prompt</dt>
       <dd>
         {#if cfg.system_prompt}
@@ -92,6 +113,8 @@
   dl { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px 14px; margin: 0; font-size: 13.5px; }
   dt { color: var(--mu); }
   dd { margin: 0; min-width: 0; }
+  dd .sub { display: block; }
+  b.wa { color: var(--wa); font-weight: 600; }
   .prompt {
     white-space: pre-wrap;
     overflow-wrap: anywhere;

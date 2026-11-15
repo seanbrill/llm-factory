@@ -60,6 +60,12 @@
     <span>{m.name}</span>{#if m.recommended}<span class="rec" title="Recommended"><Icon name="star" size={12} label="Recommended" /></span>{/if}
   </button>
   <div class="specs">{specs}</div>
+  {#if m.voice_clone || m.commercial_use === false}
+    <div class="flags">
+      {#if m.voice_clone}<span class="chip"><Icon name="mic" size={12} />Clones voices</span>{/if}
+      {#if m.commercial_use === false}<span class="chip wa"><Icon name="warn" size={12} />Non-commercial license</span>{/if}
+    </div>
+  {/if}
   <div class="fits" id="{uid}-fit">
     {@render line(fit.cpu)}
     {@render line(fit.gpu)}
@@ -166,6 +172,7 @@
   .nm:hover { background: none; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--fa); }
   .rec { color: var(--ac); display: inline-flex; }
   .specs { color: var(--mu); font-size: 12px; font-family: var(--font-mono); }
+  .flags { display: flex; flex-wrap: wrap; gap: 5px; }
   .fits { display: flex; flex-direction: column; gap: 7px; }
   .fit { display: flex; align-items: flex-start; gap: 6px; font-size: 12.5px; color: var(--mu); line-height: 1.35; }
   .fit :global(.ico) { margin-top: 1px; }

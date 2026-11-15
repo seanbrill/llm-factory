@@ -338,8 +338,8 @@ internal/llm/        OpenAI-compatible client (generic Chat + typed example)
 internal/filefreak/  the FileFreak model archive: lookup, license rule, upload queue
 tools/filefreak/     Node.js helper the archive runs (FileFreak SDK, pinned)
 docker/              per-runtime Dockerfiles: llama (CPU/CUDA/Vulkan), sd (image),
-                     video (Wan/LTX), whisper (STT), tts (Piper), audiocpp (Pocket
-                     TTS / Qwen3-TTS via audio.cpp), and ensemble (Conductor)
+                     video (Wan/LTX), whisper (STT), tts (Piper), audiocpp (TTS and
+                     Moonshine STT via audio.cpp), and ensemble (Conductor)
 Dockerfile.factory   runs the factory ITSELF in a container (Docker-out-of-Docker)
 Dockerfile.dev       dev image: wgo (Go watcher) + UI served from disk
 start.* / stop.*     build + run / stop the factory container (PowerShell + bash)
@@ -363,13 +363,22 @@ The catalog also covers code (Devstral Small 2, Qwen3 Coder, Mellum2.1), vision 
 Gemma 4 / Qwen3.8 with their projectors, LFM3-VL 2B, MiniCPM-V 4.7), embeddings
 (EmbeddingGemma 2, BGE-M3, Qwen3 Embedding), image (Z-Image Turbo, FLUX.2 klein 4B,
 FLUX.3 image klein, SDXL Turbo), text-to-speech (Pocket TTS,
-Qwen3-TTS, Kokoro, Piper), speech-to-text and video. Superseded models are kept with
+Qwen3-TTS, VoxCPM2, Ming 3.0 TTS, XTTS v2, Kokoro, Piper), speech-to-text (Whisper,
+Moonshine) and video. Superseded models are kept with
 `"legacy": true`, so images built from them still resolve; the Catalog hides them
 behind **Filters → Older models**.
 
 Most entries are Apache 2.0 or MIT. Check the licence in a model's description before
 commercial use: Liquid AI's LFM models are free only under $10M annual revenue, and
 FLUX.3 image klein's FLUX Kommunity License restricts commercial use.
+Each entry's `license` field names its license, and `"commercial_use": false` marks
+the ones that forbid it (the Catalog shows a **Non-commercial license** chip).
+
+**Voice cloning:** Pocket TTS, Qwen3-TTS Base, VoxCPM2, Ming 3.0 TTS and XTTS v2 speak
+in a voice copied from a short recording. Clone only your own voice or one whose
+speaker has agreed to it, and note that XTTS v2 is non-commercial only. See
+[docs/VOICE-CLONING.md](docs/VOICE-CLONING.md) for the models, their licenses and how
+to call them.
 
 > Catalog URLs point at public HuggingFace GGUF repos. If a download 404s,
 > the repo/file name may have changed — fix the `url` in `config/models.json`.
@@ -377,7 +386,8 @@ FLUX.3 image klein's FLUX Kommunity License restricts commercial use.
 ## Multimodal & Ensembles
 Beyond chat, the factory builds **vision** (VLM), **embeddings**, **image gen**
 (stable-diffusion.cpp), **speech-to-text** (whisper.cpp), **text-to-speech**
-(Piper, plus Pocket TTS / Qwen3-TTS on audio.cpp; Kokoro on the Python runtime), and
+(Piper, plus Pocket TTS, Qwen3-TTS, VoxCPM2, Ming and XTTS v2 on audio.cpp; Kokoro on
+the Python runtime), and
 **video gen** (Wan 2.2 / LTX via stable-diffusion.cpp `vid_gen`) — GGUF, and zero-Python
 apart from Kokoro.
 

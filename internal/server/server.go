@@ -206,10 +206,12 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	// so the UI only offers those (Piper TTS is CPU-only, image gen Vulkan-only).
 	// Compiles says the build compiles a runtime from source, which needs
 	// sysinfo's compile_min_gb on the engine that builds it.
+	// CanHarness says the model can take a baked agent harness (tools).
 	type item struct {
 		catalog.Model
-		Computes []string `json:"computes"`
-		Compiles bool     `json:"compiles"`
+		Computes   []string `json:"computes"`
+		Compiles   bool     `json:"compiles"`
+		CanHarness bool     `json:"can_harness"`
 	}
 	out := make([]item, 0, len(s.cat.Models))
 	compiles := map[string]bool{} // runtime|modality (which picks the family) -> Compiles
@@ -220,7 +222,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 			c = s.b.Compiles(m)
 			compiles[key] = c
 		}
-		out = append(out, item{Model: m, Computes: s.b.Computes(m), Compiles: c})
+		out = append(out, item{Model: m, Computes: s.b.Computes(m), Compiles: c, CanHarness: builder.CanHarness(m)})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -423,6 +425,13 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "image name is required"})
 		return
 	}
+	if harnessCfg != nil {
+		// Refuse now rather than fail the build once it starts.
+		if err := builder.HarnessModelError(model); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
 
 	engine := normalizeEngine(req.Engine)
 	compute := normalizeCompute(req.Compute)
@@ -517,6 +526,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		InjectMode   string `json:"inject_mode"`
 		// Force bypasses the resource guardrail ("Run anyway").
 		Force bool `json:"force"`
+		// Workspace is the host folder an image with a baked harness gets at
+		// /workspace ("" = the factory's workspace/ folder). See runWorkspace.
+		Workspace string `json:"workspace"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -539,6 +551,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	route := labels["local-llm.route"]
 	autostart := labels["local-llm.autostart"] == "true"
 	orchestrator := labels["local-llm.kind"] == "ensemble" // mounts the docker socket
+	workspace, err := s.runWorkspace(labels, req.Workspace)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	// Resource guardrail: refuse to start a model that would over-subscribe VRAM
 	// or RAM given what's already running (a crash risk), unless the caller forces
@@ -566,7 +583,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	id, err := s.b.Run(r.Context(), builder.RunOptions{
 		Ref: req.Ref, HostPort: req.Port, Engine: engine, Compute: compute,
 		MemoryGB: memGB, Route: route, Autostart: autostart, Orchestrator: orchestrator,
-		SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode,
+		SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode, Workspace: workspace,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
@@ -578,6 +595,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{"id": id, "port": req.Port, "engine": engine, "compute": compute}
 	if warning != "" {
 		resp["warning"] = warning
+	}
+	if workspace != "" {
+		resp["workspace"] = workspace
 	}
 	if route != "" {
 		resp["url"] = "http://" + route + ".localhost" + proxyURLSuffix(s.b.ProxyPort())
@@ -706,6 +726,8 @@ func (s *Server) handleImageConfig(w http.ResponseWriter, r *http.Request) {
 		"memory_gb":     labels["local-llm.memory"],
 		"route":         labels["local-llm.route"],
 		"autostart":     labels["local-llm.autostart"] == "true",
+		// The baked harness config (null = none), so a clone keeps the tools.
+		"harness": builder.BakedHarness(labels),
 	})
 }
 
@@ -959,8 +981,9 @@ func (s *Server) handleVideoGenerate(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(out)
 }
 
-// handleTranscribe proxies an uploaded audio file to a running whisper-server as
-// a fresh multipart body and returns the transcript text.
+// handleTranscribe proxies an uploaded audio file to a running whisper-server
+// (or an audio.cpp speech-to-text image, which takes WAV only) as a fresh
+// multipart body and returns the transcript text.
 func (s *Server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -986,18 +1009,31 @@ func (s *Server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mw.WriteField("response_format", "json")
+	// audio.cpp images (Moonshine) need the id they serve their model under;
+	// whisper-server ignores the field.
+	mw.WriteField("model", builder.AudioCppSTTModelID)
 	for _, k := range []string{"temperature", "language"} {
 		if v := r.FormValue(k); v != "" {
 			mw.WriteField(k, v)
 		}
 	}
 	mw.Close()
+	payload := buf.Bytes()
 
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	upReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.modelURL(port, "/inference"), &buf)
-	upReq.Header.Set("Content-Type", mw.FormDataContentType())
-	resp, err := (&http.Client{}).Do(upReq)
+	post := func(path string) (*http.Response, error) {
+		upReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.modelURL(port, path), bytes.NewReader(payload))
+		upReq.Header.Set("Content-Type", mw.FormDataContentType())
+		return (&http.Client{}).Do(upReq)
+	}
+	// whisper.cpp answers /inference; an audio.cpp image has no such route and
+	// takes the same upload at the OpenAI-style /v1/audio/transcriptions.
+	resp, err := post("/inference")
+	if err == nil && resp.StatusCode == http.StatusNotFound {
+		resp.Body.Close()
+		resp, err = post("/v1/audio/transcriptions")
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, engineErrPayload(err))
 		return

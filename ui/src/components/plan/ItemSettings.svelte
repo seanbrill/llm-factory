@@ -1,10 +1,13 @@
 <script lang="ts">
   // The rarely changed settings of one planned build (a row's expander on the
   // Build plan): where it runs, what it builds for, the image name, a baked-in
-  // system prompt, context and memory, a local URL and restart behaviour.
+  // system prompt, context and memory, a local URL and restart behaviour, and
+  // for chat models the tools baked into the image (ToolsSetting).
   // Edits write straight into the plan item (saved by lib/plan.svelte.ts).
   import { tick } from "svelte";
   import Icon from "../Icon.svelte";
+  import ToolsSetting from "./ToolsSetting.svelte";
+  import { canHarness } from "../../lib/baked";
   import { ctxDefaultFor, fmtTokens } from "../../lib/util";
   import { contextFor } from "../../lib/meta";
   import { computeName } from "../../lib/format";
@@ -147,6 +150,10 @@
       <span class="tgl"><input type="checkbox" class="tg" bind:checked={it.autostart} /><small>{it.autostart ? "On: once running, it comes back after a restart" : "Off"}</small></span>
     </label>
   </div>
+
+  {#if canHarness(m)}
+    <ToolsSetting {it} {m} />
+  {/if}
 
   <div class="foot">
     <span class="hint">Builds run in plan order{count > 1 ? ` — this is #${index + 1} of ${count}` : ""}.</span>
