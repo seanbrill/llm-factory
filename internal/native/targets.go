@@ -11,7 +11,7 @@ package native
 import "sort"
 
 // The llama.cpp release native packages carry. The model images build
-// llama.cpp from source at LLAMA_CPP_REF=v0.9.0 (docker/Dockerfile.cpu); that
+// llama.cpp from source at LLAMA_CPP_REF=v0.9.0 (scripts/docker/runtimes/Dockerfile.cpu); that
 // tag and the prebuilt release b12110 point at the same commit, so a native
 // package runs the same llama.cpp as a container built by this factory.
 // Moving the images to another release means moving these too: the new

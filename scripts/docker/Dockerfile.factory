@@ -4,10 +4,11 @@
 #
 # The factory builds and runs *model* images by talking to the host's Docker
 # daemon (Docker-out-of-Docker): run it with the host docker socket mounted
-# (`-v /var/run/docker.sock:/var/run/docker.sock`). Use start.{ps1,sh}.
+# (`-v /var/run/docker.sock:/var/run/docker.sock`). Use scripts/<os>/start.{sh,ps1},
+# which build it from the repo root: docker build -f scripts/docker/Dockerfile.factory .
 #
 # At runtime the factory reads, from disk (besides the embedded UI), the
-# Dockerfiles under docker/ and the gate shim sources it stages into each model
+# Dockerfiles under scripts/docker/runtimes/ and the gate shim sources it stages into each model
 # image's build context: cmd/llmgate (text) with internal/gate (its front door,
 # shared with the native-package launcher) and internal/agent (the agent
 # harness), cmd/videogate (video), cmd/ensemblegate (Conductor). All are
@@ -29,7 +30,7 @@
 FROM golang:1.22-bookworm AS build
 WORKDIR /src
 COPY . .
-# Build identity, computed on the host by scripts/version.{sh,ps1} (the build
+# Build identity, computed on the host by scripts/<os>/version.{sh,ps1} (the build
 # context has no .git) and shown in the UI sidebar.
 ARG FACTORY_VERSION=dev
 ARG FACTORY_COMMIT=
@@ -97,7 +98,7 @@ RUN set -eux; \
     podman --version
 
 COPY --from=build /factory      /usr/local/bin/factory
-COPY docker/                    /app/docker/
+COPY scripts/docker/runtimes/   /app/scripts/docker/runtimes/
 COPY cmd/llmgate/               /app/cmd/llmgate/
 COPY internal/gate/             /app/internal/gate/
 COPY internal/agent/            /app/internal/agent/

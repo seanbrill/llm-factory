@@ -21,7 +21,7 @@ step-by-step check of a whole ensemble, see [ENSEMBLE-TEST.md](ENSEMBLE-TEST.md)
 | Area | Status | Where |
 |---|---|---|
 | Compose from built images (one member per job) | ✅ built | Ensembles page, `internal/ensemble` |
-| Build into an image, export `.tar` | ✅ built: stages the Conductor module offline | `internal/builder/ensemble.go`, `docker/Dockerfile.ensemble` |
+| Build into an image, export `.tar` | ✅ built: stages the Conductor module offline | `internal/builder/ensemble.go`, `scripts/docker/runtimes/Dockerfile.ensemble` |
 | Run and stop from the Ensembles page | ✅ built: stopping removes the members too | `/api/ensembles/run`, `/api/ensembles/stop` |
 | Member lifecycle: start on demand, health check, states | ✅ built: stopped, starting, ready, failed, stopping | `cmd/ensemblegate/manager.go` |
 | Memory budget, LRU eviction, keep warm | ✅ built | same |
@@ -336,7 +336,7 @@ curl -s localhost:8799/v1/audio/transcriptions -H "Authorization: Bearer $KEY" \
 - The build stages `cmd/ensemblegate` with `internal/ensemble`,
   `internal/voice` and `internal/agent` (all standard library only) as a small
   Go module, plus `manifest.json` and `harness/`, and builds
-  `docker/Dockerfile.ensemble` offline (`GOPROXY=off`).
+  `scripts/docker/runtimes/Dockerfile.ensemble` offline (`GOPROXY=off`).
 - Labels: `local-llm.kind=ensemble`, `local-llm.ensemble=<id>`,
   `local-llm.modality=ensemble`, `local-llm.model=` (empty, so the container
   lists), compute and engine.

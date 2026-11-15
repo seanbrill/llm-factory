@@ -52,7 +52,8 @@ Make sure the app is **running** (its tray / menu-bar icon says "running") first
 .\scripts\windows\start.ps1 -Port 9000      # optional: custom port
 ```
 ```bash
-./scripts/macos/start.sh                  # macOS / Linux   (stop with ./scripts/macos/stop.sh)
+./scripts/macos/start.sh                  # macOS           (stop with ./scripts/macos/stop.sh)
+./scripts/linux/start.sh                  # Linux           (stop with ./scripts/linux/stop.sh)
 PORT=9000 ./scripts/macos/start.sh        # optional: custom port
 ```
 
@@ -199,7 +200,7 @@ whichever way round.
 ## Development (hot reload)
 
 ```powershell
-.\scripts\windows\start-dev.ps1     # Windows   (./scripts/macos/start-dev.sh on macOS/Linux);  stop with .\scripts\windows\stop.ps1
+.\scripts\windows\start-dev.ps1     # Windows   (./scripts/macos/start-dev.sh or ./scripts/linux/start-dev.sh);  stop with .\scripts\windows\stop.ps1
 ```
 
 Runs the factory in a dev container with the repo bind-mounted and **UI and
@@ -279,7 +280,7 @@ doesn't need them. See [Choosing an engine & compute](#choosing-an-engine--compu
   it for you.** The community route around the passthrough wall is
   paravirtualization: a `virtio-gpu` device plus a Vulkan→Metal (MoltenVK) bridge,
   run under `krunkit`. Pick **Engine = Podman, Compute = GPU (Vulkan/Metal)** in the
-  UI and the factory builds the Vulkan image ([docker/Dockerfile.vulkan](docker/Dockerfile.vulkan))
+  UI and the factory builds the Vulkan image ([scripts/docker/runtimes/Dockerfile.vulkan](scripts/docker/runtimes/Dockerfile.vulkan))
   and runs it on your libkrun machine. A Vulkan build gets ~70–80% of native.
   *Experimental:* GPU under krunkit needs a Mesa build with the virtio/Venus Vulkan
   driver; if the container sees no GPU, compare against
@@ -318,7 +319,7 @@ doesn't need them. See [Choosing an engine & compute](#choosing-an-engine--compu
 | `models/` | Downloaded GGUF weight files (one copy per model, reused across builds). |
 | `config/filefreak.json` | FileFreak archive settings and upload key (0600, not committed). The upload queue is `config/filefreak-queue.json`. |
 | `images/` | Exported image tarballs (`docker`/`podman save`), one `.tar` per build. |
-| `docker/Dockerfile.cpu` / `.cuda` / `.vulkan` | The image recipes (editable). |
+| `scripts/docker/runtimes/Dockerfile.cpu` / `.cuda` / `.vulkan` | The image recipes (editable). |
 
 ## Project layout
 ```
@@ -337,13 +338,16 @@ internal/server/     HTTP API + embedded vanilla-JS UI (internal/server/web)
 internal/llm/        OpenAI-compatible client (generic Chat + typed example)
 internal/filefreak/  the FileFreak model archive: lookup, license rule, upload queue
 tools/filefreak/     Node.js helper the archive runs (FileFreak SDK, pinned)
-docker/              per-runtime Dockerfiles: llama (CPU/CUDA/Vulkan), sd (image),
-                     video (Wan/LTX), whisper (STT), tts (Piper), audiocpp (TTS and
-                     Moonshine STT via audio.cpp), and ensemble (Conductor)
-Dockerfile.factory   runs the factory ITSELF in a container (Docker-out-of-Docker)
-Dockerfile.dev       dev image: wgo (Go watcher) + UI served from disk
-start.* / stop.*     build + run / stop the factory container (PowerShell + bash)
-start-dev.*          run the factory with UI + backend hot-reload
+scripts/             everything you run, by platform (scripts/README.md):
+  macos/ linux/      start.sh (factory in Docker), start-dev.sh (hot reload),
+                     start-native.sh (no container), stop.sh, free-memory.sh
+  windows/           the same as PowerShell (.ps1)
+  docker/            Dockerfile.factory (the factory ITSELF in a container,
+                     Docker-out-of-Docker), Dockerfile.dev (wgo + UI from disk)
+  docker/runtimes/   per-runtime Dockerfiles the factory builds models from:
+                     llama (CPU/CUDA/Vulkan), sd (image), video (Wan/LTX),
+                     whisper (STT), tts (Piper), audiocpp (TTS and Moonshine STT
+                     via audio.cpp), and ensemble (Conductor)
 docs/CONTAINER.md    image spec + how other apps interact with the container
 deploy/              OPTIONAL ECS/Fargate task definition for later cloud deploy
 ```

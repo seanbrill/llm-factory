@@ -75,7 +75,7 @@ func (b *Builder) BuildEnsemble(ctx context.Context, e ensemble.Ensemble, imageN
 		return "", err
 	}
 	defer os.RemoveAll(work)
-	df, err := os.ReadFile(filepath.Join(b.BaseDir, "docker", "Dockerfile.ensemble"))
+	df, err := os.ReadFile(b.runtimeDockerfile("Dockerfile.ensemble"))
 	if err != nil {
 		return "", fmt.Errorf("read Dockerfile.ensemble: %w", err)
 	}

@@ -49,7 +49,7 @@ if ($LASTEXITCODE -ne 0) { Write-Host "WARN: npm ci in tools/filefreak failed, s
 # every ui/src edit; the dev container serves the fresh bundle from disk, so you
 # just refresh the browser (the Go backend hot-reloads separately via wgo).
 # CHOKIDAR_USEPOLLING is REQUIRED — inotify events don't cross Docker Desktop
-# bind mounts (the same reason Dockerfile.dev runs wgo with -poll). The watch
+# bind mounts (the same reason scripts/docker/Dockerfile.dev runs wgo with -poll). The watch
 # container is named so stop.ps1 removes it; reuse node_modules from the build above.
 docker rm -f local-llm-ui-watch 2>$null | Out-Null
 docker run -d --name local-llm-ui-watch -e CHOKIDAR_USEPOLLING=true -e VITE_WATCH=1 `
@@ -58,7 +58,7 @@ docker run -d --name local-llm-ui-watch -e CHOKIDAR_USEPOLLING=true -e VITE_WATC
 Write-Host "UI watch on: edit ui/src/* -> auto-rebuild -> refresh the browser." -ForegroundColor Cyan
 
 Write-Host "Building dev image ($name)..." -ForegroundColor Cyan
-docker build -t $name -f Dockerfile.dev .
+docker build -t $name -f scripts/docker/Dockerfile.dev .
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: dev image build failed." -ForegroundColor Red; exit 1 }
 
 if (docker ps -aq -f "name=^$name$") { docker rm -f $name | Out-Null }

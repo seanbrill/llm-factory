@@ -224,6 +224,15 @@ func modelFamily(m catalog.Model) string {
 	return runtimeFamily(m.Mod())
 }
 
+// RuntimesDir holds the Dockerfiles the factory builds model and ensemble
+// images from (one per runtime family + compute), relative to the repo root.
+const RuntimesDir = "scripts/docker/runtimes"
+
+// runtimeDockerfile is the path of a Dockerfile under RuntimesDir.
+func (b *Builder) runtimeDockerfile(name string) string {
+	return filepath.Join(b.BaseDir, filepath.FromSlash(RuntimesDir), name)
+}
+
 // dockerfileName is the Dockerfile for a runtime family + compute. llama.cpp
 // keeps the historical Dockerfile.<compute>; other families use
 // Dockerfile.<family>.<compute>.
@@ -241,7 +250,7 @@ func (b *Builder) Computes(m catalog.Model) []string {
 	family := modelFamily(m)
 	out := []string{}
 	for _, c := range []string{"cpu", "cuda", "vulkan"} {
-		if _, err := os.Stat(filepath.Join(b.BaseDir, "docker", dockerfileName(family, c))); err == nil {
+		if _, err := os.Stat(b.runtimeDockerfile(dockerfileName(family, c))); err == nil {
 			out = append(out, c)
 		}
 	}
@@ -670,7 +679,7 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		log(fmt.Sprintf("%s has no %s build — building the %s image instead.", o.Model.Name, compute, resolved))
 		compute = resolved
 	}
-	dockerfileSrc := filepath.Join(b.BaseDir, "docker", dockerfileName(family, compute))
+	dockerfileSrc := b.runtimeDockerfile(dockerfileName(family, compute))
 	dfData, err := os.ReadFile(dockerfileSrc)
 	if err != nil {
 		return fmt.Errorf("read %s (modality %q): %w", dockerfileSrc, o.Model.Mod(), err)

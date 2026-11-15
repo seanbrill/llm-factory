@@ -93,7 +93,7 @@ func TestStageEnsemblegateCompiles(t *testing.T) {
 // stages the Conductor from /app, so its image must carry every package the
 // Conductor compiles from.
 func TestFactoryImageShipsEnsembleSources(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "..", "Dockerfile.factory"))
+	b, err := os.ReadFile(filepath.Join("..", "..", "scripts", "docker", "Dockerfile.factory"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestFactoryImageShipsEnsembleSources(t *testing.T) {
 }
 
 func TestDockerfileEnsembleBuildsTheStagedModule(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "..", "docker", "Dockerfile.ensemble"))
+	b, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(RuntimesDir), "Dockerfile.ensemble"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,10 +4,11 @@
 #                    main bumps it), e.g. 1.0.153
 #   FACTORY_COMMIT   short SHA, with "-dirty" when tracked files have local edits
 #   FACTORY_LDFLAGS  the matching `go build -ldflags` value
-# Repo root: from this file's path under bash; otherwise the caller's directory
-# (every start script cd's to the repo root before sourcing this).
+# Repo root: from this file's path (scripts/<os>/) under bash; otherwise the
+# caller's directory (every start script cd's to the repo root before sourcing
+# this). The macOS and Linux copies are the same file.
 _vroot="$PWD"
-if [ -n "${BASH_SOURCE[0]:-}" ]; then _vroot="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; fi
+if [ -n "${BASH_SOURCE[0]:-}" ]; then _vroot="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; fi
 _vbase=""
 if [ -f "$_vroot/VERSION" ]; then _vbase="$(tr -d '[:space:]' < "$_vroot/VERSION")"; fi
 _vcount="$(git -C "$_vroot" rev-list --count HEAD 2>/dev/null || echo 0)"

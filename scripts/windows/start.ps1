@@ -49,7 +49,7 @@ docker run --rm -v "$($PWD.Path):/app" -w /app/ui node:20-alpine sh -c "npm inst
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: UI build failed." -ForegroundColor Red; exit 1 }
 
 Write-Host "Building factory image ($name) v$FactoryVersion ($FactoryCommit)..." -ForegroundColor Cyan
-docker build --build-arg "FACTORY_VERSION=$FactoryVersion" --build-arg "FACTORY_COMMIT=$FactoryCommit" -t $name -f Dockerfile.factory .
+docker build --build-arg "FACTORY_VERSION=$FactoryVersion" --build-arg "FACTORY_COMMIT=$FactoryCommit" -t $name -f scripts/docker/Dockerfile.factory .
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: factory image build failed." -ForegroundColor Red; exit 1 }
 
 # Remove any previous instance (guarded so we never `docker rm` a missing container).

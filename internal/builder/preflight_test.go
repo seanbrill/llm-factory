@@ -15,12 +15,12 @@ func TestPreflightOne(t *testing.T) {
 	b := &Builder{BaseDir: dir}
 	m := catalog.Model{ID: "q", Name: "Qwen", File: "q.gguf", SizeGB: 5}
 	fam := modelFamily(m)
-	if err := os.MkdirAll(filepath.Join(dir, "docker"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(RuntimesDir)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []string{"cpu", "vulkan"} {
 		body := "FROM x\nRUN cmake --build build\n"
-		if err := os.WriteFile(filepath.Join(dir, "docker", dockerfileName(fam, c)), []byte(body), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(RuntimesDir), dockerfileName(fam, c)), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -68,7 +68,7 @@ func TestPreflightOne(t *testing.T) {
 	}
 
 	// A family that doesn't compile builds where it runs, whatever the memory.
-	if err := os.WriteFile(filepath.Join(dir, "docker", dockerfileName(fam, "cpu")), []byte("FROM x\nRUN pip install y\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(RuntimesDir), dockerfileName(fam, "cpu")), []byte("FROM x\nRUN pip install y\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	p := preflightOne(b, PreflightItem{Model: m, Engine: "podman", Compute: "cpu"}, map[string]engineMem{"podman": {GB: 2}})

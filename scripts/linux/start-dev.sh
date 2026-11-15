@@ -48,7 +48,7 @@ docker run -d --name local-llm-ui-watch -e CHOKIDAR_USEPOLLING=true -e VITE_WATC
 echo "UI watch on: edit ui/src/* -> auto-rebuild -> refresh the browser."
 
 echo "Building dev image ($NAME)..."
-docker build -t "$NAME" -f Dockerfile.dev .
+docker build -t "$NAME" -f scripts/docker/Dockerfile.dev .
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 

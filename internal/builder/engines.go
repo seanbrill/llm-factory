@@ -61,7 +61,7 @@ func compilesFromSource(dockerfile []byte) bool {
 func (b *Builder) Compiles(m catalog.Model) bool {
 	family := modelFamily(m)
 	for _, c := range []string{"cpu", "cuda", "vulkan"} {
-		data, err := os.ReadFile(filepath.Join(b.BaseDir, "docker", dockerfileName(family, c)))
+		data, err := os.ReadFile(b.runtimeDockerfile(dockerfileName(family, c)))
 		if err == nil && compilesFromSource(data) {
 			return true
 		}
@@ -650,7 +650,7 @@ func oomHint(engine string, memGB float64) string {
 	if memGB > 0 {
 		have = fmt.Sprintf(" (%.1f GB)", memGB)
 	}
-	return fmt.Sprintf("The compiler ran out of memory on %s%s and was killed. To fix it, %s\nOr lower the parallel compile jobs: set ARG BUILD_JOBS=1 in the image's docker/Dockerfile.*.",
+	return fmt.Sprintf("The compiler ran out of memory on %s%s and was killed. To fix it, %s\nOr lower the parallel compile jobs: set ARG BUILD_JOBS=1 in the image's scripts/docker/runtimes/Dockerfile.*.",
 		engineLabel(engine), have, memoryFixSentence(engine))
 }
 

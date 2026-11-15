@@ -4,7 +4,7 @@ Some text-to-speech models in the catalog can speak in a voice copied from a
 short recording you give them. In the Catalog they carry a **Clones voices** chip,
 and **Filters → Voice** lists only them. All of them run on
 [audio.cpp](https://github.com/0xShug0/audio.cpp), CPU only, from the image pinned in
-`docker/Dockerfile.audiocpp.cpu`.
+`scripts/docker/runtimes/Dockerfile.audiocpp.cpu`.
 
 ## Consent
 

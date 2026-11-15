@@ -18,7 +18,7 @@ import type { EngineResources, GPUCheckInfo, GPUProbe, Model, SysInfo } from "./
 
 // ---- rules the server applies (keep in step with the Go code) -----------------
 
-/** GiB of free memory each parallel compile job gets (docker/Dockerfile.*: BUILD_JOBS=0). */
+/** GiB of free memory each parallel compile job gets (scripts/docker/runtimes/Dockerfile.*: BUILD_JOBS=0). */
 export const JOB_GIB = { cpu: 1.5, gpu: 2 } as const;
 /** What a model needs beyond its weights to run (internal/server/resources.go runOverheadGB). */
 export const RUN_OVERHEAD_GB = 2;

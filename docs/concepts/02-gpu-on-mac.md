@@ -54,7 +54,7 @@ to a specific build, from a special package repository:
 - Pinned version: `mesa-vulkan-drivers-25.3.6-102.fc44`
 - Base OS for the image: **Fedora 44**
 
-This is why our GPU Dockerfiles (`docker/Dockerfile.vulkan`, `Dockerfile.sd.vulkan`,
+This is why our GPU Dockerfiles (`scripts/docker/runtimes/Dockerfile.vulkan`, `Dockerfile.sd.vulkan`,
 `Dockerfile.whisper.vulkan`) are Fedora-based and install that exact patched driver.
 With it, the model reports a real GPU:
 ```

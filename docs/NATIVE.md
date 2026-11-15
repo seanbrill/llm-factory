@@ -103,7 +103,7 @@ launcher, the engine and the weights works the same way everywhere.
 Packages carry llama.cpp **v0.9.0**, which llama.cpp publishes as prebuilt
 release **b12110**: the same commit
 (`cd959bae99ff4bed22bef2604f45241c09bbb8c8`) the model images build from
-source (`LLAMA_CPP_REF` in `docker/Dockerfile.*`). A package and a container
+source (`LLAMA_CPP_REF` in `scripts/docker/runtimes/Dockerfile.*`). A package and a container
 built by the same factory run the same llama.cpp, with the same chat templates
 and flags. The assets and their SHA-256s are pinned in
 `internal/native/targets.go`:
@@ -274,7 +274,7 @@ the same. `codesign -dv bin/llmpack` on a Mac shows `Signature=adhoc`,
 `flags=0x20002(adhoc,linker-signed)`.
 
 Adding a system is an entry in `internal/native/targets.go` (its llama.cpp
-asset and SHA-256), a launcher in the `Dockerfile.factory` loop, and its start
+asset and SHA-256), a launcher in the `scripts/docker/Dockerfile.factory` loop, and its start
 script and README text in `native_readme.go`.
 
 ## Later: ensembles

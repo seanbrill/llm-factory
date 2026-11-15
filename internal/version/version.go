@@ -1,6 +1,6 @@
 // Package version identifies the running factory build so two machines can
 // confirm they run the same code. The start scripts stamp it at build time
-// (scripts/version.sh, scripts/windows/version.ps1): Version is the VERSION
+// (scripts/macos/version.sh, scripts/linux/version.sh, scripts/windows/version.ps1): Version is the VERSION
 // file's major.minor plus the commit count, so every commit to main bumps it,
 // and Commit is the short SHA ("-dirty" when tracked files had local edits).
 package version

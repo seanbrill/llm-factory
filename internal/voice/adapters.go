@@ -105,7 +105,7 @@ func (s Speaker) refuseClone(r SpeechRequest) error {
 	return nil
 }
 
-// piper: the factory's Piper image (docker/Dockerfile.tts.cpu) takes {"input"}
+// piper: the factory's Piper image (scripts/docker/runtimes/Dockerfile.tts.cpu) takes {"input"}
 // and speaks its one baked voice.
 type piper struct{ s Speaker }
 
@@ -148,7 +148,7 @@ func (a pygate) Call(r SpeechRequest) (Call, error) {
 	return jsonCall(body)
 }
 
-// audioCpp: audio.cpp's server (docker/Dockerfile.audiocpp.cpu) serves its one
+// audioCpp: audio.cpp's server (scripts/docker/runtimes/Dockerfile.audiocpp.cpu) serves its one
 // model as id "tts" and takes OpenAI's fields plus, for a clone, voice_ref
 // {"type":"base64","data":<wav>} (at most 5 MiB decoded) and reference_text
 // (required by the Qwen3-TTS Base models, optional for the others). voice and

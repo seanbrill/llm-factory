@@ -77,9 +77,9 @@ tweaking the UI.
 | You want to… | Edit |
 |---|---|
 | Add or update a model | `internal/catalog/models.default.json` |
-| Change how a model is built | `docker/Dockerfile.<family>.<compute>` + `builder.Build` |
+| Change how a model is built | `scripts/docker/runtimes/Dockerfile.<family>.<compute>` + `builder.Build` |
 | Add a new API endpoint | `internal/server/server.go` (add a `handleX` + route) |
 | Change the UI | `internal/server/web/{index.html,app.js,style.css}` |
 | Change the in-image launch flags | `cmd/llmgate/main.go` (`llamaArgs`) |
-| Add a new runtime (e.g. a new engine) | a new `docker/Dockerfile.<family>.*` + a case in `runtimeFamily` |
+| Add a new runtime (e.g. a new engine) | a new `scripts/docker/runtimes/Dockerfile.<family>.*` + a case in `runtimeFamily` |
 </content>

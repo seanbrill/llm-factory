@@ -14,7 +14,7 @@ import (
 // (has a `cmake --build`), keyed by file name.
 func compilingDockerfiles(t *testing.T) map[string]string {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join("..", "..", "docker", "Dockerfile*"))
+	paths, err := filepath.Glob(filepath.Join("..", "..", filepath.FromSlash(RuntimesDir), "Dockerfile*"))
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no Dockerfiles found: %v", err)
 	}

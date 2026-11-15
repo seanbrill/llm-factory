@@ -16,8 +16,8 @@ Dockerfile + gate, routed by a catalog field — no structural change.
 ```
 catalog.Model.runtime: "cpp" (default) | "python"
         │
-        ├─ cpp     → docker/Dockerfile.{cpu,cuda,vulkan}  + llmgate/videogate
-        └─ python  → docker/Dockerfile.python.{cuda,cpu}  + pygate (new shim)
+        ├─ cpp     → scripts/docker/runtimes/Dockerfile.{cpu,cuda,vulkan}  + llmgate/videogate
+        └─ python  → scripts/docker/runtimes/Dockerfile.python.{cuda,cpu}  + pygate (new shim)
                          │
                          └─ torch + (ComfyUI | diffusers | TGI) serving an HTTP API
 ```
@@ -31,7 +31,7 @@ Already wired (Phase-2 foundation, this commit):
 - **`hwPerf`** rates python models honestly: CPU = impractical (no GGUF), GPU =
   hard VRAM floor (no offload to lean on).
 
-Still to build (Part B — the heavy bit): `docker/Dockerfile.python.cuda`, the
+Still to build (Part B — the heavy bit): `scripts/docker/runtimes/Dockerfile.python.cuda`, the
 `pygate` shim, build/run routing for `runtime == "python"`, and the first model.
 
 ## The decision: which runtime to wrap first

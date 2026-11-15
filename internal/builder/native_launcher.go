@@ -1,7 +1,7 @@
 package builder
 
 // The launcher (cmd/llmpack) for a native package's target. The factory
-// image cross-compiles it for every target when it is built (Dockerfile.factory
+// image cross-compiles it for every target when it is built (scripts/docker/Dockerfile.factory
 // puts them in native/launchers/), so the factory needs no Go toolchain at run
 // time. A factory run from source (start-dev, start-native) has Go, and
 // cross-compiles the launcher from its own source instead.

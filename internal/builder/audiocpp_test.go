@@ -220,7 +220,7 @@ func TestStageAudioCppExtras(t *testing.T) {
 // The audio.cpp image is pinned to a dated, commit-tagged nightly (never a
 // floating tag) and copies what the builder stages.
 func TestAudioCppDockerfile(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "docker", "Dockerfile.audiocpp.cpu"))
+	data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(RuntimesDir), "Dockerfile.audiocpp.cpu"))
 	if err != nil {
 		t.Fatal(err)
 	}

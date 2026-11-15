@@ -42,7 +42,7 @@ fi
 PORT="${PORT:-8799}"
 mkdir -p models images config
 
-. scripts/version.sh   # build identity shown in the UI sidebar
+. scripts/linux/version.sh   # build identity shown in the UI sidebar
 echo "Building factory (native) v$FACTORY_VERSION ($FACTORY_COMMIT)..."
 go build -ldflags "$FACTORY_LDFLAGS" -o local-llm ./cmd/builder   # UI is embedded from internal/server/web (committed)
 

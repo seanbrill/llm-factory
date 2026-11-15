@@ -12,7 +12,7 @@ import (
 
 func TestResolveCompute(t *testing.T) {
 	base := t.TempDir()
-	dir := filepath.Join(base, "docker")
+	dir := filepath.Join(base, filepath.FromSlash(RuntimesDir))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

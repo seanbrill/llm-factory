@@ -35,7 +35,7 @@ Go dependencies** (standard library only) on purpose: it's small and auditable.
 | **Builder** | The brain: downloads models, assembles a build context, runs `docker/podman build`, runs/stops containers, manages the proxy. | `internal/builder/builder.go` |
 | **Catalog** | The list of available models (seeded from an embedded JSON). | `internal/catalog/` |
 | **llmgate** | A tiny shim baked **inside** each llama.cpp model image. It launches `llama-server` and injects a baked "system prompt." | `cmd/llmgate/main.go` |
-| **Dockerfiles** | One per runtime+compute: how to build each kind of model image. | `docker/Dockerfile.*` |
+| **Dockerfiles** | One per runtime+compute: how to build each kind of model image. | `scripts/docker/runtimes/Dockerfile.*` |
 | **Entrypoint** | Where the program starts. | `cmd/builder/main.go` |
 
 ## Where the code starts (entrypoint)
@@ -55,7 +55,7 @@ When you click "Build", the UI POSTs to `/api/build`. Then in `builder.Build`:
 1. **Pick the runtime family** from the model's *modality*
    (`runtimeFamily`): chat/code/vision/embeddings → **llama.cpp**; image →
    **stable-diffusion.cpp**; speech-to-text → **whisper.cpp**; text-to-speech →
-   **Piper**. Each family has its own `docker/Dockerfile.<family>.<compute>`.
+   **Piper**. Each family has its own `scripts/docker/runtimes/Dockerfile.<family>.<compute>`.
 2. **Download the model** if needed (`EnsureModel`) into `models/`. Vision models
    also download a second file, the *projector* (`EnsureMMProj`).
 3. **Assemble a tiny build context**: a temp folder with the chosen Dockerfile and a

@@ -8,7 +8,6 @@ package builder
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/seanbrill/local-llm/internal/catalog"
@@ -44,7 +43,7 @@ type EngineMemoryRead struct {
 
 // compilesFor reports whether m's Dockerfile for compute compiles from source.
 func (b *Builder) compilesFor(m catalog.Model, compute string) bool {
-	data, err := os.ReadFile(filepath.Join(b.BaseDir, "docker", dockerfileName(modelFamily(m), compute)))
+	data, err := os.ReadFile(b.runtimeDockerfile(dockerfileName(modelFamily(m), compute)))
 	return err == nil && compilesFromSource(data)
 }
 
