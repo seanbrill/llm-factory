@@ -1847,7 +1847,7 @@ func ClassifyEngineError(err error) string {
 	// engine, and a missing folder isn't a missing socket.
 	if m := mountErrRe.FindStringSubmatch(err.Error()); m != nil && !strings.HasPrefix(m[1], "/dev/") && !strings.HasSuffix(m[1], ".sock") {
 		if strings.EqualFold(m[2], "connection refused") {
-			return "The container engine can't see the folders on this computer right now: the Podman machine's shared folders stopped answering (this can happen after the computer sleeps). Restart the Podman machine (podman machine stop, then podman machine start), restart the factory (scripts/<your-os>/start.sh), then retry."
+			return "The container engine can't see the folders on this computer right now: the Podman machine's shared folders stopped answering (this can happen after the computer sleeps). Restart the Podman machine (podman machine stop, then podman machine start), restart the factory (scripts/<your-os>/start.sh), then retry. If they're still dead after that, Podman on this computer is likely older than its machine: update Podman (its krunkit can't share folders with the machine's newer kernel), then restart the factory."
 		}
 		return fmt.Sprintf("The folder %s doesn't exist on this computer, so it can't be mounted. Create it first (or leave the workspace blank to use the factory's workspace/ folder), then retry.", m[1])
 	}

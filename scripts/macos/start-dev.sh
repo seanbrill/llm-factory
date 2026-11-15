@@ -65,6 +65,17 @@ if command -v podman >/dev/null 2>&1; then
         echo "The Podman machine can't see this Mac's folders (its shared folders stopped answering). Restarting it..."
         { podman machine stop && podman machine start; } ||
             echo "WARNING: couldn't restart the Podman machine. Run: podman machine stop && podman machine start" >&2
+        # Still dead after a fresh boot: the Mac side of the machine (krunkit)
+        # is usually older than the machine's image and can't share folders
+        # with its kernel (the guest logs "virtio-fs: response too short").
+        SHARE_CHECK="$(podman machine ssh "ls -d '$PWD'" 2>&1 || true)"
+        case "$SHARE_CHECK" in *[Cc]onnection\ refused*)
+            KRUNKIT_V="$( { krunkit --version || /opt/podman/bin/krunkit --version; } 2>/dev/null | head -n1 || true)"
+            echo "WARNING: the Podman machine still can't see this Mac's folders after a restart, so a model that mounts a workspace folder won't start on Podman." >&2
+            echo "         Podman here is $(podman --version 2>/dev/null | awk '{print $NF}') with ${KRUNKIT_V:-krunkit (version unknown)}; the machine runs $(podman version --format '{{.Server.Version}}' 2>/dev/null)." >&2
+            echo "         Update Podman on this Mac to at least the machine's version (podman.io installer, or brew upgrade podman), then run this script again." >&2
+            ;;
+        esac
         ;;
     esac
     PSOCK="$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null | head -n1)"
