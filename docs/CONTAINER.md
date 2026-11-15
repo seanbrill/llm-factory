@@ -347,6 +347,16 @@ docker run -d --name local-llm-factory \
 `HOST_HOME`, `FACTORY_PORT` and the `skills`/`workspace` mounts serve the
 [agent harness](HARNESS.md).
 
+**Access token.** Every API call needs the factory's access token. On first
+start the factory saves one in `config/factory-token` (mode 0600) and logs the
+link that signs a browser in, `Open: http://localhost:8799/?token=…`; the start
+scripts print the same link, and `docker logs local-llm-factory` shows it again.
+Programs send the token as `Authorization: Bearer <token>` or
+`X-Factory-Token: <token>`. Add `-e FACTORY_TOKEN=<24+ characters>` to use your
+own, or `-e FACTORY_AUTH=off` to turn the check off (not recommended: anything
+that reaches the port, including the harness's workspace terminal, could then
+drive the factory). See [HARNESS.md › Security model](HARNESS.md#security-model).
+
 Key points:
 - **Docker-out-of-Docker:** the factory shells out to `docker`, which talks to the
   *host* daemon via the mounted socket. So **model images and containers it
@@ -364,4 +374,6 @@ Key points:
 - **Stopping the factory does not stop model containers** — they're independent
   on the host daemon. Remove them from the UI or with `docker rm -f <name>`.
 - **Security note:** mounting the Docker socket grants the factory container
-  root-equivalent control of the host daemon. Run it only on machines you trust.
+  root-equivalent control of the host daemon. Run it only on machines you trust,
+  and keep the access token on: it is what stops other programs on your machine
+  from using that control through the factory's API.

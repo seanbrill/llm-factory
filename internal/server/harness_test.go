@@ -129,7 +129,7 @@ func newTestHarness(t *testing.T) *testHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{b: b, cat: &catalog.Catalog{}, mux: http.NewServeMux(), modelHost: "127.0.0.1"}
+	s := &Server{b: b, cat: &catalog.Catalog{}, mux: newRouteMux(), modelHost: "127.0.0.1"}
 	h := newHarnessAPI(s, filepath.Join(dir, "config", "harness.json"))
 	if h.store == nil {
 		t.Fatal(h.storeErr)

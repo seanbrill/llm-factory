@@ -9,7 +9,11 @@
 #   .\start.ps1            # build + run, UI at http://localhost:8799
 #   .\start.ps1 -Port 9000
 #   .\start.ps1 -Bind 0.0.0.0   # also reachable from your network (default: this
-#                               # computer only; the factory has no login)
+#                               # computer only)
+#
+# The factory's API needs its access token, which the factory saves in
+# config\factory-token on first start. The "Open:" link printed at the end
+# carries it and signs your browser in.
 #
 # (For native dev without Docker you can still run:  go run ./cmd/builder)
 #
@@ -106,7 +110,25 @@ docker run -d --name $name `
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: failed to start factory container." -ForegroundColor Red; exit 1 }
 
 Write-Host "local-llm factory is running at http://localhost:$Port" -ForegroundColor Green
-if ($Bind -ne "127.0.0.1") { Write-Host "WARNING: listening on $($Bind):$Port - anyone who can reach this machine can use the factory (it has no login)." -ForegroundColor Yellow }
+# The access link: wait (up to ~20 s on a first start) for the factory to save
+# its token, then print the UI's address with it.
+$tokenFile = Join-Path $PWD.Path 'config\factory-token'
+$token = ""
+for ($i = 0; $i -lt 40; $i++) {
+    $raw = Get-Content -LiteralPath $tokenFile -Raw -ErrorAction SilentlyContinue
+    if ($raw) { $token = ([string]$raw).Trim() }
+    if ($token.Length -ge 24) { break }
+    $token = ""
+    Start-Sleep -Milliseconds 500
+}
+if ($token) {
+    # Escaped for the link: a generated token is hex, but one you wrote into
+    # the file yourself may hold characters like + & # %.
+    Write-Host "Open: http://localhost:$Port/?token=$([uri]::EscapeDataString($token))" -ForegroundColor Green
+} else {
+    Write-Host "Open: the access link is in the factory log (docker logs $name); config\factory-token didn't appear." -ForegroundColor Yellow
+}
+if ($Bind -ne "127.0.0.1") { Write-Host "WARNING: listening on $($Bind):$Port - other machines can reach the factory. They still need its access token, but plain HTTP sends it unencrypted: do this only on a network you trust." -ForegroundColor Yellow }
 Write-Host "Logs:  docker logs -f $name"
 Write-Host "Stop:  .\stop.ps1"
 

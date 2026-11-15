@@ -37,7 +37,10 @@ Desktop already gives you Podman, so you're set.
    ./scripts/macos/start.sh
    ```
    The first run builds the factory's control panel (a minute or two) and starts it.
-4. Open **http://localhost:8799** in your browser.
+4. Open the **`Open:` link** the script prints last
+   (`http://localhost:8799/?token=…`) in your browser. The token in it signs your
+   browser in; it's also saved in `config/factory-token`, which you can paste if
+   the page asks for it.
 
 ### 3. Build and run your first model
 1. In the web page, under **"1 · Build an image"**, pick a model. Start small —
@@ -67,7 +70,7 @@ That's it — a private AI running on your Mac's GPU.
 ```bash
 ./scripts/linux/start.sh
 ```
-Open **http://localhost:8799**.
+Open the **`Open:` link** it prints last (`http://localhost:8799/?token=…`).
 
 ### 3. Build a model
 - **CPU (works anywhere):** pick a model, set **Compute → CPU**, Build, Run, chat.
@@ -87,7 +90,8 @@ Open **http://localhost:8799**.
 ```powershell
 .\scripts\windows\start.ps1
 ```
-Open **http://localhost:8799**. GPU on Windows is best via NVIDIA + WSL2 (Compute →
+Open the **`Open:` link** it prints last (`http://localhost:8799/?token=…`). GPU on
+Windows is best via NVIDIA + WSL2 (Compute →
 CUDA). Otherwise use **Compute → CPU**.
 
 ---

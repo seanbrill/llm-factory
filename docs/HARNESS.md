@@ -37,6 +37,8 @@ The connector was written against the Open WebUI 0.13.3 API.
    (`./scripts/macos/start.sh`, `./scripts/linux/start.sh` or
    `.\scripts\windows\start.ps1`). The script now passes your home folder
    (`HOST_HOME`) and port (`FACTORY_PORT`), and mounts `skills/` and `workspace/`.
+   Open the `Open:` link it prints last: it carries the factory's
+   [access token](#security-model).
 2. **Run a chat model**: Images → **Run**. Pick one that is good at tool calling,
    such as Qwen 3.x, Gemma 4 or a recent Mistral or Llama. Very small models often
    call tools badly.
@@ -241,14 +243,49 @@ default.
 
 **What's protected, and how:**
 
-- **Loopback only.** The start scripts now publish the factory on `127.0.0.1`
-  (before this change it listened on every network interface). The terminal and
+- **The factory's access token.** The factory API builds, runs and removes
+  containers, and some factory containers get your container engine (the
+  Ensemble Conductor is given the engine socket). The workspace terminal runs
+  whatever commands the model chooses, and on Docker Desktop
+  `host.docker.internal:8799` reaches the factory from inside it even though the
+  factory is bound to loopback. Network rules can't reliably close that path, so
+  the API asks for a secret the terminal never sees:
+  - Every `/api/...` call needs the token, except `/api/auth/status` and
+    `/api/auth/login`, which the page's lock screen uses. Any other route does
+    too unless it is listed as public: only the page itself (`/`, `/auth`,
+    `/assets/…`), `/healthz` and `/readyz` are. Without it the factory answers `401`
+    (`"code": "auth_required"`), so a prompt injection that makes the model
+    `curl` the factory gets nowhere.
+  - The token is 32 random bytes from `crypto/rand`, which the factory saves in
+    `config/factory-token` on first start (written atomically, mode `0600`, in
+    `.gitignore`). `config/` is never mounted into the terminal, and the
+    workspace rules keep it out. `FACTORY_TOKEN` sets your own (at least 24
+    characters). To replace the token, delete the file and restart the factory.
+  - The start scripts print an `Open:` link carrying the token. Opening it stores
+    the token in an `HttpOnly`, `SameSite=Strict` cookie and redirects to `/`, so
+    the token leaves the address bar. Opening the page without it shows a lock
+    screen that takes the pasted token; wrong tokens there are limited to 5 a
+    minute. Programs send `Authorization: Bearer <token>` or
+    `X-Factory-Token: <token>`. The factory compares tokens in constant time and
+    sends no CORS headers.
+  - Every port on `localhost` (Open WebUI, the terminal) is the same *site* to a
+    browser, so the cookie rides along on their pages' requests too. A request
+    that changes something with only the cookie must therefore come from the
+    factory's own page (`Sec-Fetch-Site: same-origin`); others get `403`.
+  - The model gateway (`/v1`) keeps its own key, and the factory token doesn't
+    open it.
+  - `FACTORY_AUTH=off` turns the token off. The factory then prints a warning at
+    startup, and anything that can reach its port can use it, the terminal
+    included.
+- **Loopback only.** The start scripts publish the factory on `127.0.0.1`
+  (before the harness it listened on every network interface). The terminal and
   the model containers also listen only on `127.0.0.1`. To reach the factory from
   other machines you must opt in:
   - macOS or Linux: `BIND=0.0.0.0 ./scripts/macos/start.sh`
   - Windows: `.\scripts\windows\start.ps1 -Bind 0.0.0.0`
 
-  The factory has no login, so do this only on a network you trust.
+  Other machines still need the token, but plain HTTP sends it unencrypted, so
+  do this only on a network you trust.
 - **Keys.** The gateway key (`sk-llmf-…`) and terminal key (`otk-…`) each hold 192
   random bits from `crypto/rand`. They are stored in `config/harness.json`, which
   is written atomically with mode `0600` and is in `.gitignore`. The gateway
@@ -260,12 +297,12 @@ default.
   logged. The factory doesn't follow redirects, so the key can't be bounced to
   another server. Error messages from Open WebUI are shortened and have keys
   removed before they are shown.
-- **Harness API guard.** The `/api/harness/*` endpoints hand out keys and start a
-  container, so they accept only requests addressed to `localhost`, an IP
-  address, or a name in `FACTORY_ALLOWED_HOSTS`, which blocks DNS rebinding.
-  Changes must be same-origin JSON `POST`s, which blocks cross-site form posts
-  and cross-site `fetch`. The guard stops *web pages*, not programs running on
-  your computer.
+- **Harness API guard.** On top of the token, the `/api/harness/*` endpoints,
+  which hand out keys and start a container, accept only requests addressed to
+  `localhost`, an IP address, or a name in `FACTORY_ALLOWED_HOSTS`, which blocks
+  DNS rebinding. Changes must be same-origin JSON `POST`s, which blocks
+  cross-site form posts and cross-site `fetch`. The guard stops *web pages*, not
+  programs running on your computer; the token stops those.
 - **Commands are passed as arguments.** The factory runs `docker` or `podman`
   with an argument list, never through a shell. Paths and ports are validated
   first: no control characters, no `:` in paths, and ports from 1024 to 65535.
@@ -277,38 +314,31 @@ default.
   container.
 - It **can use the network**: the internet, and services on your computer through
   `host.docker.internal`. Those services include Open WebUI, the model ports and
-  the factory.
+  the factory, whose API refuses it without the access token.
 - It **can't** see the rest of your disk, your home folder (apart from
   `~/.claude/skills`, read-only, if you share it), the Docker socket or the
-  factory's `config/`.
+  factory's `config/`, so it has neither the access token nor the harness keys.
 - It's limited by the memory limit and a cap of 1024 processes.
 
-**Known gap: the factory API has no login.** This was already true before the
-harness. Anything that can reach the factory port can call `/api/...` to build,
-run and remove containers, and some factory containers get access to your
-container engine (the Ensemble Conductor is given the engine socket).
-
-On Docker Desktop that includes **commands run in the workspace terminal**,
-because `host.docker.internal:8799` reaches the factory even though it is bound to
-loopback. A prompt injection could in principle use this to escape the sandbox.
-For example, a web page the model reads could contain hidden instructions to call
-that API. Until the factory API has authentication:
+**What's still open.** The token closes the factory API, not the network. From
+the terminal a model can still call the model ports directly (llama.cpp asks for
+no key) and anything else on your computer or network that answers without a
+password. A web page the model reads can contain hidden instructions to try
+exactly that. So:
 
 - stop the terminal when you aren't using it,
 - read what the model is about to run, especially after it has browsed the web
   (Open WebUI shows every tool call),
 - keep the terminal connection admin-only unless you trust everyone on your Open
   WebUI,
-- keep the factory on loopback, which is the default.
+- keep the factory on loopback, which is the default, and the access token on.
 
-The fix is a factory-wide API token, like Jupyter's, which the page and the start
-scripts would share. Restricting the terminal's outgoing network traffic would
-also help.
+Restricting the terminal's outgoing network traffic would also help.
 
 ## Harness API reference
 
-These endpoints serve the Harness page. They all go through the guard described
-above.
+These endpoints serve the Harness page. Like every `/api` call they need the
+access token, and they all go through the guard described above.
 
 | Method | Path | What it does |
 |---|---|---|
@@ -401,6 +431,12 @@ yourself.
 **Podman** works the same way, but it hasn't been tested yet. If writes fail
 under rootless Podman, check the workspace's owner from inside the terminal with
 `ls -ln ~/workspace`.
+
+**The page asks for a token, or calls fail with `auth_required`.** Open the
+`Open:` link the start script printed, or paste the token from
+`config/factory-token`. A script calling the API sends
+`Authorization: Bearer <token>`. If you deleted the file, the restarted factory
+made a new token, so open the new link.
 
 **"Refusing a request addressed to …".** Open the factory at
 `http://localhost:<port>`. To use another name, add `-e FACTORY_ALLOWED_HOSTS=name`

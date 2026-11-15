@@ -9,7 +9,10 @@
 #   .\start-dev.ps1            # UI at http://localhost:8799, hot-reloads
 #   .\start-dev.ps1 -Port 9000
 #   .\start-dev.ps1 -Bind 0.0.0.0   # also reachable from your network (default:
-#                                   # this computer only; the factory has no login)
+#                                   # this computer only)
+#
+# The factory's API needs its access token (config\factory-token, saved on
+# first start); the "Open:" link printed at the end carries it.
 #
 # Stop with .\stop.ps1 (removes prod and dev containers).
 
@@ -98,7 +101,26 @@ docker run -d --name $name `
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: failed to start dev container." -ForegroundColor Red; exit 1 }
 
 Write-Host "Dev factory running at http://localhost:$Port (hot-reload on)" -ForegroundColor Green
-if ($Bind -ne "127.0.0.1") { Write-Host "WARNING: listening on $($Bind):$Port - anyone who can reach this machine can use the factory (it has no login)." -ForegroundColor Yellow }
+# The access link: wait (up to ~20 s on a first start) for the factory to save
+# its token, then print the UI's address with it. The UI is served on $Port
+# too (vite build --watch writes it to disk), so that's the port to open.
+$tokenFile = Join-Path $PWD.Path 'config\factory-token'
+$token = ""
+for ($i = 0; $i -lt 40; $i++) {
+    $raw = Get-Content -LiteralPath $tokenFile -Raw -ErrorAction SilentlyContinue
+    if ($raw) { $token = ([string]$raw).Trim() }
+    if ($token.Length -ge 24) { break }
+    $token = ""
+    Start-Sleep -Milliseconds 500
+}
+if ($token) {
+    # Escaped for the link: a generated token is hex, but one you wrote into
+    # the file yourself may hold characters like + & # %.
+    Write-Host "Open: http://localhost:$Port/?token=$([uri]::EscapeDataString($token))" -ForegroundColor Green
+} else {
+    Write-Host "Open: the access link is in the factory log (docker logs $name); config\factory-token didn't appear yet (the first dev start compiles the factory)." -ForegroundColor Yellow
+}
+if ($Bind -ne "127.0.0.1") { Write-Host "WARNING: listening on $($Bind):$Port - other machines can reach the factory. They still need its access token, but plain HTTP sends it unencrypted: do this only on a network you trust." -ForegroundColor Yellow }
 Write-Host "  UI:      edit ui/src/* -> auto-rebuild (vite watch) -> refresh the browser"
 Write-Host "  Backend: edit *.go -> auto rebuild/restart (watch: docker logs -f $name)"
 Write-Host "Stop:  .\stop.ps1"

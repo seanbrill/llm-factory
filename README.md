@@ -59,7 +59,8 @@ PORT=9000 ./scripts/macos/start.sh        # optional: custom port
 The first run builds a small helper image, then launches the factory. Leave it
 running in that terminal.
 
-**3. Open the web page and build a model.** Visit **http://localhost:8799**, then:
+**3. Open the web page and build a model.** Open the **`Open:` link** the start
+script printed last (`http://localhost:8799/?token=…`), then:
 1. Pick a **model** — start with the ★ recommended one (small and fast).
 2. Leave **Engine = Docker** and **Compute = CPU** (works on any machine), or see
    [Choosing an engine & compute](#choosing-an-engine--compute) to use a GPU.
@@ -70,14 +71,25 @@ running in that terminal.
 That's the whole loop. Everything you download and build is saved under `./models`
 and `./images` on your computer, so it persists between runs.
 
+> **Access token.** The factory only answers callers that know its secret token,
+> so other programs on your computer (such as commands a model runs in the
+> [harness](#harness-tools-for-open-webui) terminal) can't drive it. The factory
+> creates the token on first start and saves it in `config/factory-token`
+> (git-ignored, mode 0600). The `Open:` link carries it and keeps your browser
+> signed in; open `http://localhost:8799` without it and the page asks you to
+> paste the token. Scripts send it as `Authorization: Bearer <token>` or
+> `X-Factory-Token: <token>`. To replace it, delete the file and restart the
+> factory. `FACTORY_TOKEN=<24+ characters>` sets your own instead, and
+> `FACTORY_AUTH=off` turns the check off (not recommended).
+>
 > **Under the hood:** the factory itself runs as a container and talks to your
 > host's engine (the socket is mounted); `./models`, `./images`, and `./config` are
 > shared back to your folders. See
 > [docs/CONTAINER.md §10](docs/CONTAINER.md#10-running-the-factory-itself-in-docker).
 >
 > Prefer no Docker at all? Run the factory natively with `go run ./cmd/builder`
-> (needs Go); flags: `-addr 127.0.0.1:9000`, `-open=false`, `-host …`,
-> `-web internal/server/web`.
+> (needs Go); it logs the `Open:` link and opens it in your browser. Flags:
+> `-addr 127.0.0.1:9000`, `-open=false`, `-host …`, `-web internal/server/web`.
 
 ## Installing Docker or Podman (desktop apps)
 
@@ -371,10 +383,12 @@ Starter skills live in `skills/`, and the model's files land in `workspace/`. Fo
 setup, the security model and troubleshooting, see
 **[docs/HARNESS.md](docs/HARNESS.md)**.
 
-> The start scripts now publish the factory on `127.0.0.1` only, because it has no
-> login. To reach it from other machines, opt in with
+> The factory API needs the [access token](#get-started-3-steps), which the
+> terminal can't see, and the start scripts publish the factory on `127.0.0.1`
+> only. To reach it from other machines, opt in with
 > `BIND=0.0.0.0 ./scripts/macos/start.sh` or
-> `.\scripts\windows\start.ps1 -Bind 0.0.0.0`.
+> `.\scripts\windows\start.ps1 -Bind 0.0.0.0`. Plain HTTP sends the token
+> unencrypted, so do that only on a network you trust.
 
 ## Optional: cloud deploy
 `deploy/ecs-task-definition.json` runs a built image on AWS Fargate (2 vCPU /

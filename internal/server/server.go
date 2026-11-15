@@ -35,7 +35,8 @@ var webFS embed.FS
 type Server struct {
 	b         *builder.Builder
 	cat       *catalog.Catalog
-	mux       *http.ServeMux
+	mux       *routeMux
+	auth      *Auth  // the access token every protected route needs (auth.go)
 	modelHost string // host where launched model containers are reachable
 
 	q *buildQueue // queued/running/recent builds, buffered so the UI can reconnect after a refresh
@@ -66,6 +67,9 @@ type Server struct {
 // webDir, if non-empty, serves the UI from that directory on disk instead of
 // the embedded copy — enabling UI hot-reload in dev (edit + refresh, no
 // rebuild). When empty, the embedded assets are used (production).
+//
+// New also sets up the access token (LoadAuth), creating config/factory-token
+// on first start; a bad FACTORY_TOKEN or FACTORY_AUTH is an error.
 func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*Server, error) {
 	var web http.Handler
 	if webDir != "" {
@@ -80,8 +84,12 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	if modelHost == "" {
 		modelHost = "127.0.0.1"
 	}
+	auth, err := LoadAuth(b.ConfigDir)
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
-		b: b, cat: cat, mux: http.NewServeMux(), modelHost: modelHost,
+		b: b, cat: cat, mux: newRouteMux(), auth: auth, modelHost: modelHost,
 		q:         newBuildQueue(),
 		statsPath: filepath.Join(b.BaseDir, "config", "build-stats.json"),
 		ens:       ensemble.NewStore(b.BaseDir),
@@ -89,7 +97,14 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	}
 	s.loadStats()
 	_ = os.MkdirAll(s.mediaDir, 0o755)
-	s.mux.Handle("/", web)
+	// The static UI, plus the access link (/?token=…) that signs a browser in,
+	// and the lock screen's calls. Handler() puts every route behind the token
+	// check; publicRoutes (auth.go) lists the few that answer without it.
+	s.mux.Handle("/", auth.serveUI(web))
+	s.mux.Handle("/auth", auth.serveUI(web))
+	s.mux.HandleFunc(authStatusRoute, auth.handleStatus)
+	s.mux.HandleFunc(authLoginRoute, auth.handleLogin)
+	s.mux.HandleFunc(authLogoutRoute, auth.handleLogout)
 	// Generated clips/images are saved here and served by stable URL so they
 	// persist across reloads (bind-mount ./media to keep them across restarts).
 	s.mux.Handle("/api/media/", http.StripPrefix("/api/media/", http.FileServer(http.Dir(s.mediaDir))))
@@ -136,8 +151,30 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	return s, nil
 }
 
-// Handler returns the root http.Handler.
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler returns the root http.Handler: every route behind the access-token
+// check (auth.go).
+func (s *Server) Handler() http.Handler { return s.auth.Wrap(s.mux) }
+
+// Auth is the access-token setup, for the startup log and the browser link.
+func (s *Server) Auth() *Auth { return s.auth }
+
+// routeMux is the server's http.ServeMux, remembering each pattern registered
+// on it so the access-token tests can walk every route.
+type routeMux struct {
+	*http.ServeMux
+	patterns []string
+}
+
+func newRouteMux() *routeMux { return &routeMux{ServeMux: http.NewServeMux()} }
+
+func (m *routeMux) Handle(pattern string, h http.Handler) {
+	m.patterns = append(m.patterns, pattern)
+	m.ServeMux.Handle(pattern, h)
+}
+
+func (m *routeMux) HandleFunc(pattern string, h func(http.ResponseWriter, *http.Request)) {
+	m.Handle(pattern, http.HandlerFunc(h))
+}
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
