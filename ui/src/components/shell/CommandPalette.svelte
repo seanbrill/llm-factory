@@ -273,7 +273,9 @@
         toast((e as Error).message, 6000);
       }
     }, "ram reclaim");
-    cmd("connect", "harness", "Connect Open WebUI", () => { close(); go("harness"); }, "harness tools terminal gateway");
+    cmd("connect", "harness", "Connect Open WebUI", () => { close(); go("harness", "connect"); }, "harness tools terminal gateway");
+    cmd("newens", "ensembles", "New ensemble", () => { close(); go("ensembles", "new"); }, "combine multimodal conductor");
+    cmd("newpersona", "personas", "New persona", () => { close(); go("personas", "new"); }, "system prompt");
     const gw = live.harness?.gateway?.base_url;
     if (gw) {
       cmd("gwurl", "chain", "Copy the Open WebUI connection URL", async () => {

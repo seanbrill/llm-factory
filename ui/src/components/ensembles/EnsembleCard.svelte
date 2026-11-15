@@ -5,10 +5,10 @@
   import { href } from "../../lib/router";
   import { modMeta } from "../../lib/icons";
   import { gb, ago, computeName, computeChip, plural, engineName } from "../../lib/format";
-  import { build, views, toggleLog, cancelJob } from "../../lib/build.svelte";
+  import { build, views, openLog, closeLog, stopJob } from "../../lib/build.svelte";
   import { phase, progress, timeText } from "../../lib/jobs";
   import { live } from "../../lib/live.svelte";
-  import type { Ensemble } from "../../lib/types";
+  import type { BuildJob, Ensemble } from "../../lib/types";
   import { TOOL_TEXT, TOOL_WHEN, ensembleRef, latestJob, builtImage } from "./util";
 
   let {
@@ -30,6 +30,15 @@
   const uid = $props.id();
   const job = $derived(latestJob(build.jobs, ens));
   const view = $derived(job ? views[job.id] : undefined);
+
+  function toggleLog(j: BuildJob) {
+    if (views[j.id]?.open) closeLog(j.id);
+    else openLog(j.id);
+  }
+  async function cancelJob(j: BuildJob) {
+    if (j.status === "running" && !confirm(`Cancel the running build of ${j.ref}?`)) return;
+    await stopJob(j);
+  }
   const image = $derived(builtImage(live.images, ens));
   const members = $derived(ens.members ?? []);
   const active = $derived(!!job?.active);
