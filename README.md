@@ -132,7 +132,8 @@ mostly click-through install. Works the same on Windows, macOS, and Linux.
 > podman machine init --provider libkrun
 > podman machine start
 > ```
-> Then in the UI pick **Engine = Podman** and **Compute = GPU (Vulkan/Metal)**.
+> Then in the UI build for **GPU**: the Catalog's cards show the GPU path, and the
+> build plan routes it to **Podman** with **Vulkan**.
 > (GPU under krunkit is experimental — see [Running on a Mac](#running-on-a-mac-apple-silicon).)
 
 ### Prefer the command line?
@@ -193,17 +194,27 @@ Notes:
   has zero third-party deps, so a backend reload is ~1–2s).
 - Use the regular `.\scripts\windows\start.ps1` for the production image (UI embedded, no watcher).
 
-Then in the UI:
-1. **Build** — choose a model, pick an **Engine** (Docker/Podman) and **Compute**
-   (CPU / NVIDIA CUDA / GPU Vulkan-Metal), name the image, optionally add an
-   **initialization prompt**, then *Build & export .tar*. A **progress bar** tracks
-   download → compile → export (full log on demand). The build runs server-side, so
-   it **survives a page refresh** — the UI reconnects to the in-progress build.
-2. **Built images** — *Run* on a port, or *Delete* (also removes its `.tar`). The
-   **Engine** column shows which runtime each image belongs to.
-3. **Containers** — see what's running (across both engines); *Stop & remove*.
-4. **Downloaded model files** — see cached weights and *Delete* ones you don't need.
-5. **Test** — send a prompt to a running container and read the response.
+Then in the UI (open the "Open:" link the start script prints; it signs your
+browser in):
+1. **Catalog** — pick one or more models. Each card says whether it can run on
+   this machine now (CPU on Docker, GPU on Podman) and why not when it can't.
+2. **Build plan** — check each model's compute, engine and route (e.g. "Docker →
+   Podman": compiles on Docker, runs on Podman), see the preflight (memory, disk,
+   downloads), then queue them all. Optional per build: image name and tag, an
+   **initialization prompt** or persona, context size, memory limit, local URL.
+3. **Builds** — one lane per engine; reorder, cancel, or retry. A failed build is
+   explained in a sentence with its fixes, and the log opens on the line that
+   matters. Builds run server-side, so they **survive a page refresh**.
+4. **Library** — every model on this machine in one row: weights, image, `.tar`
+   and container. *Run*, *Stop*, view logs, download the `.tar`, delete, and clean
+   up the space nothing uses.
+5. **Playground** — send a prompt to a running model, or to two at once to compare
+   speed, and copy the exact request as curl.
+6. **Harness** — give the models web search, a workspace terminal and skills in
+   Open WebUI ([docs/HARNESS.md](docs/HARNESS.md)). **System** shows both engines'
+   memory and GPU and plans the memory between them.
+
+**⌘K** (Ctrl K) finds any model or command from any page; **?** opens Help.
 
 Requires Docker (Desktop on Windows/macOS, Engine on Linux). The *Run* action picks
 the GPU flags from the image automatically: `--gpus all` for **CUDA** (needs an
@@ -242,7 +253,8 @@ Linux). See [Choosing an engine & compute](#choosing-an-engine--compute).
   [native-speed write-up](https://developers.redhat.com/articles/2025/09/18/reach-native-speed-macos-llamacpp-container-inference).
 - **Give the Podman machine enough memory.** `podman machine init` creates a
   **2 GB** machine, and Docker Desktop and the Podman machine are separate VMs
-  (the sidebar lists each one's memory, and flags a GPU machine that's too small).
+  (the top bar and the System page show each one's memory, and flag a GPU machine
+  that's too small).
   Compiling the Vulkan image needs about **6 GB** (CPU images about 3 GB): the
   build sizes its parallel compile jobs to the memory it finds, and when the
   Podman machine is too small it **compiles on Docker and moves the finished
@@ -313,8 +325,8 @@ Gemma 4 / Qwen3.8 with their projectors, LFM3-VL 2B, MiniCPM-V 4.7), embeddings
 (EmbeddingGemma 2, BGE-M3, Qwen3 Embedding), image (Z-Image Turbo, FLUX.2 klein 4B,
 FLUX.3 image klein, SDXL Turbo), text-to-speech (Pocket TTS,
 Qwen3-TTS, Kokoro, Piper), speech-to-text and video. Superseded models are kept with
-`"legacy": true`, so images built from them still resolve; the Build page hides them
-behind **Older models**.
+`"legacy": true`, so images built from them still resolve; the Catalog hides them
+behind **Filters → Older models**.
 
 Most entries are Apache 2.0 or MIT. Check the licence in a model's description before
 commercial use: Liquid AI's LFM models are free only under $10M annual revenue, and

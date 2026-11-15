@@ -98,7 +98,7 @@ CUDA). Otherwise use **Compute → CPU**.
 
 ## Stopping things
 - Stop the factory control panel: `./scripts/<your-os>/stop.sh` (or `stop.ps1`).
-- Stop a running model: click **"Stop & remove"** next to it in the web UI.
+- Stop a running model: click **Stop** next to it in the web UI (Overview or Library).
 
 ## Troubleshooting
 - **"Server unavailable" at the chat URL** — the model isn't running. Open the
