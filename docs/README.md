@@ -36,6 +36,8 @@ you've never touched a container before.
 9. [Agent harness: tools for Open WebUI](HARNESS.md) — give your models web search,
    a sandboxed workspace terminal and skills in Open WebUI; security model and
    troubleshooting.
+10. [Voice cloning](VOICE-CLONING.md) — the text-to-speech models that copy a voice
+    from a recording, their licenses, the consent rule, and how to call them.
 
 ## The 30-second mental model
 
