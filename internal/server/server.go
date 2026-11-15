@@ -344,7 +344,13 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	if !ready {
 		code = http.StatusServiceUnavailable
 	}
-	writeJSON(w, code, map[string]any{"ready": ready, "engines": versions})
+	body := map[string]any{"ready": ready}
+	// /readyz answers without the token (it's a probe). Engine versions are
+	// for signed-in callers only: they tell anyone else what to attack.
+	if s.auth.Authorized(r) {
+		body["engines"] = versions
+	}
+	writeJSON(w, code, body)
 }
 
 // handleContainerLogs returns the tail of a container's logs so a model that

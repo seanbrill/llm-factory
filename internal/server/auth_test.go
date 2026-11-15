@@ -660,3 +660,20 @@ func wantPrivate(t *testing.T, file string) {
 		t.Errorf("%s: mode %v (%v), want 0600", file, fi.Mode(), err)
 	}
 }
+
+// /readyz is public (a probe), but only a signed-in caller sees engine versions.
+func TestReadyzHidesEnginesWithoutToken(t *testing.T) {
+	s := newAuthServer(t, nil)
+	h := s.Handler()
+	anon := jsonBody(t, send(h, http.MethodGet, "/readyz", ""))
+	if _, ok := anon["ready"]; !ok {
+		t.Fatalf("anonymous /readyz = %v, want a ready field", anon)
+	}
+	if _, ok := anon["engines"]; ok {
+		t.Fatalf("anonymous /readyz shows engines: %v", anon)
+	}
+	authed := jsonBody(t, send(h, http.MethodGet, "/readyz", "", tokenHeader(s)))
+	if _, ok := authed["engines"]; !ok {
+		t.Fatalf("signed-in /readyz = %v, want engines", authed)
+	}
+}
