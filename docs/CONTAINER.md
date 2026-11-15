@@ -362,6 +362,11 @@ Key points:
   *host* daemon via the mounted socket. So **model images and containers it
   creates live on the host**, exactly as if you'd built them yourself — not
   nested inside the factory container.
+- **Another Docker Engine:** `FACTORY_DOCKER_SOCK=<socket path>` makes the start
+  scripts mount that socket instead of the default one (for example Docker Engine
+  in a Lima VM, `~/.lima/docker/sock/docker.sock`), so models build and run there
+  while the factory container stays on the default Docker. The scripts also pass
+  `FACTORY_HOST_OS` (from `uname -s`) so the factory knows it's on a Mac.
 - **Published ports are on the host.** When you click *Run* for a model on port
   `8080`, that port is published by the host daemon → reach it at
   `http://localhost:8080` from your machine.

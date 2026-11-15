@@ -109,7 +109,7 @@
             <dd>
               Each image is built for one compute. <b>CPU</b> runs anywhere. <b>CUDA</b> uses an NVIDIA GPU. <b>Vulkan</b>
               uses other GPUs, including a Mac's through a Podman machine (out of the box, Docker Desktop can't reach a
-              Mac's GPU). Not every model can be built for every compute. A GPU changes speed, not the quality of the
+              Mac's GPU; on Docker VMM it might, and System's GPU check shows whether it does). Not every model can be built for every compute. A GPU changes speed, not the quality of the
               answers.
             </dd>
           </div>

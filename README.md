@@ -161,13 +161,35 @@ CPU** runs anywhere. Otherwise pick the row that matches your machine:
 | Anything, anywhere (portable, slower) | Docker | **CPU** | nothing (and it's arm64-native on a Mac) |
 | Windows / Linux with an **NVIDIA** GPU | Docker *or* Podman | **NVIDIA CUDA** | NVIDIA Container Toolkit (WSL2 on Windows) |
 | **macOS** GPU (Apple Metal) | **Podman** | **GPU (Vulkan/Metal)** | a `krunkit`/libkrun Podman machine |
+| **macOS** GPU on Docker (*experimental*) | Docker | **GPU (Vulkan/Metal)** | Docker Desktop on **Docker VMM** (or Docker Engine in a krunkit VM), and **System → Check GPU access** finding the GPU |
 | Linux with an **AMD/Intel** GPU | Docker *or* Podman | **GPU (Vulkan/Metal)** | `/dev/dri` + Mesa Vulkan drivers |
 
-Why Podman for the Mac GPU: Docker Desktop and Apple's own `container` tool can't
-reach the Metal GPU (Apple Silicon GPUs have no IOMMU, so there's nothing to "pass
-through"). A Podman **libkrun** machine paravirtualizes the GPU into the container
-as a Vulkan device — the only way to GPU-accelerate a *container* on a Mac (~70–80%
-of native). More in [Running on a Mac](#running-on-a-mac-apple-silicon) below.
+Why Podman for the Mac GPU: Docker Desktop's default VM and Apple's own
+`container` tool can't reach the Metal GPU (Apple Silicon GPUs have no IOMMU, so
+there's nothing to "pass through"). A Podman **libkrun** machine paravirtualizes
+the GPU into the container as a Vulkan device — the verified way to GPU-accelerate
+a *container* on a Mac (~70–80% of native). More in
+[Running on a Mac](#running-on-a-mac-apple-silicon) below.
+
+**Docker as a GPU engine (experimental).** Docker gets the GPU only when its VM
+gives containers a GPU device: Docker Desktop on **Docker VMM**, or Docker Engine
+in a Lima/Colima VM with `vmType: krunkit`. The factory doesn't guess: **System →
+Check GPU access** starts a throwaway container on each engine with `--device
+/dev/dri` and saves each engine's answer in `config/gpu-probe.json`. When Docker's
+last check found a GPU render node the images can open, Docker counts as a Vulkan
+engine. The System page shows that its GPU came from the check, when it ran, and
+marks it experimental. When Docker's machine changes (a different system, kernel
+or daemon), the factory stops using that answer and asks you to check again;
+always check again after switching Docker's VM, since Docker Desktop can keep the
+same kernel. A Vulkan run that finds no GPU device clears it too. None of this has
+been confirmed with the factory's images yet; the steps to try it are in
+[GPU on a Mac](docs/concepts/02-gpu-on-mac.md#try-docker-vmm-experimental).
+
+**Two GPU engines.** When Docker and Podman both have the GPU, GPU builds go to the
+one with more memory (on a tie, Podman's verified path). A build you set to the
+other one under **Runs on** stays there. When the GPU engine is too small to
+compile the Vulkan image, the other engine compiles it and the image moves over,
+whichever way round.
 
 > You don't have to choose up front: the factory image bundles **both** the
 > `docker` and `podman` clients, and the start scripts mount whichever engines are
@@ -223,7 +245,9 @@ Requires Docker (Desktop on Windows/macOS, Engine on Linux). The *Run* action pi
 the GPU flags from the image automatically: `--gpus all` for **CUDA** (needs an
 NVIDIA GPU + the NVIDIA Container Toolkit, via WSL2 on Windows) and `--device
 /dev/dri` for **Vulkan** (needs a Podman libkrun machine on macOS, or `/dev/dri` on
-Linux). See [Choosing an engine & compute](#choosing-an-engine--compute).
+Linux; on Docker in a Mac VM only when the GPU check found a GPU there). Podman
+runs also get `--security-opt label=disable` and `seccomp=unconfined`; Docker
+doesn't need them. See [Choosing an engine & compute](#choosing-an-engine--compute).
 
 ## Running on a Mac (Apple Silicon)
 - **CPU container — supported and now native.** The factory builds a native
@@ -236,14 +260,21 @@ Linux). See [Choosing an engine & compute](#choosing-an-engine--compute).
   unsupported with no roadmap. The **CUDA image is NVIDIA-only**. *Direct* Metal
   passthrough into a Linux container is genuinely impossible. Docker Desktop runs
   its VM on **Apple Virtualization** by default, which has no GPU device at all —
-  run a Vulkan image there and the factory says so and points you to Podman.
+  run a Vulkan image there and the factory says so and points you to Podman or
+  Docker VMM.
   *Experimental, unverified:* Docker Desktop's other VM manager, **Docker VMM**
   (Settings → General → Virtual Machine Manager), has a `virtio-gpu` device with a
-  Vulkan host, so the factory's Vulkan image *might* work on it; and Docker Desktop
-  advertises an undocumented WebGPU device (`docker.com/gpu=webgpu`, API remoting to
-  the host's Dawn/Metal) that llama.cpp can't use yet (its WebGPU backend needs Dawn
-  in the container). **System → Check GPU access** shows what each engine gives
-  a container.
+  Vulkan host, so the factory's Vulkan image *might* work on it. To try it: pick
+  **Docker VMM** there and click **Apply & restart**, start the factory again
+  (`./scripts/macos/start.sh`), then **System → Check GPU access**. If Docker's
+  container got a usable GPU device, the factory builds and runs Vulkan images on
+  Docker too ([details](docs/concepts/02-gpu-on-mac.md#try-docker-vmm-experimental)).
+  Docker Engine in a Lima/Colima VM with `vmType: krunkit` works the same way: start
+  the factory with `FACTORY_DOCKER_SOCK=<that engine's socket>
+  ./scripts/macos/start.sh` (also untried). Docker Desktop also advertises an
+  undocumented WebGPU device (`docker.com/gpu=webgpu`, API remoting to the host's
+  Dawn/Metal) that llama.cpp can't use yet (its WebGPU backend needs Dawn in the
+  container).
 - **GPU container — possible via Podman + libkrun (krunkit), and the factory builds
   it for you.** The community route around the passthrough wall is
   paravirtualization: a `virtio-gpu` device plus a Vulkan→Metal (MoltenVK) bridge,
