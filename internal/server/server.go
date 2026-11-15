@@ -1068,7 +1068,7 @@ func (s *Server) handleTTS(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		writeJSON(w, resp.StatusCode, map[string]string{"error": "speech failed: " + upstreamError(b)})
+		writeJSON(w, resp.StatusCode, map[string]string{"error": upstreamError(b)})
 		return
 	}
 	w.Header().Set("Content-Type", "audio/wav")

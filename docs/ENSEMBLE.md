@@ -1,290 +1,372 @@
-# Ensemble — multimodal "super model" design
+# Ensembles
 
-This document is the **north-star spec** for the next phase of the factory: turning
-a set of single-purpose model images into one multimodal unit called an
-**Ensemble** — a tiny orchestrator (the **Conductor**) plus a roster of specialist
-models, presented to clients as a single OpenAI-compatible endpoint.
+An **Ensemble** combines single-purpose model images (chat, vision, speech in
+and out, image and video generation) into one unit with one OpenAI-compatible
+endpoint and, optionally, a persona that speaks in its own voice.
 
-It captures decisions already made so we build against a fixed target. It is a
-plan, not yet an implementation.
+No locally runnable model does chat, vision, speech and image or video
+generation by itself: image and video come from diffusion models, and speech
+from separate architectures. An Ensemble puts these specialists, its
+**members**, behind a small front door called the **Conductor**
+(`cmd/ensemblegate`). The Conductor starts each member when a request needs
+it, keeps the members under a memory budget, and routes each request.
+
+This page covers what is built, how to use it, and how it works. For a
+step-by-step check of a whole ensemble, see [ENSEMBLE-TEST.md](ENSEMBLE-TEST.md).
 
 ---
 
-## 1. What an Ensemble is
+## 1. Status
 
-> No single open, locally-runnable model covers chat **and** vision **and** speech
-> **and** image/video generation — image/video are diffusion models and speech is
-> a separate architecture. So instead of one omni-model, an Ensemble combines
-> specialists behind one front door.
+| Area | Status | Where |
+|---|---|---|
+| Compose from built images (one member per job) | ✅ built | Ensembles page, `internal/ensemble` |
+| Build into an image, export `.tar` | ✅ built: stages the Conductor module offline | `internal/builder/ensemble.go`, `docker/Dockerfile.ensemble` |
+| Run and stop from the Ensembles page | ✅ built: stopping removes the members too | `/api/ensembles/run`, `/api/ensembles/stop` |
+| Member lifecycle: start on demand, health check, states | ✅ built: stopped, starting, ready, failed, stopping | `cmd/ensemblegate/manager.go` |
+| Memory budget, LRU eviction, keep warm | ✅ built | same |
+| Recovery after a Conductor restart | ✅ built: adopts running members; a monitor marks dead ones failed | same |
+| **Agent routing**: the chat member is the brain, the others are its tools | ✅ built, the default | `cmd/ensemblegate/agent.go` |
+| Heuristic routing (keyword classifier) | ✅ built: the fallback | `cmd/ensemblegate/router.go` |
+| Tool-calling conductor (a small model picks one member) | ✅ built: optional | same |
+| Built-in agent tools for the brain (web search, fetch, files, skills) | ✅ built: off by default | ensemble `harness` field |
+| Persona on an ensemble (prompt applied to chat) | ✅ built | `/ensemble/config` |
+| Persona voice: built-in voice or a cloned voice | ✅ built | `internal/voice` |
+| Voice clips: record or upload, consent, transcript by STT | ✅ built | `/api/voices`, Personas page |
+| `/v1/chat/completions` with media in and out | ✅ built | Conductor |
+| `/v1/audio/transcriptions` | ✅ built: whisper.cpp and audio.cpp (Moonshine) | Conductor |
+| `/v1/audio/speech` in the persona's voice | ✅ built | Conductor |
+| Voice chain: speech → chat → speech | ✅ built | `/ensemble/voice-chat`, Playground mic |
+| Multi-step chains (draw, then animate, then say) | ✅ built through agent routing | the brain calls several tools in one turn |
+| Running ensembles in the factory's `/v1` gateway | ✅ built: listed as `ens-<id>` | `internal/server/harness.go` |
+| Playground: chat, mic, spoken replies, media inline | ✅ built | Playground |
+| Streaming speech (audio.cpp `stream_format`) | ◑ the request shape passes through; nothing plays it as it streams yet | `voice.SpeechRequest.StreamFormat` |
+| Real-time voice, live avatar | ⬜ not built (left room for: streaming speech, the Moonshine live endpoint) | — |
+| Video understanding (frame sampling) | ⬜ not built: a video sent to an ensemble isn't watched | §9 |
+| Embedded packaging (every runtime in one image) | ⬜ not built: `package_mode: "embedded"` runs orchestrated | — |
 
-A built Ensemble is the same kind of deliverable the factory already produces: a
-runnable image (plus `.tar` export) that speaks the OpenAI HTTP API. The
-difference is what's inside:
+Nothing above has been run against real models from this branch's tests:
+every member type is faked with an HTTP test server, and the member lifecycle
+runs against a fake engine CLI. [ENSEMBLE-TEST.md](ENSEMBLE-TEST.md) is the
+first real run.
+
+---
+
+## 2. Using an ensemble
+
+1. **Build the members.** On the Catalog page, build an image for each job you
+   want: a chat model (required), and any of vision, speech-to-text, speech,
+   image and video. Build them for **Docker**: the Conductor starts members with
+   Docker.
+2. **Make a persona** (optional) on the Personas page: a name, a prompt, and a
+   voice. For a cloned voice, record or upload 3 to 30 seconds of speech, tick
+   *"This is my voice, or I have permission to use it"*, and check the
+   transcript.
+3. **Compose the ensemble** on the Ensembles page: pick one image per slot, the
+   persona, the routing (Agent unless you have a reason), and a memory budget.
+4. **Build image.** It builds `local-llm/ens-<id>:latest`: the Conductor plus a
+   manifest of the members. The members' images aren't copied in.
+5. **Run.** The Conductor starts on a free port from 8200. Members start the
+   first time a request needs them (or at once, if marked *Keep warm*).
+6. **Open in Playground**, or call it through the gateway (§7).
+
+Changing the persona or its voice doesn't need a rebuild: the factory pushes
+them to the running Conductor. Changing members, routing, the budget or the
+built-in tools does.
+
+---
+
+## 3. How it fits together
 
 ```
-                 ┌──────────────── OpenAI-compatible front door ───────────────┐
-   client  ───▶  │  Conductor  (tiny router model, 0.6B–4B)                     │
-                 │    • detects input modality (image? audio? "draw…"? "say…")   │
-                 │    • picks tool(s) via function-calling                       │
-                 │    • stitches multi-step chains, returns one response         │
-                 └───────────────┬──────────────────────────────────────────────┘
-                                 │  ensureUp("image-gen") / route / ensureDown
-                    ┌────────────▼──────────────┐
-                    │  Manager  (VRAM-budgeted)  │   keeps a warm set; lazy-loads
-                    │  warm pool + LRU/TTL evict │   and evicts the rest on demand
-                    └─┬───┬────┬─────┬─────┬─────┘
-              chat-LLM  VLM  Whisper Piper SDXL   …video (gen + understanding)
+ Playground / any OpenAI client
+        │
+        ▼
+ factory  (:8799)  /api/chat/stream, /api/tts, /api/ensembles/voice-chat, /v1 gateway
+        │  pushes persona + voice (POST /ensemble/config), saves media to /api/media
+        ▼
+ Conductor  local-llm/ens-<id>  (:8200…, docker socket mounted)
+        │  routes: agent (chat member = brain) | heuristic | tool-calling
+        │  manager: start on demand, health check, budget, LRU eviction
+        ▼
+ members  ens-<id>-<tool>  (sibling containers on ephemeral 127.0.0.1 ports)
+   chat · see_image · transcribe · speak · generate_image · generate_video
 ```
 
-The **Conductor does not answer** — it classifies intent, calls the right
-specialist(s), and assembles the result. Example chain: *audio in → `transcribe`
-(Whisper) → `chat` (LLM) → `speak` (Piper) → audio out.*
+- The Conductor runs with the host Docker socket and
+  `host.docker.internal` (the factory's Run adds both for ensemble images). It
+  reaches members at `host.docker.internal:<port>`; set `MODEL_HOST` to change
+  that.
+- Members are named `ens-<ensemble id>-<tool>` and labelled
+  `local-llm.ensemble-member=<id>` and `local-llm.ensemble-tool=<tool>`. Each
+  publishes `127.0.0.1::8080` (an ephemeral port), unless the member pins one.
 
 ---
 
-## 2. Goals / non-goals
+## 4. Routing
 
-**Goals**
-- One endpoint that transparently handles chat, vision, STT, TTS, image gen,
-  video gen, and video understanding.
-- Specialists **spin up and down on the fly** so only what's needed occupies VRAM.
-- Built on the existing factory primitives (per-modality images, run/stop).
-- A **drop-in harness**: register a model + the tool it backs in a manifest; the
-  Conductor picks it up. No code change to add a capability.
+`routing` on the ensemble picks how a chat request reaches its members.
 
-**Non-goals (for now)**
-- Training/fine-tuning models. We only compose existing ones.
-- Multi-host / clustering. Single machine, single engine.
-- Guaranteed concurrency across all modalities at once (VRAM-bound — see §6).
+### Agent (default, `"agent"`)
 
----
+The **chat member is the brain**: a llama.cpp model that answers and calls the
+other members as tools, through `internal/agent` (the same agent loop as the
+llmgate harness). If there's no chat member, a vision member is the brain.
 
-## 3. Two package modes (one Conductor, two Manager backends)
+| Tool | Member | Notes |
+|---|---|---|
+| `generate_image` | `generate_image` | the image reaches the client directly; the brain is told it's attached |
+| `generate_video` | `generate_video` | same |
+| `speak` | `speak` | a clip in the persona's voice; not offered in voice chat (the reply is spoken anyway) |
+| `look_at_image` | `see_image` | offered only when the brain can't see images itself |
+| `search_web`, `fetch_url`, file tools, skills | built-in | only when the ensemble's `harness.tools` turns them on |
 
-The factory stays "dynamic enough" for both by hiding lifecycle behind a single
-**Manager interface** — `ensureUp(id)` / `ensureDown(id)` / `route(id, req)` —
-implemented two ways, chosen at build time:
+- Generated media never pass through the brain's context. They go to the
+  client out of band: `delta.media` (streaming) or `message.media`, plus a
+  markdown image or link in the text for clients that read only text.
+- The brain is leased per step, so the budget can evict it while an image
+  member works.
+- **Fallback.** If the brain's model refuses tools (its chat template has no
+  tool support: a 4xx/5xx mentioning tools, jinja or the template), that turn
+  is retried without tools; if the template can't do tools at all, the
+  ensemble switches to the heuristic for good and says so in its status
+  (`router_note`). A brain that isn't llama.cpp (`runtime` other than `cpp`)
+  routes with the heuristic from the start.
+- `"harness": false` in a chat request skips the agent and passes the request
+  straight to the chat member.
+- The shell tool is refused for ensembles: the Conductor controls Docker on
+  this machine.
 
-| Mode | Image contents | Lifecycle backend | When |
-|---|---|---|---|
-| **Embedded (mega)** *(default)* | Conductor + every selected runtime + all weights | supervises specialist **processes** inside the one container | a single portable artifact, fixed roster |
-| **Orchestrated (bundle)** | Conductor + Manager + manifest only | starts/stops **sibling containers** via the host engine (same Docker-out-of-Docker the factory uses today) | small image, swap specialists without rebuild |
+### Heuristic (`"heuristic"`)
 
-The Conductor's logic, tool-calling, and request flow are identical in both modes
-— only the Manager backend differs. The Ensemble builder exposes a **Package
-mode** toggle.
+A keyword classifier: an image part goes to vision; "draw…/an image of…" to
+image generation; "make a video…" to video; "say…/read this aloud" to speech;
+everything else to chat.
 
-Trade-offs: Embedded is large (tens of GB, all weights on disk) but truly
-self-contained; Orchestrated is small and flexible but needs the host Docker
-socket and the specialist images present on the host.
+### Tool-calling (`"tool-calling"`)
 
----
+A small extra model (`conductor`, run as the `_conductor` member) picks one
+member per request; if it can't decide, the heuristic's choice stands.
 
-## 4. The Conductor (tiny router)
-
-- A small, fast model (target **0.6B–4B**, e.g. `qwen3-4b`) whose only job is
-  **intent → tool-call**. It never composes long answers.
-- Two routing strategies, evolving:
-  1. **Heuristic** (P1): branch on concrete input signals — an image part → VLM;
-     an audio part → Whisper; text like *"generate/draw an image"* → SDXL; etc.
-  2. **Tool-calling LLM** (P3): the Conductor is given the tool registry and emits
-     real function calls, enabling multi-step chains and ambiguous routing.
-- Sees only enough to route (modality + a short intent), then hands off. Keeps it
-  cheap and always-warm.
+The response header `X-Ensemble-Route` says which route answered (`agent`, or
+the member tool).
 
 ---
 
-## 5. Tool registry / manifest (the harness)
+## 5. Members and their lifecycle
 
-A declarative manifest maps **tool → specialist**, and is the entire "drop a model
-in and give it tools" mechanism:
+| State | Meaning |
+|---|---|
+| `stopped` | not running; the next request that needs it starts it |
+| `starting` | its container runs; waiting for its health check |
+| `ready` | answering |
+| `failed` | the last start failed: `error` says why (with the container's last log lines); the next request retries |
+| `stopping` | being removed (evicted, or stopped on request) |
+
+- **Health check.** `GET /health`: 200 is ready, 502/503 still loading. A 404
+  (servers without `/health`, such as sd-server) falls back to `GET /`, where
+  any answer below 500 counts. A start that isn't healthy within 8 minutes
+  fails.
+- **Budget.** Each member counts its `vram_gb` (filled from the catalog when
+  you save: `min_vram_gb` on a GPU, `min_ram_gb` on CPU). Starting a member
+  that doesn't fit stops the least recently used idle, unpinned members. A
+  member busy with a request is never evicted, and one bigger than the whole
+  budget fails with a message saying so.
+- **Keep warm** (`pinned`): started when the Conductor starts, never evicted.
+- **Concurrent requests** for a stopped member start it once; every request
+  waits for that one start. Stopping a member during its start cancels it, and
+  the waiting requests get that outcome instead of restarting it.
+- **Restart.** A restarted Conductor adopts members still running (by label),
+  waits for their health, and a monitor (every 15 s) marks members whose
+  container died as `failed`.
+- **Stop.** Stopping the ensemble (Ensembles page, or Stop on its container)
+  removes its members too. `docker stop` on the Conductor does the same.
+
+---
+
+## 6. Personas and the voice contract
+
+A persona is `{id, name, prompt, voice?}` in `config/personas.json`. On an
+ensemble, its prompt comes first in every chat (merged with the client's own
+system message) and its voice is used for all speech.
+
+### Voices
+
+```jsonc
+{ "kind": "" }                               // the speech member's default voice
+{ "kind": "builtin", "name": "alba" }        // one of the speech member's voices
+{ "kind": "clone", "clip": "v-0123456789ab" } // a clip in the voice store
+```
+
+### Clips
+
+- A **clip** is 3 to 30 seconds of one person speaking, plus its transcript.
+- Stored in `config/voices/` as `<id>.wav` and `<id>.json`: files `0600`,
+  folder `0700`, git-ignored. Stored as 16-bit mono WAV at 48 kHz or less.
+- Uploaded or recorded on the Personas page (or in the ensemble editor). The
+  consent box, "This is my voice, or I have permission to use it", must be
+  ticked; the time it was ticked is kept (`consent_at`, unix ms).
+- The transcript is filled in by speech-to-text (the ensemble's, or any running
+  speech-to-text model) and stays editable.
+- **Clips never leave the machine.** They aren't baked into images or
+  exported. The factory sends a clip only to a Conductor running on this
+  machine, which holds it in memory and sends it only to its own speech member.
+- Deleting a clip resets the personas that used it to the default voice.
+
+| Endpoint | Does |
+|---|---|
+| `GET /api/voices` | `{voices: [{id, name, transcript, seconds, sample_rate, created_at, consent_at}]}` |
+| `POST /api/voices` | multipart `file`, `name`, `transcript`, `consent=true` |
+| `POST /api/voices/update` | `{id, name?, transcript?}` |
+| `POST /api/voices/delete` | `{id}` |
+| `GET /api/voices/audio?id=` | the WAV (`Cache-Control: no-store`) |
+| `POST /api/voices/transcribe` | `{id, ensemble?}` → `{text, source}`; 409 when no speech-to-text is running |
+
+### Speech requests
+
+`POST /v1/audio/speech` on an ensemble:
 
 ```jsonc
 {
-  "tools": [
-    { "name": "chat",           "model": "qwen3-8b",        "modality": "text",   "schema": {…} },
-    { "name": "see_image",      "model": "qwen2.5-vl-7b",   "modality": "vision", "schema": {…} },
-    { "name": "transcribe",     "model": "whisper-large-v3","modality": "audio-stt" },
-    { "name": "speak",          "model": "piper-en-us",     "modality": "tts" },
-    { "name": "generate_image", "model": "sdxl-turbo",      "modality": "image" },
-    { "name": "generate_video", "model": "<tbd>",           "modality": "video" },
-    { "name": "watch_video",    "model": "qwen2.5-vl-7b",   "modality": "vision", "via": "frame-shim" }
-  ]
+  "model": "ens-helper",          // any value on the Conductor itself
+  "input": "Hello there.",
+  "voice": "",                    // "", "default", "persona" or a stock OpenAI name ("alloy"…) = the persona's voice;
+                                  // any other name = that built-in voice of the speech member
+  "response_format": "wav",
+  "speed": 1.0,
+  "ref_audio": "<base64 WAV>",    // optional: clone this clip instead (overrides the persona)
+  "ref_text": "what the clip says"
 }
 ```
 
-Adding a capability = adding a row + ensuring the backing image exists. The
-Conductor's tool list and the Manager's roster both derive from this manifest.
+The answer is `audio/wav`, with `X-Ensemble-Voice: clone` or
+`builtin:<name>`. The Conductor maps the request to the speech member's own
+shape in one place, `internal/voice/adapters.go`:
 
----
-
-## 6. VRAM budget + eviction (the hard constraint)
-
-On a 12 GB GPU you **cannot** run every specialist at once. The Manager enforces a
-budget:
-
-- **Warm set**: keep the Conductor (+ usually the chat LLM) resident.
-- **Lazy-load** any other specialist on first use; **evict** by **LRU/TTL** when
-  the budget is exceeded or after an idle timeout.
-- Each manifest entry carries an estimated VRAM cost (reuse the catalog's
-  `min_vram_gb`). The Manager admits/evicts to stay under budget.
-- Trade-off surfaced to the user: cold-start latency (a few seconds to load a
-  model) vs. memory. Frequently-paired specialists can be pinned warm.
-
----
-
-## 7. Modalities & specialists
-
-| Capability | Tool | Specialist (today) | Runtime |
-|---|---|---|---|
-| Chat / code / reasoning | `chat` | catalog text models | llama.cpp |
-| Image understanding | `see_image` | Qwen2.5-VL, Gemma-3-vision | llama.cpp + mmproj |
-| Speech → text | `transcribe` | Whisper | whisper.cpp |
-| Text → speech | `speak` | Piper | piper |
-| Image generation | `generate_image` | SDXL / SD | stable-diffusion.cpp (sd-server) |
-| **Video generation** | `generate_video` | Wan 2.2 / LTX (new) | stable-diffusion.cpp (same runtime — see §9) |
-| **Video understanding** | `watch_video` | any VLM + frame shim | *see §8* |
-
----
-
-## 8. Video understanding — the frame-sampling shim
-
-Native video VLMs exist (Qwen2.5-VL takes video; MiniCPM-V, LLaVA-Video), and they
-all internally **sample frames and feed them as an image sequence**. We do the same
-in an **llmgate-style shim**, so *any* VLM becomes video-capable and we control the
-sampling:
-
-1. Intercept a video input on the way to the VLM.
-2. **ffmpeg** decodes the video.
-3. **Smart-sample** frames instead of all of them:
-   - **Uniform** — ~1 fps or N evenly-spaced frames; or
-   - **Adaptive keyframes** — keep frames where the scene actually changes
-     (frame-diff / SSIM / perceptual-hash above a threshold), drop near-duplicates.
-   - **Cap at K** (e.g. 8–16) to fit the VLM's context; optionally tag each frame
-     with its timestamp.
-4. Send as a single multi-image message: *"ordered frames from a video…"*.
-
-This reuses the exact injection pattern of the system-prompt shim and isn't tied
-to any one model.
-
----
-
-## 9. Video generation — reuses the existing diffusion runtime
-
-**Key finding (June 2026):** `stable-diffusion.cpp` — the *same* `sd-server` the
-factory already uses for SDXL image gen — now supports **video** models
-(**Wan 2.1 / 2.2**, **LTX-2.3**) via **GGUF** weights on the ggml backend. So video
-gen needs **no ComfyUI / no Python** — it stays in the zero-Python C++/GGUF design.
-
-**Verified build shape (from the sd.cpp docs):**
-
-- Video runs through the **`sd-cli` binary, not `sd-server`** (which is image-only
-  today). So the `video` runtime invokes the CLI per request and returns the file
-  — a new entrypoint, not the existing HTTP image server.
-- Wan 2.2 is **multi-file** — it needs **four** weights: high-noise + low-noise
-  diffusion GGUFs, a VAE (`wan_2.1_vae.safetensors`), and a umt5 T5 encoder GGUF.
-  → **the catalog schema must grow** beyond single-file (+ mmproj) to a list of
-  weight files per model, and the downloader/Dockerfile must fetch/bake all of them.
-- Exact T2V invocation (Q8_0 shown; use Q4 + offload for 12 GB):
-  ```
-  sd-cli -M vid_gen \
-    --diffusion-model Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf \
-    --high-noise-diffusion-model Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf \
-    --vae wan_2.1_vae.safetensors --t5xxl umt5-xxl-encoder-Q4_K_M.gguf \
-    -p "<prompt>" -W 832 -H 480 --video-frames 33 \
-    --steps 10 --cfg-scale 3.5 --sampling-method euler --flow-shift 3.0 \
-    --diffusion-fa --offload-to-cpu -o out.<fmt>
-  ```
-- Pieces: new **`video`** modality, multi-file catalog support, a CLI-driven video
-  runtime image, a `/api/video/generate` endpoint, and a chat `video` modality.
-
-**Reality check:** this is a *real* new workstream (CLI runtime + multi-file
-catalog + ~15 GB of Wan weights), and it can only be smoke-tested on the GPU box.
-Build it as a focused effort with a generation test on the 4070 — not blind.
-
-**Models for 12 GB** (verify quant/VRAM at build time):
-- **Wan 2.2** — quality pick; 14B at **Q4_K_M GGUF + T5 CPU-offload ≈ 6–8 GB @ 480p**;
-  lighter **5B TI2V (8–12 GB)** and **1.3B (4–6 GB)** variants.
-- **LTX-Video / LTX-2** — fast/efficient; LTX-2.3 also does audio+video in one pass.
-- **CogVideoX-2B** — lightweight fallback.
-- Skip **HunyuanVideo / Mochi-1** (need ~24 GB).
-
----
-
-## 10. The Ensemble builder (UI)
-
-A dedicated **Ensembles** page in the factory:
-
-- Pulls from **existing built images** (the specialists you've already made).
-- Pick a **Conductor** (tiny model) + check which specialists/tools to include.
-- **Package mode** toggle (Embedded / Orchestrated) + VRAM budget + warm-set pins.
-- Builds and exports the Ensemble like any other image (`.tar`).
-- "Conductor" is the orchestrator; the bundle is the "Ensemble".
-
----
-
-## 11. Phased roadmap
-
-| Phase | Deliverable | Status |
+| Runtime | Adapter | Clone request |
 |---|---|---|
-| **P1** | Conductor **router MVP** — one OpenAI endpoint dispatching by input type. | ✅ built (heuristic classify in `ensemblegate`) |
-| **P2** | **Manager** — on-demand `ensureUp`/`ensureDown` + VRAM budget + LRU eviction. | ✅ built (orchestrated mode) |
-| **P3** | **Tool-calling Conductor** — model-driven routing; chains. | ◑ tool-calling hook built (heuristic fallback); multi-step chains TODO |
-| **P4** | **Ensembles builder page** — compose from images, package-mode toggle. | ✅ built |
-| **P5** | **Export** the Ensemble as a runnable artifact (`.tar`). | ✅ built (reuses image export) |
-| **Video gen** | `video` modality + multi-file catalog + sd-cli runtime. | ✅ built (compile-verified; GPU smoke-test pending) |
-| **Video understanding** | ffmpeg frame-sampling shim. | ⬜ not started |
-| **Embedded (mega)** | bake all runtimes into one image. | ⬜ data model + toggle present; runtime is orchestrated only |
+| `audiocpp` (Pocket TTS, Qwen3-TTS, VoxCPM2, Ming, XTTS v2) | `audioCpp` | `{"model":"tts","input",…,"voice_ref":{"type":"base64","data":…},"reference_text"?}`; never `voice` with `voice_ref`; a clip over 5 MiB is re-encoded to 24 kHz 16-bit; streaming: `"response_format":"pcm"` plus `"stream_format":"sse"` or `"audio"` |
+| `python` (Kokoro) | `pygate` | can't clone |
+| `cpp` (Piper) | `piper` | can't clone |
+
+The clone rules come from the catalog (copied onto the member when the
+ensemble is saved): `voice_clone`, `clone_needs_transcript` (Qwen3-TTS Base),
+and *clone only* (no built-in voices: Qwen3-TTS Base, XTTS v2). A voice the
+speech member can't speak is refused with a sentence that says what to change:
+
+- "the speech member (…) can't clone voices: … Give the persona a built-in voice, or make a voice-cloning model … the ensemble's speech member"
+- "the speech member (…) needs the voice clip's transcript to clone it: …"
+- "the speech member (…) has no built-in voices: it only speaks a cloned voice. …"
+
+The Ensembles page shows the same sentence (`voice_error`) before you try.
+
+### How the persona reaches the Conductor
+
+The persona and voice are never baked into the image. The factory pushes
+`{hash, persona: {id, name, prompt}, voice: {kind, name | clip, ref_audio,
+ref_text}}` to `POST /ensemble/config` on the running Conductor, which keeps
+it in memory. It pushes when the Conductor starts, and before chat, speech,
+voice chat and gateway requests whenever the hash the Conductor reports
+differs from the saved persona's. A restarted Conductor gets it again with
+the next request.
 
 ---
 
-## 12. Open questions / risks
+## 7. Endpoints
 
-- **Conductor reliability**: tiny models route adequately with heuristics; true
-  tool-calling may need a 4B+ that follows a tool schema reliably.
-- **Embedded image size**: a full-modality mega image is tens of GB. Acceptable as
-  the user's explicit default, but document the cost.
-- **Cold-start UX**: lazy-loading adds latency on first use of a modality; needs a
-  "warming…" signal in responses.
-- **Video gen at 12 GB**: likely the most constrained piece; may ship as a
-  best-effort, low-res capability first.
+### The Conductor (port 8200…, or through the factory)
+
+| Endpoint | Does |
+|---|---|
+| `POST /v1/chat/completions` | chat; images in (`image_url`), audio in (`input_audio`, transcribed first); media out |
+| `POST /v1/audio/transcriptions` (also `/inference`) | speech to text: multipart `file`, `language?` |
+| `POST /v1/audio/speech` | text to speech in the persona's voice (§6) |
+| `POST /ensemble/voice-chat` | the chain: multipart `file`, `messages` (JSON history), `language?` → `{transcript, route, reply: {content, media}, audio, speech_error?, timings}` |
+| `GET /ensemble/status` | the members and their states, routing, budget, persona |
+| `POST /ensemble/members` | `{tool, action: "start" | "stop"}` |
+| `POST /ensemble/config` | the persona and voice (from the factory) |
+| `GET /v1/models`, `GET /v1/harness`, `GET /health` | |
+
+While a member starts or media generate, a streaming chat sends SSE comments
+such as `: ensemble: Starting the image member (sdxl-turbo)…`, which clients ignore and the
+Playground shows.
+
+### The factory
+
+| Endpoint | Does |
+|---|---|
+| `GET/POST /api/ensembles`, `POST /api/ensembles/delete` | saved ensembles; a new one whose name is taken is refused (409) |
+| `POST /api/ensemble/build` | `{id}`: queue the image build |
+| `GET /api/ensembles/status` | per ensemble: `built`, `running`, the Conductor's status (`gate`), `gate_error`, `voice_error` |
+| `POST /api/ensembles/run`, `/api/ensembles/stop` | `{id}` |
+| `POST /api/ensembles/member` | `{id, tool, action}` |
+| `POST /api/ensembles/voice-chat` | multipart `file`, `port`, `messages`; media and audio come back as `/api/media/…` URLs |
+
+### The `/v1` gateway
+
+A running ensemble is listed in the factory's gateway (`GET /v1/models`) as
+`ens-<id>`, with `local_llm.modality: "ensemble"`; its members aren't listed.
+Through the gateway key you can call `/v1/chat/completions`,
+`/v1/audio/speech` and `/v1/audio/transcriptions` on it:
+
+```sh
+KEY=…   # the gateway key on the Harness page
+curl -s localhost:8799/v1/chat/completions -H "Authorization: Bearer $KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"ens-helper","messages":[{"role":"user","content":"Draw a lighthouse at night"}]}'
+
+curl -s localhost:8799/v1/audio/speech -H "Authorization: Bearer $KEY" \
+  -H 'Content-Type: application/json' -d '{"model":"ens-helper","input":"Hello"}' -o hello.wav
+
+curl -s localhost:8799/v1/audio/transcriptions -H "Authorization: Bearer $KEY" \
+  -F model=ens-helper -F file=@question.wav
+```
+
+`/v1/completions` and `/v1/embeddings` are refused for ensembles.
 
 ---
 
-## 13. Implementation status (as built — compile-verified, GPU smoke-test pending)
+## 8. Building
 
-Everything below compiles (`go build ./...`, `node --check`) but has **not** been
-run on a GPU. Treat the GPU-gated items as drafts to smoke-test, not finished.
+`internal/builder/ensemble.go`:
 
-**Video generation**
-- Catalog multi-file schema: `ExtraFiles []WeightFile` in `internal/catalog/catalog.go`.
-- Downloader + build-context staging + manifest: `internal/builder/builder.go`
-  (`EnsureExtraFiles`, the `video` family block, `stageVideogate`).
-- Runtime: `cmd/videogate/main.go` (HTTP wrapper round the `sd` CLI),
-  `docker/Dockerfile.video.cuda` + `.cpu`.
-- Endpoint: `/api/video/generate` (`internal/server/server.go`).
-- UI: a `video` modality in chat (icon, `genVideo`, `<video>` bubble, settings).
-- Catalog entry: `wan2.2-t2v-a14b` (both catalog JSONs).
-- **Gates to verify on GPU:** the four weight URLs (VAE/T5 are best-guess), the
-  `SDCPP_REF` tag (must include `vid_gen`), `-DSD_CUDA=ON`, the `sd`/`sd-cli`
-  binary name (auto-detected), and the output container (auto-detected). Tune the
-  CLI live via the `EXTRA_ARGS` container env without a rebuild.
+- `EnsembleManifest` normalizes and validates the ensemble, fills the harness
+  (workspace `/workspace`, skills `/etc/ensemblegate/skills`), keeps only
+  pinned member ports, and adds the `_conductor` member for tool-calling.
+- The build stages `cmd/ensemblegate` with `internal/ensemble`,
+  `internal/voice` and `internal/agent` (all standard library only) as a small
+  Go module, plus `manifest.json` and `harness/`, and builds
+  `docker/Dockerfile.ensemble` offline (`GOPROXY=off`).
+- Labels: `local-llm.kind=ensemble`, `local-llm.ensemble=<id>`,
+  `local-llm.modality=ensemble`, `local-llm.model=` (empty, so the container
+  lists), compute and engine.
 
-**Ensemble (Conductor)**
-- Shared model + store: `internal/ensemble/ensemble.go` (config/ensembles.json).
-- Conductor runtime: `cmd/ensemblegate/main.go` — heuristic routing, optional
-  model tool-calling, VRAM-budgeted LRU lifecycle (orchestrated: `docker run/rm`
-  sibling specialists), OpenAI passthrough for chat/vision, media-as-data-URL for
-  image/video/tts.
-- Build: `Builder.BuildEnsemble` + `docker/Dockerfile.ensemble` (Conductor +
-  docker CLI + baked manifest). Run mounts the docker socket for ensemble images.
-- API: `/api/ensembles` (CRUD), `/api/ensembles/delete`, `/api/ensemble/build`.
-- UI: the **Ensembles** page (compose from built images, package-mode/routing/VRAM,
-  build into an image with a live log).
-- **Gates to verify on GPU:** the Conductor reaching specialists via
-  `host.docker.internal`, the docker-in-docker socket permissions, health-probe
-  paths per specialist (`/health`), and media return semantics for external clients.
+---
 
-**Known TODO (not yet built):** embedded/mega runtime (only orchestrated runs),
-multi-step tool chains (e.g. STT→chat→TTS), the video-understanding frame shim,
-and warm-set pinning in the Manager.
+## 9. Not built yet
+
+- **Video understanding.** Planned as a frame-sampling shim: decode with
+  ffmpeg, keep 8 to 16 frames (uniform, or where the scene changes), and send
+  them to the vision member as ordered images with timestamps. Today a video
+  sent to an ensemble isn't watched.
+- **Embedded packaging.** Every runtime and weight in one image. The data model
+  keeps `package_mode`, but the Conductor runs orchestrated.
+- **Real-time voice and a live avatar.** Room has been left for them: speech
+  requests carry `stream_format` for audio.cpp's streaming mode, and
+  Moonshine's `/v1/audio/transcriptions/live` is untouched. Neither is wired to
+  the Playground.
+
+---
+
+## 10. Files
+
+| File | What |
+|---|---|
+| `internal/ensemble/ensemble.go` | the Ensemble model and store (`config/ensembles.json`), validation, routing modes, `HarnessConfig` |
+| `internal/ensemble/wire.go` | factory ↔ Conductor types: labels, states, `Config`, `Status`, `Media` |
+| `internal/voice/` | the voice contract, clip store, WAV handling, speech adapters |
+| `cmd/ensemblegate/` | the Conductor: `gate.go` (HTTP), `agent.go` (agent routing), `router.go` (heuristic, tool-calling), `manager.go` (lifecycle), `members.go` (calls to members), `persona.go` |
+| `internal/builder/ensemble.go` | manifest, staging, build, member cleanup |
+| `internal/server/ensembles.go`, `voices.go`, `personas.go` | the factory API |
+| `ui/src/pages/Ensembles.svelte`, `ui/src/components/ensembles/` | the Ensembles page |
+| `ui/src/components/personas/VoiceEditor.svelte` | voice picking and clip recording |
