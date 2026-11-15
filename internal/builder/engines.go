@@ -183,6 +183,9 @@ type SysInfo struct {
 	DefaultCompute string `json:"default_compute"`
 	// CompileMinGB is the least engine memory a from-source build needs, per compute.
 	CompileMinGB map[string]float64 `json:"compile_min_gb"`
+	// HostMemGB is the computer's own memory (GiB), which both engine VMs
+	// share; 0 when the factory can't tell (see HostMemGB).
+	HostMemGB float64 `json:"host_mem_gb,omitempty"`
 }
 
 // engineGPU maps FACTORY_GPU onto the engine that provides it: start.sh sets
@@ -204,7 +207,7 @@ func engineGPU(factoryGPU, engine string) string {
 // VRAM from FACTORY_VRAM.
 func (b *Builder) SysInfo(ctx context.Context) SysInfo {
 	factoryGPU := os.Getenv("FACTORY_GPU")
-	si := SysInfo{CompileMinGB: CompileFloors()}
+	si := SysInfo{CompileMinGB: CompileFloors(), HostMemGB: HostMemGB(ctx)}
 	if v, err := strconv.ParseFloat(os.Getenv("FACTORY_VRAM"), 64); err == nil {
 		si.VRAMGB = v
 	}

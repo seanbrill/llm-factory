@@ -7,7 +7,7 @@
 // (how this Mac's memory could be split between the two engine machines) and
 // the engines' versions from /readyz.
 import { post } from "./api";
-import { loadSysInfo } from "./stores";
+import { loadSysInfo, sysinfo } from "./stores";
 import { engineName } from "./format";
 import { DOCKER_MEMORY_PATH } from "./explain";
 import type { EngineResources, GPUProbe, Model, SysInfo } from "./types";
@@ -162,7 +162,7 @@ export function engineTitle(engine: string, si: SysInfo | null = null): string {
   return /docker desktop/i.test(sys) || (!sys && isMac(si)) ? "Docker Desktop" : "Docker";
 }
 
-// ---- this Mac's memory (the user tells us; the API can't see the host) -------------
+// ---- this Mac's memory (from the factory when it knows, else the user tells us) ----
 
 const HOST_KEY = "llmfactory.hostmem.v1";
 
@@ -175,7 +175,17 @@ function readHost(): number | null {
   }
 }
 
-export const hostMem = $state({ gb: readHost() });
+export const hostMem = $state({ gb: readHost(), detected: false });
+
+// The factory knows the machine's memory when its start script passed it in
+// (FACTORY_HOST_MEM_BYTES) or it runs natively; that beats a typed-in number.
+sysinfo.subscribe((si) => {
+  const v = si?.host_mem_gb;
+  if (v && v > 0) {
+    hostMem.gb = Math.round(v);
+    hostMem.detected = true;
+  }
+});
 
 export function setHostMem(v: number | null) {
   hostMem.gb = v && isFinite(v) && v > 0 ? v : null;

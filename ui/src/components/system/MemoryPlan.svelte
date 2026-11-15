@@ -2,8 +2,8 @@
   // Memory plan (sheet frame f13): Docker's VM and the Podman machine both take
   // their memory from this Mac. Shows how it's split today and two other ways
   // to split it, with the host commands for each. The factory never changes
-  // engine memory itself. The Mac's own memory isn't visible to the factory (it
-  // runs inside Docker), so the user enters it once.
+  // engine memory itself. The Mac's own memory comes from the factory when its
+  // start script passed it in; otherwise the user enters it once.
   import Icon from "../Icon.svelte";
   import CodeLine from "../CodeLine.svelte";
   import { catalog, sysinfo } from "../../lib/stores";
@@ -107,7 +107,7 @@
   <span class="sub">
     {#if mp.host}{mp.host} GB to share between {mac ? "macOS" : "the system"} and {twoEngines ? "two engines" : "Docker"}{:else}{twoEngines ? "Both engines take" : "Docker takes"} their memory from {here}{/if}
   </span>
-  {#if mp.host && !editing}
+  {#if mp.host && !editing && !hostMem.detected}
     <div class="sp"><button class="ghost small" onclick={() => ((draft = mp.host), (editing = true))}>Change</button></div>
   {/if}
 </div>
@@ -122,7 +122,7 @@
       {#if editing}<button class="small ghost" type="button" onclick={() => ((editing = false), (hostErr = ""))}>Cancel</button>{/if}
     </div>
     {#if hostErr}<p class="err" role="alert">{hostErr}</p>{/if}
-    <p class="note" id="hostmem-how">The factory runs inside Docker and can't see it. This prints it:</p>
+    <p class="note" id="hostmem-how">The factory runs inside Docker and can't see it (restarting it with the current start script fixes that). This prints it:</p>
     <CodeLine cmd={hostMemCmd(si)} />
   </form>
 {/if}

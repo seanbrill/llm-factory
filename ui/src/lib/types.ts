@@ -59,6 +59,7 @@ export interface SysInfo {
   default_engine?: string;  // build form defaults for this machine
   default_compute?: string;
   compile_min_gb?: Record<string, number>; // compute -> least engine memory to compile
+  host_mem_gb?: number; // the computer's own memory (GiB), when the factory can tell
 }
 
 // Build queue (/api/builds). Mirrors internal/server/buildqueue.go.
