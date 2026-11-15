@@ -1,113 +1,534 @@
-/* Global theme + base element styles. Everything component-specific lives in the
-   component's own scoped <style>. Ported from the vanilla style.css :root + base. */
+/* LLM Factory design system ("Forge"): the knitted design sheet
+   ds_01M7EKYBPS2BQ57JNQHB, frame f19 "Foundations and components".
+
+   Tokens come in three layers:
+   1. Swatch: the brand's colours and fonts (--color-*, --font-*).
+   2. Semantic: what the UI uses (--cv canvas, --ink text, --p1..3 surfaces,
+      --ln lines, --mu/--fa muted text, --pr primary, and the FIXED status and
+      GPU colours, which mean the same thing whatever the swatch).
+   3. Legacy aliases (--bg, --card, --border, --text, --muted, --accent, …) so
+      pages written for the old theme pick up this one unchanged.
+
+   Shared component classes (.btn, .chip, .card, .bar, .eng, .kbd, …) are global;
+   page layout lives in each component's scoped <style>. */
+@import "./fonts.css";
+
 :root {
-  --bg: #0f1115;
-  --card: #181b22;
-  --border: #272b35;
-  --text: #e6e8ee;
-  --muted: #9aa3b2;
-  --accent: #4f8cff;
-  --accent-2: #2b6bff;
-  --ok: #3fb950;
-  --err: #f85149;
+  color-scheme: dark;
+
+  /* 1. Swatch */
+  --color-primary: #df5a0f;
+  --color-secondary: #17110b;
+  --color-accent: #ffb347;
+  --color-neutral: #ebdfd2;
+  --color-background: #fffbf6;
+  --color-on-primary: #17110b;
+  --font-display: "Bricolage Grotesque", "Geist", system-ui, sans-serif;
+  --font-body: "Geist", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* 2. Semantic */
+  --cv: var(--color-secondary);
+  --ink: var(--color-background);
+  --p1: color-mix(in srgb, var(--ink) 4%, var(--cv));
+  --p2: color-mix(in srgb, var(--ink) 7%, var(--cv));
+  --p3: color-mix(in srgb, var(--ink) 11%, var(--cv));
+  --ln: color-mix(in srgb, var(--ink) 10%, var(--cv));
+  --ln2: color-mix(in srgb, var(--ink) 18%, var(--cv));
+  --mu: color-mix(in srgb, var(--ink) 72%, var(--cv));
+  --fa: color-mix(in srgb, var(--ink) 55%, var(--cv));
+  --pr: var(--color-primary);
+  --onpr: var(--color-on-primary);
+  --prs: color-mix(in srgb, var(--color-primary) 16%, var(--cv));
+  --ac: var(--color-accent);
+  --gpu: #4cc9f0;
+  --gpus: color-mix(in srgb, #4cc9f0 14%, var(--cv));
+  --ok: #3ecf8e;
+  --oks: color-mix(in srgb, #3ecf8e 14%, var(--cv));
+  --wa: #f5b13d;
+  --was: color-mix(in srgb, #f5b13d 14%, var(--cv));
+  --er: #ff6b6b;
+  --ers: color-mix(in srgb, #ff6b6b 14%, var(--cv));
+  --r: 10px;   /* controls */
+  --rs: 7px;   /* nav items, small pieces */
+  --rl: 14px;  /* cards */
+  --shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+
+  /* 3. Legacy aliases (old theme names) */
+  --bg: var(--cv);
+  --card: var(--p1);
+  --border: var(--ln);
+  --text: var(--ink);
+  --muted: var(--mu);
+  --accent: var(--pr);
+  --accent-2: var(--pr);
+  --err: var(--er);
 }
+
 * {
   box-sizing: border-box;
 }
+html {
+  -webkit-text-size-adjust: 100%;
+}
 body {
   margin: 0;
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--cv);
+  color: var(--ink);
+  font: 14px/1.45 var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 h1 {
-  margin: 0;
-  font-size: 24px;
-  letter-spacing: 0.3px;
+  font-size: 21px;
 }
 h2 {
-  margin: 0 0 14px;
   font-size: 16px;
+  margin: 0 0 14px;
+}
+h3 {
+  font-size: 15px;
+}
+p {
+  margin: 0;
 }
 a {
-  color: var(--accent);
+  color: var(--pr);
   text-decoration: none;
 }
+a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+code,
+kbd,
+pre,
+.mono {
+  font-family: var(--font-mono);
+}
+.mono {
+  font-size: 12.5px;
+}
+::selection {
+  background: color-mix(in srgb, var(--pr) 40%, transparent);
+}
+:focus-visible {
+  outline: 2px solid var(--pr);
+  outline-offset: 2px;
+}
+
+/* ---- form controls ---------------------------------------------------------- */
 input,
 select,
 textarea {
-  background: #0c0e13;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 9px 11px;
-  font: inherit;
   width: 100%;
+  background: var(--p1);
+  color: var(--ink);
+  border: 1px solid var(--ln2);
+  border-radius: var(--r);
+  padding: 8px 11px;
+  font: inherit;
+  font-size: 13.5px;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--fa);
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--pr);
+  box-shadow: 0 0 0 3px var(--prs);
+}
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  accent-color: var(--pr);
+}
+input[type="range"] {
+  padding: 0;
+  border: 0;
+  background: none;
+  accent-color: var(--pr);
+  box-shadow: none;
 }
 textarea {
   resize: vertical;
 }
-button {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 9px 16px;
-  font: inherit;
+label {
+  font-size: 13px;
+}
+
+/* ---- buttons: <button> defaults and the .btn class (anchors too) ------------- */
+button,
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: var(--r);
+  border: 1px solid var(--ln2);
+  background: var(--p2);
+  color: var(--ink);
+  font: 500 13px/1.2 var(--font-body);
+  white-space: nowrap;
   cursor: pointer;
-  background: #20242e;
-  color: var(--text);
+  text-decoration: none;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
-button:hover {
-  border-color: var(--accent);
+button:hover,
+.btn:hover {
+  background: var(--p3);
+  border-color: color-mix(in srgb, var(--ink) 26%, var(--cv));
+  text-decoration: none;
 }
-button:disabled {
+button:disabled,
+.btn[aria-disabled="true"] {
   opacity: 0.5;
-  cursor: progress;
+  cursor: not-allowed;
 }
-button.primary {
-  background: var(--accent-2);
-  border-color: var(--accent-2);
-  color: #fff;
+button.primary,
+.btn.pri {
+  background: var(--pr);
+  border-color: var(--pr);
+  color: var(--onpr);
+  font-weight: 600;
 }
-button.primary:hover {
-  background: var(--accent);
+button.primary:hover,
+.btn.pri:hover {
+  background: color-mix(in srgb, var(--pr) 88%, var(--ink));
+  border-color: color-mix(in srgb, var(--pr) 88%, var(--ink));
 }
-button.ghost {
+button.ghost,
+.btn.gh {
   background: transparent;
-  padding: 5px 10px;
-  font-size: 13px;
+  border-color: transparent;
+  color: var(--mu);
 }
-button.small {
-  padding: 5px 10px;
-  font-size: 13px;
+button.ghost:hover,
+.btn.gh:hover {
+  background: var(--p2);
+  color: var(--ink);
 }
-button.danger {
-  color: #ffb3ad;
+button.small,
+.btn.sm {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12.5px;
 }
-button.danger:hover {
-  border-color: var(--err);
-  background: #2a1416;
+button.icon,
+.btn.icon {
+  padding: 0;
+  width: 34px;
 }
-.ico {
+button.small.icon,
+.btn.sm.icon {
+  width: 28px;
+}
+button.danger,
+.btn.danger {
+  color: var(--er);
+}
+button.danger:hover,
+.btn.danger:hover {
+  background: var(--ers);
+  border-color: color-mix(in srgb, var(--er) 45%, transparent);
+}
+
+/* ---- icons ----------------------------------------------------------------- */
+.ico,
+.i {
   flex: none;
   vertical-align: middle;
 }
-.hint {
-  color: var(--muted);
+
+/* ---- cards and text ----------------------------------------------------------- */
+.card {
+  background: var(--p1);
+  border: 1px solid var(--ln);
+  border-radius: var(--rl);
+  padding: 18px;
+}
+.card > h2,
+.hd h2 {
+  font-size: 16px;
+  margin: 0;
+}
+.card > h2 {
+  margin-bottom: 14px;
+}
+/* Card header: title, a chip, actions pushed right. */
+.hd {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  min-width: 0;
+}
+.hd .sp {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.sub {
+  color: var(--mu);
   font-size: 13px;
 }
-.card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 18px 20px;
+.hint {
+  color: var(--mu);
+  font-size: 13px;
+}
+.lbl {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fa);
+  font-weight: 500;
+}
+.empty {
+  color: var(--mu);
+  padding: 14px 4px;
+  font-size: 13px;
 }
 .row-between {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
 }
-.empty {
-  color: var(--muted);
-  padding: 10px;
+
+/* ---- chips (status, compute, engine) ------------------------------------------- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 99px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: var(--p3);
+  color: var(--mu);
+  white-space: nowrap;
+  line-height: 1;
+}
+.chip.ok { background: var(--oks); color: var(--ok); }
+.chip.wa { background: var(--was); color: var(--wa); }
+.chip.er { background: var(--ers); color: var(--er); }
+.chip.gpu { background: var(--gpus); color: var(--gpu); }
+.chip.pr { background: var(--prs); color: var(--pr); }
+
+/* ---- status dot, keyboard hint, engine pill --------------------------------------- */
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--oks);
+  flex: none;
+}
+.dot.wa { background: var(--wa); box-shadow: 0 0 0 3px var(--was); }
+.dot.er { background: var(--er); box-shadow: 0 0 0 3px var(--ers); }
+.dot.off { background: var(--fa); box-shadow: 0 0 0 3px var(--p3); }
+.kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  border: 1px solid var(--ln2);
+  border-radius: 5px;
+  padding: 1px 6px;
+  color: var(--mu);
+  background: var(--p1);
+  line-height: 1.4;
+}
+.eng {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--ln);
+  border-radius: var(--r);
   font-size: 13px;
+  color: var(--mu);
+  white-space: nowrap;
+}
+.eng b { color: var(--ink); font-weight: 600; }
+.eng.warn { border-color: color-mix(in srgb, var(--wa) 45%, transparent); color: var(--wa); }
+.eng.warn b { color: var(--wa); }
+.eng.down { opacity: 0.7; }
+
+/* ---- progress ------------------------------------------------------------------------ */
+.bar {
+  height: 6px;
+  border-radius: 99px;
+  background: var(--p3);
+  overflow: hidden;
+}
+.bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--pr);
+  transition: width 0.4s ease;
+}
+.bar.ok > i { background: var(--ok); }
+.bar.wa > i { background: var(--wa); }
+.bar.er > i { background: var(--er); }
+.bar.gpu > i { background: var(--gpu); }
+/* Indeterminate: a sliding stripe. */
+.bar.busy > i {
+  width: 30% !important;
+  animation: bar-slide 1.3s ease-in-out infinite;
+}
+@keyframes bar-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(340%); }
+}
+.spin {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--ln2);
+  border-top-color: var(--pr);
+  animation: spin 0.9s linear infinite;
+  flex: none;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---- callouts: a problem with its fix ------------------------------------------------- */
+.callout {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: var(--r);
+  font-size: 13px;
+  background: var(--p2);
+}
+.callout > .ico { margin-top: 1px; color: var(--mu); }
+.callout b { color: var(--ink); }
+.callout p { color: var(--mu); font-size: 12.5px; margin-top: 2px; }
+.callout.er { background: var(--ers); }
+.callout.er > .ico { color: var(--er); }
+.callout.wa { background: var(--was); }
+.callout.wa > .ico { color: var(--wa); }
+.callout.ok { background: var(--oks); }
+.callout.ok > .ico { color: var(--ok); }
+.callout.gpu { background: var(--gpus); }
+.callout.gpu > .ico { color: var(--gpu); }
+
+/* A command to copy, shown as code. */
+.code {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 12px;
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--cv) 70%, black);
+  border: 1px solid var(--ln);
+  font: 12px/1.5 var(--font-mono);
+  color: var(--ink);
+  min-width: 0;
+}
+.code > span {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+/* ---- toggles ------------------------------------------------------------------------- */
+.tg {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 32px !important;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 99px;
+  background: var(--p3);
+  position: relative;
+  cursor: pointer;
+  flex: none;
+  box-shadow: none !important;
+}
+.tg::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--mu);
+  transition: left 0.15s ease;
+}
+.tg:checked { background: var(--pr); }
+.tg:checked::after { left: 16px; background: var(--onpr); }
+
+/* ---- tables (lists with columns) --------------------------------------------------------- */
+table.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.tbl th {
+  text-align: left;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fa);
+  font-weight: 500;
+  padding: 0 10px 8px;
+  border-bottom: 1px solid var(--ln);
+}
+.tbl td {
+  padding: 10px;
+  border-bottom: 1px solid var(--ln);
+  vertical-align: middle;
+}
+.tbl tr:last-child td { border-bottom: 0; }
+
+/* ---- scrollbars ------------------------------------------------------------------------- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ln2) transparent;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: var(--ln2);
+  border-radius: 99px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- page scaffolding -------------------------------------------------------------------- */
+/* Every page renders inside .page (App.svelte); pages lay out their own grid. */
+.stack { display: flex; flex-direction: column; gap: 18px; }
+.cols { display: grid; gap: 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

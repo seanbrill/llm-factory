@@ -9,6 +9,9 @@
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "devDependencies": {
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "svelte": "^5.19.0",
     "svelte-check": "^4.1.4",

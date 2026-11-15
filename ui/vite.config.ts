@@ -24,7 +24,12 @@ export default defineConfig({
       output: {
         entryFileNames: "assets/app.js",
         chunkFileNames: "assets/[name].js",
-        assetFileNames: "assets/app.[ext]",
+        // The stylesheet keeps its stable name; bundled fonts go under
+        // assets/fonts/ by their own (stable) file names.
+        assetFileNames: (info) =>
+          /\.(woff2?|ttf|otf)$/.test(info.names?.[0] ?? info.name ?? "")
+            ? "assets/fonts/[name].[ext]"
+            : "assets/app.[ext]",
       },
     },
   },

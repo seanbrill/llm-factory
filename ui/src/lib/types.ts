@@ -204,3 +204,54 @@ export interface ResourceBudget {
   cpu_used_pct: number;
   running: RunningModel[] | null;
 }
+
+// POST /api/build/preflight: where each planned build compiles, what would stop
+// it, and what it downloads. Mirrors internal/server/plan.go.
+export interface PreflightItem {
+  model_id: string;
+  name: string;
+  engine: string;        // the engine the image is for
+  compute: string;       // the compute it will actually build for
+  compiles: boolean;     // compiles a runtime from source
+  build_engine: string;  // the engine that runs the build
+  transfer: boolean;     // built on build_engine, then loaded into engine
+  need_gb: number;       // least engine memory to compile (0 = doesn't compile)
+  build_gb: number;      // memory of the building machine (0 = unknown)
+  note?: string;
+  error?: string;        // the build would fail before starting
+  weights_gb: number;
+  download_gb: number;   // still to download (0 = on disk / self-contained)
+  eta_seconds: number;   // last build time for this compute (0 = unknown)
+  run_block: boolean;    // too big to run on its engine at all
+  run_note?: string;     // tight fit / slow paging warning
+}
+
+export interface EngineMemoryRead {
+  installed: boolean;
+  reachable: boolean;
+  mem_gb: number;        // 0 = unknown
+  error?: string;
+}
+
+export interface PreflightResult {
+  items: PreflightItem[];
+  engines: Record<string, EngineMemoryRead>;
+  queued: Record<string, number>; // builds already queued or running, per engine
+  download_gb: number;
+  disk_need_gb: number;  // downloads + exported tars
+  disk_free_gb?: number;
+  disk_total_gb?: number;
+}
+
+// GET /api/storage
+export interface UsageItem { name: string; gb: number; }
+export interface UsageGroup { count: number; gb: number; items: UsageItem[]; }
+export interface StorageInfo {
+  weights: UsageGroup;
+  tars: UsageGroup;
+  leftovers: UsageGroup; // empty while a build runs (busy)
+  media: UsageGroup;     // count + gb only
+  busy: boolean;
+  disk_total_gb?: number;
+  disk_free_gb?: number;
+}

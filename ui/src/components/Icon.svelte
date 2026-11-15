@@ -1,6 +1,12 @@
 <script lang="ts">
   import { ICONS } from "../lib/icons";
-  let { name, size = 16, cls = "" }: { name: string; size?: number; cls?: string } = $props();
+  let {
+    name,
+    size = 16,
+    cls = "",
+    stroke = 1.8,
+    label = "",
+  }: { name: string; size?: number; cls?: string; stroke?: number; label?: string } = $props();
 </script>
 
 {#if ICONS[name]}
@@ -11,10 +17,12 @@
     height={size}
     fill="none"
     stroke="currentColor"
-    stroke-width="2"
+    stroke-width={stroke}
     stroke-linecap="round"
     stroke-linejoin="round"
-    aria-hidden="true">
+    role={label ? "img" : undefined}
+    aria-label={label || undefined}
+    aria-hidden={label ? undefined : "true"}>
     {@html ICONS[name]}
   </svg>
 {/if}
