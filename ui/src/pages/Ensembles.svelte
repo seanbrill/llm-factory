@@ -1,212 +1,200 @@
 <script lang="ts">
+  // Ensembles: several built images behind one model, with a Conductor that sends
+  // each request to the right member. Saved definitions, an editor, and each
+  // one's image build (through the shared build queue).
   import Icon from "../components/Icon.svelte";
-  import ModalityBadge from "../components/ModalityBadge.svelte";
-  import { api, post, labelVal, type ApiError } from "../lib/api";
-  import { imageRef } from "../lib/util";
-  import { ensembles, catalog, loadEnsembles, toast } from "../lib/stores";
-  import type { BuildSnapshot, Ensemble, EnsembleMember, ImageInfo } from "../lib/types";
+  import EnsembleCard from "../components/ensembles/EnsembleCard.svelte";
+  import EnsembleEditor from "../components/ensembles/EnsembleEditor.svelte";
+  import HowItWorks from "../components/ensembles/HowItWorks.svelte";
+  import { api, post } from "../lib/api";
+  import { ensembles, toast } from "../lib/stores";
+  import { build, watchQueue } from "../lib/build.svelte";
+  import { live, watch, refresh } from "../lib/live.svelte";
+  import { plural } from "../lib/format";
+  import type { Ensemble } from "../lib/types";
+  import { ensembleRef, listLoadError } from "../components/ensembles/util";
+  import { routeArg, go } from "../lib/router";
+  import { untrack } from "svelte";
 
-  const TOOL_FOR: Record<string, string> = {
-    text: "chat", code: "chat", reasoning: "chat", vision: "see_image",
-    image: "generate_image", video: "generate_video", "audio-stt": "transcribe", tts: "speak",
-  };
+  $effect(() => watch("images"));
 
-  interface Candidate { ref: string; name: string; modality: string; tool: string; vram: number; }
-
-  let editing = $state<Ensemble | null | undefined>(undefined);
-  let candidates = $state<Candidate[]>([]);
-  let chosen = $state<Set<string>>(new Set());
-  let buildLog = $state("");
-  let buildTimer: ReturnType<typeof setInterval> | undefined;
-
-  // form fields
-  let name = $state("");
-  let mode = $state("orchestrated");
-  let routing = $state("heuristic");
-  let budget = $state(12);
-  let compute = $state("cuda");
-  let conductor = $state("");
-
-  async function imageList(): Promise<Candidate[]> {
-    let imgs: ImageInfo[] = [];
-    try { imgs = await api<ImageInfo[]>("/api/images"); } catch { /* none */ }
-    const out: Candidate[] = [];
-    for (const im of imgs) {
-      if (labelVal(im.Labels, "local-llm.kind") === "ensemble") continue;
-      const { ref, name } = imageRef(im);
-      const mod = labelVal(im.Labels, "local-llm.modality") ||
-        ($catalog.find((m) => m.id === labelVal(im.Labels, "local-llm.model"))?.modality ?? "text");
-      const tool = TOOL_FOR[mod];
-      if (!tool) continue;
-      const cat = $catalog.find((m) => m.id === labelVal(im.Labels, "local-llm.model"));
-      out.push({ ref, name, modality: mod, tool, vram: cat?.min_vram_gb ?? 6 });
+  // ---- the list (own load, so a failure shows instead of an empty list) --------
+  let loading = $state(true);
+  let loadError = $state("");
+  async function load() {
+    try {
+      const r = await api<{ ensembles: Ensemble[] }>("/api/ensembles");
+      ensembles.set(r.ensembles ?? []);
+      loadError = "";
+    } catch (e) {
+      loadError = listLoadError(e, "ensembles.json");
+    } finally {
+      loading = false;
     }
-    return out;
   }
+  $effect(() => {
+    load();
+  });
 
-  async function open(e: Ensemble | null) {
+  // ---- editor --------------------------------------------------------------------------
+  let editing = $state<Ensemble | null | undefined>(undefined); // undefined = closed, null = new
+  let editorKey = $state(0);
+  let topEl: HTMLElement | undefined = $state();
+  function openEditor(e: Ensemble | null) {
     editing = e;
-    name = e?.name ?? ""; mode = e?.package_mode ?? "orchestrated";
-    routing = e?.routing ?? "heuristic"; budget = e?.vram_budget_gb ?? 12;
-    compute = e?.compute ?? "cuda"; conductor = e?.conductor ?? "";
-    candidates = await imageList();
-    chosen = new Set((e?.members ?? []).map((m) => m.image));
+    editorKey++;
+    refresh("images");
+    queueMicrotask(() => topEl?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
-  function close() { editing = undefined; }
-  function toggle(ref: string) {
-    const s = new Set(chosen);
-    s.has(ref) ? s.delete(ref) : s.add(ref);
-    chosen = s;
+  function closeEditor() {
+    editing = undefined;
+    if ($routeArg) go("ensembles");
+  }
+  async function saved(e: Ensemble) {
+    closeEditor();
+    await load();
+    toast(`Ensemble “${e.name}” saved.`);
   }
 
-  async function save() {
-    if (!name.trim()) { alert("Name your ensemble."); return; }
-    const members: EnsembleMember[] = candidates
-      .filter((c) => chosen.has(c.ref))
-      .map((c) => ({ tool: c.tool, modality: c.modality, image: c.ref, vram_gb: c.vram }));
-    if (!members.length) { alert("Pick at least one member image."); return; }
-    const body: Partial<Ensemble> = {
-      id: editing?.id, name: name.trim(), package_mode: mode, routing,
-      conductor, vram_budget_gb: budget, engine: "docker", compute, members,
-    };
-    try { await post("/api/ensembles", body); }
-    catch (e) { alert("Save failed: " + (e as Error).message); return; }
-    close();
-    await loadEnsembles();
-    toast(`Ensemble “${name.trim()}” saved.`);
-  }
+  // "#ensembles/new" opens a new one; "#ensembles/<id>" opens that one's editor.
+  let handledArg = "";
+  $effect(() => {
+    const arg = $routeArg;
+    if (loading || !arg || arg === handledArg) return;
+    handledArg = arg;
+    untrack(() => {
+      const e = arg === "new" ? null : $ensembles.find((x) => x.id === arg);
+      if (e !== undefined) openEditor(e);
+    });
+  });
+
   async function del(e: Ensemble) {
-    if (!confirm(`Delete ensemble “${e.name}”?`)) return;
-    try { await post("/api/ensembles/delete", { id: e.id }); } catch (err) { alert("Delete failed: " + (err as Error).message); return; }
-    await loadEnsembles();
+    if (!confirm(`Delete the ensemble “${e.name}”? Its built image stays in the Library.`)) return;
+    try {
+      await post("/api/ensembles/delete", { id: e.id });
+      toast(`Ensemble “${e.name}” deleted.`);
+    } catch (err) {
+      toast(`It wasn't deleted: ${(err as Error).message || "the factory didn't answer"}.`, 6000);
+    }
+    await load();
   }
 
-  // Ensemble builds go through the shared build queue (they wait behind model
-  // builds for the same engine); follow this job's own log by its id.
-  async function build(e: Ensemble) {
-    buildLog = `Building “${e.name}” …\n`;
-    let job: { id: string; position: number };
-    try { job = await post("/api/ensemble/build", { id: e.id, compute: e.compute }); }
-    catch (err) { buildLog += "ERROR: " + (err as Error).message + "\n"; return; }
-    if (job.position > 0) buildLog += `Queued — ${job.position} build${job.position > 1 ? "s" : ""} ahead on this engine.\n`;
-    clearInterval(buildTimer);
-    let off = 0;
-    buildTimer = setInterval(async () => {
-      let st: BuildSnapshot;
-      try { st = await api(`/api/builds/state?id=${encodeURIComponent(job.id)}&offset=${off}`); }
-      catch (err) {
-        if ((err as ApiError).status === 404) clearInterval(buildTimer); // gone (factory restarted)
-        return;
-      }
-      for (const l of st.lines ?? []) buildLog += l + "\n";
-      off = st.next_offset ?? off;
-      if (!st.active) {
-        clearInterval(buildTimer);
-        toast(st.status === "done" ? "Ensemble image built." : st.status === "canceled" ? "Ensemble build canceled." : "Ensemble build failed — see log.");
-      }
-    }, 1000);
+  // ---- builds ----------------------------------------------------------------------------
+  let starting = $state<Record<string, boolean>>({});
+  let startErrors = $state<Record<string, string>>({});
+  async function buildImage(e: Ensemble) {
+    starting[e.id] = true;
+    startErrors[e.id] = "";
+    try {
+      const r = await post<{ id: string; position: number }>("/api/ensemble/build", { id: e.id, compute: e.compute });
+      toast(r.position > 0 ? `“${e.name}” is queued: ${plural(r.position, "build")} ahead.` : `Building “${e.name}”.`);
+    } catch (err) {
+      startErrors[e.id] = (err as Error).message || "The factory didn't answer.";
+    } finally {
+      starting[e.id] = false;
+      watchQueue();
+    }
   }
 
-  const chatImages = $derived(candidates.filter((c) => c.tool === "chat"));
+  // The shared queue toasts model builds only; say when an ensemble build ends.
+  const seen = new Map<string, string>();
+  $effect(() => {
+    for (const j of build.jobs) {
+      if (j.kind !== "ensemble") continue;
+      const before = seen.get(j.id);
+      seen.set(j.id, j.status);
+      if (!before || before === j.status || j.active) continue;
+      const name = $ensembles.find((e) => ensembleRef(e) === j.ref)?.name ?? j.name;
+      if (j.status === "done") {
+        toast(`“${name}” is built. Run it from the Library.`);
+        refresh("images");
+      } else if (j.status === "error") toast(`“${name}” didn't build: ${j.error || "see its log"}.`, 9000);
+      else if (j.status === "canceled") toast(`The build of “${name}” was canceled.`);
+    }
+  });
+
+  const list = $derived($ensembles);
 </script>
 
-<div class="card">
-  <div class="row-between">
-    <h2>Ensembles</h2>
-    <button class="ghost small" onclick={() => open(null)}>+ New ensemble</button>
-  </div>
-  <p class="hint">Combine your built images into one multimodal super-model: a tiny <b>Conductor</b> routes each request to the right specialist, starting/stopping them to fit your VRAM. Builds into a single runnable image. (See <code>docs/ENSEMBLE.md</code>.)</p>
-
-  {#if editing !== undefined}
-    <div class="editor">
-      <div class="grid">
-        <label>Name <input type="text" bind:value={name} placeholder="My Ensemble" /></label>
-        <label>Package mode
-          <select bind:value={mode}>
-            <option value="orchestrated">Orchestrated — runs sibling containers</option>
-            <option value="embedded">Embedded / mega — bake everything (staged)</option>
-          </select>
-        </label>
-        <label>Routing
-          <select bind:value={routing}>
-            <option value="heuristic">Heuristic — fast, no extra model</option>
-            <option value="tool-calling">Tool-calling — uses a conductor model</option>
-          </select>
-        </label>
-        <label>VRAM budget (GB) <input type="number" min="1" max="80" bind:value={budget} /></label>
-        <label>Compute
-          <select bind:value={compute}>
-            <option value="cuda">NVIDIA GPU (CUDA)</option>
-            <option value="cpu">CPU</option>
-            <option value="vulkan">GPU — Vulkan / Metal</option>
-          </select>
-        </label>
-        <label>Conductor model (tool-calling)
-          <select bind:value={conductor}>
-            <option value="">— none —</option>
-            {#each chatImages as c (c.ref)}<option value={c.ref}>{c.name}</option>{/each}
-          </select>
-        </label>
-      </div>
-      <span class="field-label">Members — pick which built images to include</span>
-      <div class="members">
-        {#if !candidates.length}
-          <div class="empty">No built images yet — build some models first.</div>
-        {:else}
-          {#each candidates as c (c.ref)}
-            <label class="member">
-              <input type="checkbox" checked={chosen.has(c.ref)} onchange={() => toggle(c.ref)} />
-              <ModalityBadge mod={c.modality} /> <b>{c.name}</b> <span class="meta">{c.tool} · ~{c.vram} GB</span>
-            </label>
-          {/each}
-        {/if}
-      </div>
-      <div class="actions">
-        <button class="ghost" onclick={close}>Cancel</button>
-        <button class="primary" onclick={save}>Save ensemble</button>
-      </div>
-    </div>
-  {/if}
-
-  {#if buildLog}<pre class="log">{buildLog}</pre>{/if}
-
-  <div class="list">
-    {#if !$ensembles.length}
-      <div class="empty">No ensembles yet. Create one from your built images.</div>
-    {:else}
-      {#each $ensembles as e (e.id)}
-        <div class="ecard">
-          <div class="ehead">
-            <span class="ename">{e.name} <span class="meta">{e.package_mode} · {e.routing} · {(e.members || []).length} members · {e.vram_budget_gb} GB</span></span>
-            <span class="eactions">
-              <button class="small primary" onclick={() => build(e)}>Build image</button>
-              <button class="small" onclick={() => open(e)}>Edit</button>
-              <button class="small danger" onclick={() => del(e)} title="Delete"><Icon name="trash" /></button>
-            </span>
-          </div>
-          <div class="eprompt">{(e.members || []).map((m) => `${m.tool} → ${m.image}`).join("\n")}</div>
-        </div>
-      {/each}
+<div class="ep" bind:this={topEl}>
+  <div class="lead">
+    <p>
+      Put several built images behind one model. A small <b>Conductor</b> sends each request to the right member — chat,
+      vision, image or video generation, speech — and starts members only when they're needed.
+    </p>
+    {#if editing === undefined && list.length && !loadError}<!-- the empty state has its own -->
+      <button class="primary" onclick={() => openEditor(null)}><Icon name="plus" size={15} />New ensemble</button>
     {/if}
+  </div>
+
+  <div class="cols">
+    <div class="main">
+      {#if editing !== undefined}
+        {#key editorKey}
+          <EnsembleEditor ens={editing} existing={list} onclose={closeEditor} onsaved={saved} />
+        {/key}
+      {/if}
+
+      {#if loading && !list.length}
+        <div class="card state" aria-busy="true"><span class="spin" aria-hidden="true"></span>Loading your ensembles…</div>
+      {:else if loadError}
+        <div class="callout er" role="alert">
+          <Icon name="errc" size={16} />
+          <span>
+            <b>Your ensembles didn't load.</b>
+            <p>{loadError}</p>
+            <button class="small" onclick={load}><Icon name="retry" size={14} />Try again</button>
+          </span>
+        </div>
+      {:else if !list.length && editing === undefined}
+        <div class="card empty-state">
+          <span class="ei" aria-hidden="true"><Icon name="ensembles" size={22} /></span>
+          <h2>No ensembles yet</h2>
+          <p>
+            Make one from images you've built: a chat model, plus any of vision, image generation, video or speech.
+            {#if live.loaded.images && !live.images.length}Nothing is built yet, so start in the Catalog.{/if}
+          </p>
+          <button class="primary" onclick={() => openEditor(null)}><Icon name="plus" size={15} />New ensemble</button>
+        </div>
+      {/if}
+
+      {#each list as e (e.id)}
+        {#if editing?.id !== e.id}
+          <EnsembleCard
+            ens={e}
+            starting={!!starting[e.id]}
+            startError={startErrors[e.id] || ""}
+            onbuild={() => buildImage(e)}
+            onedit={() => openEditor(e)}
+            ondelete={() => del(e)} />
+        {/if}
+      {/each}
+    </div>
+
+    <HowItWorks />
   </div>
 </div>
 
 <style>
-  .editor { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin: 8px 0 14px; background: #12151c; display: flex; flex-direction: column; gap: 10px; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  .editor label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
-  .field-label { font-size: 13px; color: var(--muted); margin-top: 6px; }
-  .members { display: grid; gap: 6px; max-height: 300px; overflow: auto; }
-  .member { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: #12151c; cursor: pointer; font-size: 13px; flex-direction: row; }
-  .member input { width: auto; }
-  .member b { color: var(--text); }
-  .meta { color: var(--muted); font-size: 11.5px; font-weight: 400; }
-  .actions { display: flex; justify-content: flex-end; gap: 8px; }
-  .log { background: #06080c; border: 1px solid var(--border); border-radius: 8px; padding: 12px; max-height: 280px; overflow: auto; white-space: pre-wrap; font: 12.5px/1.5 ui-monospace, monospace; color: #cbd3e1; margin: 0 0 14px; }
-  .list { display: grid; gap: 10px; }
-  .ecard { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: #12151c; }
-  .ehead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-  .ename { font-weight: 600; font-size: 14px; }
-  .eactions { display: inline-flex; gap: 6px; }
-  .eprompt { color: var(--muted); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; }
+  .ep { display: flex; flex-direction: column; gap: 16px; scroll-margin-top: 16px; }
+  .lead { display: flex; align-items: center; gap: 18px; justify-content: space-between; }
+  .lead p { color: var(--mu); font-size: 13.5px; max-width: 720px; line-height: 1.5; }
+  .lead b { color: var(--ink); font-weight: 600; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+  .main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .state { display: flex; align-items: center; gap: 10px; color: var(--mu); font-size: 13px; }
+  .callout button { margin-top: 8px; }
+  .empty-state { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 26px 24px; }
+  .empty-state h2 { font-size: 17px; margin: 4px 0 0; }
+  .empty-state p { color: var(--mu); font-size: 13px; max-width: 520px; line-height: 1.5; }
+  .empty-state button { margin-top: 6px; }
+  .ei { width: 44px; height: 44px; border-radius: 12px; background: var(--prs); color: var(--pr); display: grid; place-items: center; }
+
+  @media (max-width: 1100px) {
+    .cols { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 760px) {
+    .ep { padding-top: 12px; gap: 12px; }
+    .lead { flex-direction: column; align-items: stretch; }
+  }
 </style>

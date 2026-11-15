@@ -116,6 +116,7 @@ export const ICONS: Record<string, string> = {
   // [/p4]
 
   // [p5] Harness, Ensembles, Personas, Help
+  eyeoff: '<path d="M3.5 3.5l17 17"/><path d="M10.6 5.1c.5-.1.9-.1 1.4-.1 6.5 0 10 7 10 7a17 17 0 0 1-3.1 4.1M6.6 6.6C3.9 8.4 2 12 2 12s3.5 7 10 7c1.8 0 3.4-.5 4.8-1.3"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
 
   // [/p5]
 };
