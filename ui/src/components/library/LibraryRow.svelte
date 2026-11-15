@@ -10,6 +10,10 @@
   import { gb, engineName, computeName, computeChip, upFor } from "../../lib/format";
   import { progress, phase, timeText } from "../../lib/jobs";
   import { kindLabel, num, ordinal, type LibRow, type LibContainer, type RowActions } from "../../lib/library";
+  import { searchName, toolsText } from "../../lib/baked";
+  import { homeOf, tildePath } from "../../lib/harness";
+  import { live } from "../../lib/live.svelte";
+  import type { ImageHarness } from "../../lib/types";
 
   let {
     row,
@@ -67,6 +71,17 @@
   /** "Docker · CPU · 3.5 GB", skipping the empty parts. */
   const dots = (...xs: (string | number | false | null | undefined)[]) => xs.filter(Boolean).join(" · ");
   const firstLine = (s?: string) => (s || "").split("\n").find((l) => l.trim())?.trim() ?? "";
+
+  // A baked harness: the tools the image runs itself.
+  const toolsTitle = (h: ImageHarness) =>
+    h.tools.length ? `Baked tools: ${toolsText(h.tools)}${h.tools.includes("shell") ? " (the shell is on)" : ""}` : "Baked harness with every tool off";
+  const toolsLine = (h: ImageHarness) =>
+    dots(
+      h.tools.length ? `Tools: ${toolsText(h.tools)}` : "Tools: none on",
+      h.search && `search with ${searchName(h.search)}`,
+      h.max_steps && `up to ${h.max_steps} steps`,
+    );
+  const home = $derived(homeOf(live.harness?.terminal));
 </script>
 
 <article class="row" class:open={expanded} class:flash id={rid} aria-label={row.name}>
@@ -94,6 +109,7 @@
         <span class="cs">
           <span class="chip">{engineName(img.engine)}</span>
           <span class={computeChip(img.compute)}>{computeName(img.compute)}</span>
+          {#if img.harness}<span class="chip tl" class:wa={img.harness.tools.includes("shell")} title={toolsTitle(img.harness)}><Icon name="wrench" size={11} />Tools</span>{/if}
           {#if img.tar}<span class="chip" title="Exported to images/{img.tar.name}">.tar</span>{/if}
           {#if row.images.length > 1}<span class="chip" title={row.images.slice(1).map((i) => i.ref + " (" + engineName(i.engine) + ")").join(", ")}>+{row.images.length - 1} more</span>{/if}
           {#if job}<a class="chip pr" href={href("builds", job.id)} title="A new build of this model is {job.status === "running" ? "running" : "queued"}: open it in Builds">{job.status === "running" ? "Rebuilding" : "Rebuild queued"}</a>{/if}
@@ -168,6 +184,12 @@
               <div class="iw">
                 <span class="mono">{im.ref}</span>
                 <span class="meta">{dots(engineName(im.engine), computeName(im.compute), gb(im.sizeGB), im.created && `built ${im.created}`, im.tar && `saved as images/${im.tar.name} (${gb(im.tar.gb)})`)}</span>
+                {#if im.harness}
+                  <span class="meta tools">
+                    <Icon name="wrench" size={13} />
+                    <span>{toolsLine(im.harness)}{#if im.harness.tools.includes("shell")}{" · "}<b class="wa">the shell is on</b>{/if}</span>
+                  </span>
+                {/if}
               </div>
               <div class="ia">
                 <button class="small" type="button" onclick={() => act.run(row, im)}><Icon name="play" size={13} />Run</button>
@@ -189,6 +211,12 @@
               <div class="iw">
                 <span class="run"><span class="dot" class:er={!c.running}></span><span class="mono">{c.name}</span>{#if c.persona}<span class="chip">{c.persona}</span>{/if}</span>
                 <span class="meta">{dots(engineName(c.engine), c.port && `http://localhost:${c.port}`, c.status, c.running && memText(c))}</span>
+                {#if c.workspace}
+                  <span class="meta tools" title={c.workspace}>
+                    <Icon name="folder" size={13} />
+                    <span>Workspace: <span class="mono">{tildePath(c.workspace, home)}</span> at /workspace</span>
+                  </span>
+                {/if}
               </div>
               <div class="ia">
                 {#if c.running && c.port}
@@ -353,6 +381,11 @@
   .iw .mono { font-size: 12px; overflow-wrap: anywhere; }
   .iw .chip { margin-right: 6px; }
   .meta { color: var(--mu); font-size: 12.5px; }
+  .meta.tools { display: grid; grid-template-columns: 13px minmax(0, 1fr); gap: 6px; }
+  .meta.tools :global(.ico) { margin-top: 2px; color: var(--fa); }
+  .meta.tools .mono { font-size: 12px; color: var(--ink); }
+  .meta b.wa { color: var(--wa); font-weight: 600; }
+  .chip.tl { gap: 4px; }
   .ia { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
   /* Narrow desktop: image and container share a column. */

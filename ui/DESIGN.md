@@ -110,6 +110,11 @@ refresh plus x alert globe …). Add new ones to src/lib/icons.ts.
   `defaultsFor(model, sysinfo)`, `predictRoute(...)`, `queueItems(items, catalog)`,
   `quickBuild(model, sysinfo)`.
 - `harness.ts` — harness API types and calls.
+- `baked.ts` — tools baked into an image (docs/HARNESS.md, "Baked harness"):
+  `TOOLSETS`, `canHarness(model)`, the plan item's `harness` setting
+  (`defaultHarness`, `harnessProblem`, `harnessBody` → the build's `harness`,
+  `harnessFromConfig` for clones) and `imageHarness(image)` for the Library.
+  `#harness/baked` opens its card on the Harness page.
 - `filefreak.ts` — FileFreak archive (System page) types and calls; see docs/FILEFREAK.md.
 - `format.ts` — `gb()`, `dur()`, `clock()`, `ago()`, `plural()`, `engineName()`,
   `computeName()`, `computeChip()`, `upFor()`.

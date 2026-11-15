@@ -275,6 +275,7 @@
       }
     }, "ram reclaim");
     cmd("connect", "harness", "Connect Open WebUI", () => { close(); go("harness", "connect"); }, "harness tools terminal gateway");
+    cmd("baked", "wrench", "Bake tools into a model image", () => { close(); go("harness", "baked"); }, "harness agent web search files skills shell workspace");
     cmd("newens", "ensembles", "New ensemble", () => { close(); go("ensembles", "new"); }, "combine multimodal conductor");
     cmd("newpersona", "personas", "New persona", () => { close(); go("personas", "new"); }, "system prompt");
     const gw = live.harness?.gateway?.base_url;

@@ -658,8 +658,10 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	if err != nil {
 		return err
 	}
-	if harnessCfg != nil && (family != "llama" || o.Model.Mod() == "embedding") {
-		return fmt.Errorf("the agent harness needs a llama.cpp chat model; %s is a %s model", o.Model.Name, o.Model.Mod())
+	if harnessCfg != nil {
+		if err := HarnessModelError(o.Model); err != nil {
+			return err
+		}
 	}
 	resolved, err := b.resolveCompute(o.Model, compute)
 	if err != nil {
@@ -1032,6 +1034,10 @@ type RunOptions struct {
 	// model's behavior for a ~10s container restart instead of a recompile.
 	SystemPrompt string // overrides the baked system prompt when non-empty
 	InjectMode   string // "missing" | "always"; overrides the baked mode when set
+	// Workspace is a host folder mounted read-write at /workspace, where a
+	// baked harness's file and shell tools work ("" = none). The caller checks
+	// it (harness.ValidateWorkspace).
+	Workspace string
 }
 
 // Run starts a container detached and returns its id.
@@ -1114,6 +1120,11 @@ func runArgs(engine, name string, o RunOptions, group int) []string {
 	}
 	if o.Autostart {
 		args = append(args, "--restart", "unless-stopped")
+	}
+	if o.Workspace != "" {
+		// The baked harness's files and shell work here; the label tells the
+		// Library which folder that is.
+		args = append(args, "-v", o.Workspace+":"+ImageWorkspace, "--label", "local-llm.workspace="+o.Workspace)
 	}
 	// Same podman-remote seccomp path mismatch as Build (see there): the client
 	// forwards a profile path the machine VM lacks. Run the model server
@@ -1466,6 +1477,11 @@ func (b *Builder) Images(ctx context.Context) ([]map[string]any, error) {
 						parts = append(parts, k+"="+labels[k])
 					}
 					im["Labels"] = strings.Join(parts, ",")
+				}
+				// A baked harness, read here: its tools and config labels hold
+				// commas, which the joined string above can't carry.
+				if h := HarnessInfo(BakedHarness(labels)); h != nil {
+					im["Harness"] = h
 				}
 				if c := labels["local-llm.compute"]; c != "" {
 					im["Compute"] = c
