@@ -28,7 +28,10 @@ export interface Model {
   computes?: string[];        // compute targets this model's runtime can be built for
   legacy?: boolean;           // superseded; hidden in the Build picker by default
   compiles?: boolean;         // its build compiles a runtime from source (needs compile_min_gb on the engine)
-  voice_clone?: boolean;      // a TTS model that can speak a cloned voice from a reference clip
+  voice_clone?: boolean;            // TTS that speaks in a voice cloned from a reference recording
+  clone_needs_transcript?: boolean; // ...and that recording needs its transcript
+  license?: string;                 // weights' license: SPDX id or short name ("CPML")
+  commercial_use?: boolean;         // false = the license forbids commercial use; absent = not stated
 }
 
 // Build identity from /api/version (stamped by the start scripts).

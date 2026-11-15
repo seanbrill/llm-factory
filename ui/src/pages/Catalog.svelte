@@ -67,6 +67,7 @@
   const byId = $derived(new Map($catalog.map((m) => [m.id, m])));
   const legacyCount = $derived($catalog.filter((m) => m.legacy).length);
   const pool = $derived(browse.legacy ? $catalog : $catalog.filter((m) => !m.legacy));
+  const cloneCount = $derived(pool.filter((m) => m.voice_clone).length);
   const fits = $derived(new Map(pool.map((m) => [m.id, fitFor(m, $sysinfo, libFor(lib, m.id))])));
   const sizeOk = (m: Model) => !browse.maxSize || (m.size_gb || 0) <= browse.maxSize;
 
@@ -79,9 +80,10 @@
     const tags = META[m.id]?.strengths ?? [];
     if (browse.tags.length && !browse.tags.some((t) => tags.includes(t))) return false;
     if (browse.fitsOnly && !fits.get(m.id)?.runsNow) return false;
+    if (browse.clones && !m.voice_clone) return false;
     const q = browse.q.trim().toLowerCase();
     if (q) {
-      const hay = `${m.name} ${m.id} ${m.params} ${m.description ?? ""} ${tags.join(" ")}`.toLowerCase();
+      const hay = `${m.name} ${m.id} ${m.params} ${m.description ?? ""} ${tags.join(" ")} ${m.voice_clone ? "clones voices voice cloning" : ""} ${m.license ?? ""}`.toLowerCase();
       if (!q.split(/\s+/).every((w) => hay.includes(w))) return false;
     }
     return true;
@@ -95,7 +97,7 @@
     })),
   );
   const shown = $derived(sortModels(facet.filter((m) => !browse.kind || kindOf(m) === browse.kind), browse.sort, $sysinfo));
-  const filterCount = $derived(browse.tags.length + (browse.maxSize ? 1 : 0) + (browse.legacy ? 1 : 0));
+  const filterCount = $derived(browse.tags.length + (browse.maxSize ? 1 : 0) + (browse.legacy ? 1 : 0) + (browse.clones ? 1 : 0));
 
   function toggleTag(t: string) {
     browse.tags = browse.tags.includes(t) ? browse.tags.filter((x) => x !== t) : [...browse.tags, t];
@@ -106,6 +108,7 @@
     browse.tags = [];
     browse.maxSize = 0;
     browse.fitsOnly = false;
+    browse.clones = false;
   }
 
   // Engines: nothing builds while neither answers.
@@ -234,6 +237,16 @@
           {/each}
         </div>
       </div>
+      {#if cloneCount || browse.clones}
+        <div class="frow">
+          <span class="fl">Voice</span>
+          <label class="toggle">
+            <input type="checkbox" class="tg" bind:checked={browse.clones} />
+            Only the {cloneCount} model{cloneCount === 1 ? "" : "s"} that clone a voice
+            <span class="hint">— text to speech in a voice copied from a short recording</span>
+          </label>
+        </div>
+      {/if}
       <div class="frow">
         <span class="fl">Older</span>
         <label class="toggle">

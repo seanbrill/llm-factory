@@ -58,6 +58,18 @@ type Model struct {
 	// (resource estimates, clone-as-template, Model files); the Build picker
 	// hides it unless asked.
 	Legacy bool `json:"legacy,omitempty"`
+	// VoiceClone says a TTS model can speak in a voice cloned from a reference
+	// recording (audio.cpp's voice_ref); CloneNeedsTranscript says that
+	// recording must come with its transcript (reference_text). Every TTS entry
+	// states both.
+	VoiceClone           bool `json:"voice_clone,omitempty"`
+	CloneNeedsTranscript bool `json:"clone_needs_transcript,omitempty"`
+	// License is the model weights' license: an SPDX id ("Apache-2.0", "MIT",
+	// "CC-BY-4.0") or a short name ("CPML" for the Coqui Public Model License).
+	License string `json:"license,omitempty"`
+	// CommercialUse says whether the license allows commercial use. Nil means
+	// the catalog doesn't say; every TTS entry states it.
+	CommercialUse *bool `json:"commercial_use,omitempty"`
 }
 
 // WeightFile is one extra weight a model needs, with the Role the runtime uses to
@@ -77,6 +89,15 @@ type AudioCppConfig struct {
 	Family       string            `json:"family"`                  // audio.cpp loader, e.g. pocket_tts, qwen3_tts
 	LoadOptions  map[string]string `json:"load_options,omitempty"`  // e.g. {"language": "english"}
 	DefaultVoice string            `json:"default_voice,omitempty"` // built-in voice used when a request names none
+	// Streaming serves the model in audio.cpp's streaming mode, for families
+	// that have one. A request can then ask for audio as it is generated
+	// ("stream_format": "sse" or "audio" with "response_format": "pcm"), and a
+	// plain request still gets one WAV.
+	Streaming bool `json:"streaming,omitempty"`
+	// RequestOptions are the model's default request options, which a request
+	// can override: e.g. VoxCPM2's {"retry_badcase": false}, which its
+	// streaming mode requires.
+	RequestOptions map[string]any `json:"request_options,omitempty"`
 }
 
 // Mod returns the model's modality, defaulting to "text" when unset.

@@ -1285,8 +1285,8 @@ export const GLOSSARY: Record<string, string> = {
   "mod:vision": "UNDERSTANDS images you send it — describe a photo, analyze a chart, read a document. It does NOT create images.",
   "mod:embedding": "Turns text into vectors for search, RAG and similarity. It is not a chatbot — it returns numbers, not replies.",
   "mod:image": "GENERATES images from a text prompt. It cannot view or understand images you upload.",
-  "mod:audio-stt": "Transcribes spoken audio into text (Whisper).",
-  "mod:tts": "Speaks text aloud as audio (Piper, Kokoro, Pocket TTS or Qwen3-TTS). Runs on CPU only here.",
+  "mod:audio-stt": "Transcribes spoken audio into text (Whisper, Moonshine).",
+  "mod:tts": "Speaks text aloud as audio (Piper, Kokoro, Pocket TTS, Qwen3-TTS, VoxCPM2 and more); some clone a voice from a short recording. Runs on CPU only here.",
   // Capability categories (the progress bars).
   "cat:Reasoning": "Multi-step logic, breaking problems down, and drawing sound conclusions.",
   "cat:Coding": "Writing, completing and debugging code across programming languages.",
@@ -1411,6 +1411,14 @@ const TTS: Record<string, TtsSpec> = {
     speed: false, style: true,
   },
   "piper-en-us": { voices: [], speed: false, style: false },
+  // Voice cloners: a reference recording is their voice (Pocket TTS Small also
+  // ships Alba). No speed control in audio.cpp for these families.
+  "pocket-tts-small-en": { voices: [["alba", "Alba"]], speed: false, style: false },
+  "qwen3-tts-0.6b-base": { voices: [], speed: false, style: false },
+  "qwen3-tts-1.7b-base": { voices: [], speed: false, style: false },
+  "voxcpm2": { voices: [], speed: false, style: false },
+  "ming-3.0-tts-0.5b": { voices: [], speed: false, style: false },
+  "xtts-v2": { voices: [], speed: false, style: false },
 };
 // Unknown TTS images keep the old behaviour: no voice list, speed slider shown.
 export const ttsSpec = (id?: string): TtsSpec => TTS[id ?? ""] ?? { voices: [], speed: true, style: false };

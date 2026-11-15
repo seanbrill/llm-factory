@@ -13,7 +13,8 @@
       "min_vram_gb": 0,
       "recommended": false,
       "description": "Small hybrid-thinking model for low-RAM machines; thinks before answering by default, so even short questions take a few seconds.",
-      "modality": "text"
+      "modality": "text",
+      "license": "Apache-2.0"
     },
     {
       "id": "lfm3-1.7b",
@@ -28,7 +29,8 @@
       "min_vram_gb": 0,
       "recommended": false,
       "description": "Liquid AI's hybrid small model (Oct 2026) built for local tool-calling agents; its card beats Qwen3.5 9B on BFCL v4 and IFBench. Thinks by default, 256K context. LFM Open License (free under $10M revenue).",
-      "modality": "text"
+      "modality": "text",
+      "license": "LFM Open License v1.0"
     },
     {
       "id": "qwen3.5-4b",
@@ -43,7 +45,8 @@
       "min_vram_gb": 4,
       "recommended": true,
       "description": "Recommended small generalist (Feb 2026): hybrid thinking, 262K context, runs well on CPU.",
-      "modality": "text"
+      "modality": "text",
+      "license": "Apache-2.0"
     },
     {
       "id": "gemma-4-e2b",
@@ -88,7 +91,8 @@
       "min_vram_gb": 7,
       "recommended": true,
       "description": "Recommended mid-tier generalist; Qwen reports it ahead of last year's 30B-class models on reasoning. Thinks by default.",
-      "modality": "text"
+      "modality": "text",
+      "license": "Apache-2.0"
     },
     {
       "id": "granite-4.2-8b",
@@ -103,7 +107,8 @@
       "min_vram_gb": 7,
       "recommended": false,
       "description": "IBM's dense 8B (Aug 2026): thinking by default with a low-effort mode, solid math and code, 128K context. Apache 2.0.",
-      "modality": "text"
+      "modality": "text",
+      "license": "Apache-2.0"
     },
     {
       "id": "gemma-4-12b",
@@ -133,7 +138,8 @@
       "min_vram_gb": 16,
       "recommended": false,
       "description": "Liquid AI's agent MoE (Oct 2026): ~2.4B active, so it stays fast on CPU or with partial GPU offload. Always thinks. LFM Open License (free under $10M revenue).",
-      "modality": "text"
+      "modality": "text",
+      "license": "LFM Open License v1.0"
     },
     {
       "id": "gemma-4-26b-a4b",
@@ -193,7 +199,8 @@
       "min_vram_gb": 24,
       "recommended": false,
       "description": "Fast MoE generalist (3B active, Apr 2026); great throughput on Apple Silicon with enough unified memory.",
-      "modality": "text"
+      "modality": "text",
+      "license": "Apache-2.0"
     },
     {
       "id": "mistral-small-3.2-24b",
@@ -208,7 +215,8 @@
       "min_vram_gb": 16,
       "recommended": false,
       "description": "Flagship 24B generalist; fits 24GB unified memory at Q4_K_M.",
-      "modality": "text"
+      "modality": "text",
+      "license": "Apache-2.0"
     },
     {
       "id": "devstral-small-2-24b",
@@ -238,7 +246,8 @@
       "min_vram_gb": 6,
       "recommended": false,
       "description": "Best-in-class 7B code model; strong fill-in-the-middle.",
-      "modality": "code"
+      "modality": "code",
+      "license": "Apache-2.0"
     },
     {
       "id": "mellum2.1-12b-a2.5b",
@@ -253,7 +262,8 @@
       "min_vram_gb": 10,
       "recommended": false,
       "description": "JetBrains' thinking code model (Oct 2026): 2.5B active, so it's quick even on CPU; its card beats Qwen3.5 9B on LiveCodeBench. English only. Apache 2.0.",
-      "modality": "code"
+      "modality": "code",
+      "license": "Apache-2.0"
     },
     {
       "id": "qwen3-coder-30b-a3b",
@@ -268,7 +278,8 @@
       "min_vram_gb": 20,
       "recommended": false,
       "description": "MoE coder (3B active); near-flagship coding at fast token rates.",
-      "modality": "code"
+      "modality": "code",
+      "license": "Apache-2.0"
     },
     {
       "id": "gpt-oss-20b",
@@ -283,7 +294,8 @@
       "min_vram_gb": 14,
       "recommended": true,
       "description": "OpenAI's open-weight reasoning MoE (Apache 2.0); adjustable reasoning effort, strong math and tool use.",
-      "modality": "reasoning"
+      "modality": "reasoning",
+      "license": "Apache-2.0"
     },
     {
       "id": "qwen3.8-27b",
@@ -298,7 +310,8 @@
       "min_vram_gb": 20,
       "recommended": false,
       "description": "Qwen's newest open model (Aug 2026): deep thinking by default; its card reports top-tier coding and agentic scores.",
-      "modality": "reasoning"
+      "modality": "reasoning",
+      "license": "Apache-2.0"
     },
     {
       "id": "minicpm-v-4.7-1b",
@@ -332,7 +345,8 @@
       "description": "Liquid AI's small VLM (Oct 2026): documents, charts and screenshots at close to Qwen3.5 4B quality in under half the memory. LFM Open License (free under $10M revenue).",
       "modality": "vision",
       "mmproj_file": "mmproj-LFM3-VL-2B-F16.gguf",
-      "mmproj_url": "https://huggingface.co/LiquidAI/LFM3-VL-2B-GGUF/resolve/main/mmproj-LFM3-VL-2B-F16.gguf?download=true"
+      "mmproj_url": "https://huggingface.co/LiquidAI/LFM3-VL-2B-GGUF/resolve/main/mmproj-LFM3-VL-2B-F16.gguf?download=true",
+      "license": "LFM Open License v1.0"
     },
     {
       "id": "qwen3.5-4b-vision",
@@ -349,7 +363,8 @@
       "description": "Natively multimodal Qwen3.5 with its vision projector; documents, screenshots and charts.",
       "modality": "vision",
       "mmproj_file": "mmproj-Qwen3.5-4B-F16.gguf",
-      "mmproj_url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf?download=true"
+      "mmproj_url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf?download=true",
+      "license": "Apache-2.0"
     },
     {
       "id": "gemma-4-e4b-vision",
@@ -383,7 +398,8 @@
       "description": "Recommended VLM: Qwen reports it ahead of Qwen3-VL-30B-A3B on MMMU and document benchmarks.",
       "modality": "vision",
       "mmproj_file": "mmproj-Qwen3.5-9B-F16.gguf",
-      "mmproj_url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf?download=true"
+      "mmproj_url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf?download=true",
+      "license": "Apache-2.0"
     },
     {
       "id": "gemma-4-12b-vision",
@@ -417,7 +433,8 @@
       "description": "Qwen3.8 27B with its vision projector: the strongest local reader of documents, charts and screenshots. Wants a 24 GB GPU.",
       "modality": "vision",
       "mmproj_file": "mmproj-Qwen3.8-27B-F16.gguf",
-      "mmproj_url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/mmproj-F16.gguf?download=true"
+      "mmproj_url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/mmproj-F16.gguf?download=true",
+      "license": "Apache-2.0"
     },
     {
       "id": "embeddinggemma-2",
@@ -447,7 +464,8 @@
       "min_vram_gb": 0,
       "recommended": false,
       "description": "Multilingual (100+ languages) 8K-token embeddings; MIT-licensed all-rounder.",
-      "modality": "embedding"
+      "modality": "embedding",
+      "license": "MIT"
     },
     {
       "id": "qwen3-embedding-4b",
@@ -462,7 +480,8 @@
       "min_vram_gb": 0,
       "recommended": false,
       "description": "High-accuracy multilingual and code retrieval, 32K context; slower than the small embedders.",
-      "modality": "embedding"
+      "modality": "embedding",
+      "license": "Apache-2.0"
     },
     {
       "id": "qwen3-embedding-0.6b",
@@ -477,7 +496,8 @@
       "min_vram_gb": 0,
       "recommended": false,
       "description": "Modern multilingual instruction-aware embeddings.",
-      "modality": "embedding"
+      "modality": "embedding",
+      "license": "Apache-2.0"
     },
     {
       "id": "z-image-turbo",
@@ -493,6 +513,7 @@
       "recommended": true,
       "description": "Photorealistic 8-step image model (Nov 2025) that renders legible text; Qwen3-4B text encoder. Apache 2.0.",
       "modality": "image",
+      "license": "Apache-2.0",
       "extra_files": [
         {
           "file": "flux1-ae.safetensors",
@@ -520,6 +541,7 @@
       "recommended": false,
       "description": "Black Forest Labs' small distilled FLUX.2 (Jan 2026): strong composition in 4 steps. Apache 2.0.",
       "modality": "image",
+      "license": "Apache-2.0",
       "extra_files": [
         {
           "file": "flux2-vae.safetensors",
@@ -588,7 +610,8 @@
       "min_vram_gb": 0,
       "recommended": true,
       "description": "Fast, accurate speech-to-text (POST /inference with an audio file).",
-      "modality": "audio-stt"
+      "modality": "audio-stt",
+      "license": "MIT"
     },
     {
       "id": "whisper-small",
@@ -603,7 +626,8 @@
       "min_vram_gb": 0,
       "recommended": false,
       "description": "Smaller multilingual STT; good speed/quality balance.",
-      "modality": "audio-stt"
+      "modality": "audio-stt",
+      "license": "MIT"
     },
     {
       "id": "whisper-base-en",
@@ -618,7 +642,29 @@
       "min_vram_gb": 0,
       "recommended": false,
       "description": "Tiny English-only STT; runs anywhere.",
-      "modality": "audio-stt"
+      "modality": "audio-stt",
+      "license": "MIT"
+    },
+    {
+      "id": "moonshine-streaming-small",
+      "name": "Moonshine Streaming Small (English)",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "file": "moonshine-streaming-small-q8_0.gguf",
+      "url": "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Moonshine-Streaming-GGUF/moonshine-streaming-small-q8_0.gguf?download=true",
+      "size_gb": 0.3,
+      "tier": "tiny",
+      "params": "140M",
+      "min_ram_gb": 1,
+      "min_vram_gb": 0,
+      "recommended": false,
+      "description": "Moonshine's streaming English speech-to-text, built for live audio, served by audio.cpp: transcribes WAV uploads (POST /v1/audio/transcriptions, model \"stt\"; stream=true for text as it decodes) and raw PCM as it's captured (POST /v1/audio/transcriptions/live). WAV only. MIT.",
+      "modality": "audio-stt",
+      "runtime": "audiocpp",
+      "audiocpp": {
+        "family": "moonshine_asr",
+        "streaming": true
+      },
+      "license": "MIT"
     },
     {
       "id": "pocket-tts-en",
@@ -632,7 +678,7 @@
       "min_ram_gb": 2,
       "min_vram_gb": 0,
       "recommended": true,
-      "description": "Kyutai's CPU-first TTS: 26 built-in voices, faster than real time on a laptop CPU. English build; CC-BY-4.0.",
+      "description": "Kyutai's CPU-first TTS: 26 built-in voices, faster than real time on a laptop CPU, and it clones a voice from a few seconds of reference audio, no transcript needed. English build; streams audio as it speaks. CC-BY-4.0 (credit Kyutai). Clone only voices you have consent to use.",
       "modality": "tts",
       "runtime": "audiocpp",
       "audiocpp": {
@@ -640,8 +686,13 @@
         "load_options": {
           "language": "english"
         },
-        "default_voice": "alba"
+        "default_voice": "alba",
+        "streaming": true
       },
+      "voice_clone": true,
+      "clone_needs_transcript": false,
+      "license": "CC-BY-4.0",
+      "commercial_use": true,
       "extra_files": [
         {
           "file": "pocket-tts-en-alba.safetensors",
@@ -813,13 +864,187 @@
       "min_ram_gb": 6,
       "min_vram_gb": 0,
       "recommended": false,
-      "description": "Qwen's expressive TTS (Jan 2026): 9 built-in speakers you can steer with a style instruction, 10 languages. Much slower than Pocket or Kokoro on CPU. Apache 2.0.",
+      "description": "Qwen's expressive TTS (Jan 2026): 9 built-in speakers you can steer with a style instruction, 10 languages. No cloning (that's the Base models). Much slower than Pocket or Kokoro on CPU; streams audio as it speaks. Apache 2.0.",
       "modality": "tts",
       "runtime": "audiocpp",
       "audiocpp": {
         "family": "qwen3_tts",
-        "default_voice": "Ryan"
-      }
+        "default_voice": "Ryan",
+        "streaming": true
+      },
+      "voice_clone": false,
+      "clone_needs_transcript": false,
+      "license": "Apache-2.0",
+      "commercial_use": true
+    },
+    {
+      "id": "pocket-tts-small-en",
+      "name": "Pocket TTS Small 18M (English)",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "file": "pocket-tts-small-english-18m-refl-f32.gguf",
+      "url": "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/PocketTTS-Small-GGUF/english-18m-refl/english-18m-refl-f32.gguf?download=true",
+      "size_gb": 0.12,
+      "tier": "tiny",
+      "params": "18M",
+      "min_ram_gb": 1,
+      "min_vram_gb": 0,
+      "recommended": false,
+      "description": "Kyutai's Pocket TTS Small (18M, ReFL): a fifth of Pocket TTS's size, one built-in voice (Alba), and it clones a voice from a short reference recording without a transcript. English; streams audio as it speaks. Experimental in audio.cpp. CC-BY-4.0 (credit Kyutai).",
+      "modality": "tts",
+      "runtime": "audiocpp",
+      "audiocpp": {
+        "family": "pocket_tts_small",
+        "default_voice": "alba",
+        "streaming": true
+      },
+      "voice_clone": true,
+      "clone_needs_transcript": false,
+      "license": "CC-BY-4.0",
+      "commercial_use": true,
+      "extra_files": [
+        {
+          "file": "pocket-tts-small-18m-refl-alba.safetensors",
+          "url": "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/PocketTTS-Small-GGUF/english-18m-refl/embeddings/alba.safetensors?download=true",
+          "role": "voice",
+          "as": "alba.safetensors"
+        }
+      ]
+    },
+    {
+      "id": "qwen3-tts-0.6b-base",
+      "name": "Qwen3-TTS 0.6B Base (voice cloning)",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "file": "qwen3-tts-12hz-0.6b-base-q8_0.gguf",
+      "url": "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Qwen3-TTS-12Hz-0.6B-Base-GGUF/qwen3-tts-12hz-0.6b-base-q8_0.gguf?download=true",
+      "size_gb": 1.99,
+      "tier": "small",
+      "params": "0.6B",
+      "min_ram_gb": 4,
+      "min_vram_gb": 0,
+      "recommended": false,
+      "description": "Qwen's voice-cloning TTS, small: speaks in a voice cloned from about 3 seconds of reference audio plus its transcript, in 10 languages; streams audio as it speaks. No built-in voices, so every request needs a reference voice. Slower than Pocket TTS on CPU. Apache 2.0.",
+      "modality": "tts",
+      "runtime": "audiocpp",
+      "audiocpp": {
+        "family": "qwen3_tts",
+        "streaming": true
+      },
+      "voice_clone": true,
+      "clone_needs_transcript": true,
+      "license": "Apache-2.0",
+      "commercial_use": true
+    },
+    {
+      "id": "qwen3-tts-1.7b-base",
+      "name": "Qwen3-TTS 1.7B Base (voice cloning)",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "file": "qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf",
+      "url": "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf?download=true",
+      "size_gb": 2.7,
+      "tier": "small",
+      "params": "1.7B",
+      "min_ram_gb": 6,
+      "min_vram_gb": 0,
+      "recommended": false,
+      "description": "Qwen's voice-cloning TTS: speaks in a voice cloned from about 3 seconds of reference audio plus its transcript, in 10 languages, closer to the reference than the 0.6B; streams audio as it speaks. No built-in voices, so every request needs a reference voice. Much slower than Pocket TTS on CPU. Apache 2.0.",
+      "modality": "tts",
+      "runtime": "audiocpp",
+      "audiocpp": {
+        "family": "qwen3_tts",
+        "streaming": true
+      },
+      "voice_clone": true,
+      "clone_needs_transcript": true,
+      "license": "Apache-2.0",
+      "commercial_use": true
+    },
+    {
+      "id": "voxcpm2",
+      "name": "VoxCPM2 2B",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "file": "voxcpm2-q8_0.gguf",
+      "url": "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/VoxCPM2-GGUF/voxcpm2-q8_0.gguf?download=true",
+      "size_gb": 2.96,
+      "tier": "small",
+      "params": "2B",
+      "min_ram_gb": 8,
+      "min_vram_gb": 0,
+      "recommended": false,
+      "description": "OpenBMB's multilingual TTS (30 languages, 48 kHz): clones a voice from a reference recording with or without its transcript (with it, closer to the reference), or designs one from a description in parentheses at the start of the text. A quality pick; its speed on CPU is unmeasured here. Streams audio as it speaks. Apache 2.0.",
+      "modality": "tts",
+      "runtime": "audiocpp",
+      "audiocpp": {
+        "family": "voxcpm2",
+        "streaming": true,
+        "request_options": {
+          "retry_badcase": false
+        }
+      },
+      "voice_clone": true,
+      "clone_needs_transcript": false,
+      "license": "Apache-2.0",
+      "commercial_use": true
+    },
+    {
+      "id": "ming-3.0-tts-0.5b",
+      "name": "Ming 3.0 TTS 0.5B",
+      "repo": "audio-cpp/Ming-3.0-TTS-0.5B-GGUF",
+      "file": "ming-3.0-tts-0.5b-q8_0.gguf",
+      "url": "https://huggingface.co/audio-cpp/Ming-3.0-TTS-0.5B-GGUF/resolve/main/ming-3.0-tts-0.5b-q8_0.gguf?download=true",
+      "size_gb": 1.74,
+      "tier": "small",
+      "params": "0.5B",
+      "min_ram_gb": 4,
+      "min_vram_gb": 0,
+      "recommended": false,
+      "description": "inclusionAI's Ming 3.0 TTS (7 languages, 44.1 kHz): clones a voice from a reference recording with or without its transcript, or designs one from an instruction. A quality pick; its speed on CPU is unmeasured here. Streams audio as it speaks. MIT.",
+      "modality": "tts",
+      "runtime": "audiocpp",
+      "audiocpp": {
+        "family": "ming3_tts",
+        "streaming": true
+      },
+      "voice_clone": true,
+      "clone_needs_transcript": false,
+      "license": "MIT",
+      "commercial_use": true
+    },
+    {
+      "id": "xtts-v2",
+      "name": "XTTS v2 (non-commercial)",
+      "repo": "onicubag/xTTSv2-GGUF",
+      "file": "xtts-v2-gpt-q8_0.gguf",
+      "url": "https://huggingface.co/onicubag/xTTSv2-GGUF/resolve/main/q8_0/xtts-v2-gpt-q8_0.gguf?download=true",
+      "size_gb": 0.57,
+      "tier": "tiny",
+      "params": "XTTS v2",
+      "min_ram_gb": 3,
+      "min_vram_gb": 0,
+      "recommended": false,
+      "description": "Coqui's XTTS v2: clones a voice from a 6-30 second reference recording, no transcript needed, in 17 languages. NON-COMMERCIAL ONLY: the weights are under the Coqui Public Model License (CPML), so neither the model nor its output may be used commercially. A community port in audio.cpp; no streaming. No built-in voices, so every request needs a reference voice.",
+      "modality": "tts",
+      "runtime": "audiocpp",
+      "audiocpp": {
+        "family": "xtts_v2"
+      },
+      "voice_clone": true,
+      "clone_needs_transcript": false,
+      "license": "CPML",
+      "commercial_use": false,
+      "extra_files": [
+        {
+          "file": "xtts-v2-q8_0-vocoder-f16.gguf",
+          "url": "https://huggingface.co/onicubag/xTTSv2-GGUF/resolve/main/q8_0/xtts-v2-vocoder-f16.gguf?download=true",
+          "role": "vocoder",
+          "as": "xtts-v2-vocoder-f16.gguf"
+        },
+        {
+          "file": "xtts-v2-q8_0-mel_norms.bin",
+          "url": "https://huggingface.co/onicubag/xTTSv2-GGUF/resolve/main/q8_0/mel_norms.bin?download=true",
+          "role": "mel_norms",
+          "as": "mel_norms.bin"
+        }
+      ]
     },
     {
       "id": "piper-en-us",
@@ -833,8 +1058,12 @@
       "min_ram_gb": 1,
       "min_vram_gb": 0,
       "recommended": false,
-      "description": "Fast CPU text-to-speech; serves /v1/audio/speech. Self-contained (compute: CPU).",
-      "modality": "tts"
+      "description": "Fast CPU text-to-speech (the en_US lessac voice); serves /v1/audio/speech. Self-contained (compute: CPU). The voice is MIT, but the recordings it was trained on (Lessac Blizzard 2013) allow non-commercial use only, so treat it as non-commercial.",
+      "modality": "tts",
+      "voice_clone": false,
+      "clone_needs_transcript": false,
+      "license": "MIT",
+      "commercial_use": false
     },
     {
       "id": "kokoro-tts",
@@ -850,7 +1079,11 @@
       "recommended": true,
       "description": "Natural neural text-to-speech via the Python/PyTorch runtime (Kokoro). Markedly better than Piper; runs on CPU. The factory's first Python-runtime model.",
       "modality": "tts",
-      "runtime": "python"
+      "runtime": "python",
+      "voice_clone": false,
+      "clone_needs_transcript": false,
+      "license": "Apache-2.0",
+      "commercial_use": true
     },
     {
       "id": "wan2.2-t2v-a14b",
@@ -866,6 +1099,7 @@
       "recommended": false,
       "description": "Text-to-video (480p) via stable-diffusion.cpp. Needs CUDA; ~6-8GB VRAM with CPU offload. NOTE: verify the four weight URLs on first build.",
       "modality": "video",
+      "license": "Apache-2.0",
       "extra_files": [
         {
           "file": "Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf",
@@ -898,6 +1132,7 @@
       "recommended": true,
       "description": "Lightweight text-to-video (480p) via stable-diffusion.cpp — the entry-point Wan model, fits a ~12GB GPU comfortably. Diffusion model is ~1GB; the umt5 text encoder (~3.7GB) dominates the ~5GB total. Best FIRST video test before the 20GB A14B.",
       "modality": "video",
+      "license": "Apache-2.0",
       "extra_files": [
         {
           "file": "wan_2.1_vae.safetensors",
@@ -925,6 +1160,7 @@
       "recommended": false,
       "description": "Mid-tier text/image-to-video via stable-diffusion.cpp — single-model Wan 2.2 (no high/low-noise split). ~3.4GB diffusion + ~3.7GB text encoder. Needs CUDA; ~8GB VRAM with CPU offload.",
       "modality": "video",
+      "license": "Apache-2.0",
       "extra_files": [
         {
           "file": "Wan2.2_VAE.safetensors",
@@ -986,7 +1222,8 @@
       "recommended": false,
       "description": "Tiniest Qwen3; hybrid-thinking model that runs on any CPU.",
       "modality": "text",
-      "legacy": true
+      "legacy": true,
+      "license": "Apache-2.0"
     },
     {
       "id": "qwen3-4b",
@@ -1002,7 +1239,8 @@
       "recommended": false,
       "description": "Best small all-rounder; strong reasoning with optional thinking mode.",
       "modality": "text",
-      "legacy": true
+      "legacy": true,
+      "license": "Apache-2.0"
     },
     {
       "id": "qwen3-8b",
@@ -1018,7 +1256,8 @@
       "recommended": false,
       "description": "Recommended mid-tier generalist; excellent on Apple Silicon GPU.",
       "modality": "text",
-      "legacy": true
+      "legacy": true,
+      "license": "Apache-2.0"
     },
     {
       "id": "qwen3-14b",
@@ -1034,7 +1273,8 @@
       "recommended": false,
       "description": "Top single-GPU Qwen3; best quality before the 24B/32B class.",
       "modality": "text",
-      "legacy": true
+      "legacy": true,
+      "license": "Apache-2.0"
     },
     {
       "id": "gemma-3-1b-it",
@@ -1050,7 +1290,8 @@
       "recommended": false,
       "description": "Smallest Gemma 3; fast text-only chat on any CPU.",
       "modality": "text",
-      "legacy": true
+      "legacy": true,
+      "license": "Gemma"
     },
     {
       "id": "gemma-3-4b-it",
@@ -1066,7 +1307,8 @@
       "recommended": false,
       "description": "Capable small instruct model with 128K context (text use).",
       "modality": "text",
-      "legacy": true
+      "legacy": true,
+      "license": "Gemma"
     },
     {
       "id": "gemma-3-12b-it",
@@ -1082,7 +1324,8 @@
       "recommended": false,
       "description": "Strong mid/large Gemma 3; great single-GPU general model.",
       "modality": "text",
-      "legacy": true
+      "legacy": true,
+      "license": "Gemma"
     },
     {
       "id": "deepseek-r1-distill-qwen-7b",
@@ -1098,7 +1341,8 @@
       "recommended": false,
       "description": "R1-distilled chain-of-thought reasoning at 7B.",
       "modality": "reasoning",
-      "legacy": true
+      "legacy": true,
+      "license": "MIT"
     },
     {
       "id": "deepseek-r1-distill-qwen-14b",
@@ -1114,7 +1358,8 @@
       "recommended": false,
       "description": "Stronger R1-distilled reasoning at 14B; single-GPU friendly.",
       "modality": "reasoning",
-      "legacy": true
+      "legacy": true,
+      "license": "MIT"
     },
     {
       "id": "qwq-32b",
@@ -1130,7 +1375,8 @@
       "recommended": false,
       "description": "Dedicated reasoning model rivaling much larger LLMs; fits 24GB at Q4.",
       "modality": "reasoning",
-      "legacy": true
+      "legacy": true,
+      "license": "Apache-2.0"
     },
     {
       "id": "qwen2.5-vl-7b",
@@ -1148,7 +1394,8 @@
       "modality": "vision",
       "mmproj_file": "mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf",
       "mmproj_url": "https://huggingface.co/bartowski/Qwen_Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf?download=true",
-      "legacy": true
+      "legacy": true,
+      "license": "Apache-2.0"
     },
     {
       "id": "gemma-3-4b-vision",
@@ -1166,7 +1413,8 @@
       "modality": "vision",
       "mmproj_file": "mmproj-google_gemma-3-4b-it-f16.gguf",
       "mmproj_url": "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/mmproj-google_gemma-3-4b-it-f16.gguf?download=true",
-      "legacy": true
+      "legacy": true,
+      "license": "Gemma"
     },
     {
       "id": "gemma-3-12b-vision",
@@ -1184,7 +1432,8 @@
       "modality": "vision",
       "mmproj_file": "mmproj-google_gemma-3-12b-it-f16.gguf",
       "mmproj_url": "https://huggingface.co/bartowski/google_gemma-3-12b-it-GGUF/resolve/main/mmproj-google_gemma-3-12b-it-f16.gguf?download=true",
-      "legacy": true
+      "legacy": true,
+      "license": "Gemma"
     },
     {
       "id": "smolvlm-instruct",
@@ -1202,7 +1451,8 @@
       "modality": "vision",
       "mmproj_file": "mmproj-SmolVLM-Instruct-f16.gguf",
       "mmproj_url": "https://huggingface.co/ggml-org/SmolVLM-Instruct-GGUF/resolve/main/mmproj-SmolVLM-Instruct-f16.gguf?download=true",
-      "legacy": true
+      "legacy": true,
+      "license": "Apache-2.0"
     },
     {
       "id": "llama-3.2-1b",
@@ -1217,7 +1467,8 @@
       "min_vram_gb": 0,
       "recommended": false,
       "description": "Fastest option; runs comfortably on any laptop CPU.",
-      "legacy": true
+      "legacy": true,
+      "license": "Llama 3.2 Community License"
     },
     {
       "id": "qwen2.5-1.5b",
@@ -1232,7 +1483,8 @@
       "min_vram_gb": 0,
       "recommended": false,
       "description": "Punches above its weight; great low-resource CPU choice.",
-      "legacy": true
+      "legacy": true,
+      "license": "Apache-2.0"
     },
     {
       "id": "qwen2.5-3b",
@@ -1247,7 +1499,8 @@
       "min_vram_gb": 0,
       "recommended": false,
       "description": "CPU sweet spot: strong quality for structured-data tasks at modest cost.",
-      "legacy": true
+      "legacy": true,
+      "license": "Qwen Research License"
     },
     {
       "id": "llama-3.2-3b",
@@ -1262,7 +1515,8 @@
       "min_vram_gb": 0,
       "recommended": false,
       "description": "Excellent general-purpose small model.",
-      "legacy": true
+      "legacy": true,
+      "license": "Llama 3.2 Community License"
     },
     {
       "id": "phi-3.5-mini",
@@ -1277,7 +1531,8 @@
       "min_vram_gb": 0,
       "recommended": false,
       "description": "Reasoning-heavy for its size; good at following instructions.",
-      "legacy": true
+      "legacy": true,
+      "license": "MIT"
     },
     {
       "id": "mistral-7b-v0.3",
@@ -1292,7 +1547,8 @@
       "min_vram_gb": 6,
       "recommended": false,
       "description": "Solid generalist; comfortable on GPU or a beefy CPU.",
-      "legacy": true
+      "legacy": true,
+      "license": "Apache-2.0"
     },
     {
       "id": "qwen2.5-7b",
@@ -1307,7 +1563,8 @@
       "min_vram_gb": 6,
       "recommended": false,
       "description": "Best mid-tier quality; great for richer analysis tasks.",
-      "legacy": true
+      "legacy": true,
+      "license": "Apache-2.0"
     },
     {
       "id": "llama-3.1-8b",
@@ -1322,7 +1579,8 @@
       "min_vram_gb": 6,
       "recommended": false,
       "description": "High-quality 8B; GPU-friendly.",
-      "legacy": true
+      "legacy": true,
+      "license": "Llama 3.1 Community License"
     },
     {
       "id": "qwen2.5-14b",
@@ -1337,7 +1595,8 @@
       "min_vram_gb": 12,
       "recommended": false,
       "description": "Best quality here; really wants a GPU with >=12 GB VRAM.",
-      "legacy": true
+      "legacy": true,
+      "license": "Apache-2.0"
     },
     {
       "id": "nomic-embed-text-v1.5",
@@ -1353,7 +1612,8 @@
       "recommended": false,
       "description": "768-dim text embeddings with 8K context; great for RAG.",
       "modality": "embedding",
-      "legacy": true
+      "legacy": true,
+      "license": "Apache-2.0"
     },
     {
       "id": "bge-large-en-v1.5",
@@ -1369,7 +1629,8 @@
       "recommended": false,
       "description": "Strong 1024-dim English retrieval embeddings.",
       "modality": "embedding",
-      "legacy": true
+      "legacy": true,
+      "license": "MIT"
     },
     {
       "id": "sdxl-base",
@@ -1385,7 +1646,8 @@
       "recommended": false,
       "description": "Full-quality SDXL (25-30 steps); ~2 min/image on GPU. Self-contained.",
       "modality": "image",
-      "legacy": true
+      "legacy": true,
+      "license": "CreativeML OpenRAIL++-M"
     },
     {
       "id": "sd-1.5",
@@ -1401,7 +1663,8 @@
       "recommended": false,
       "description": "Smaller/faster 512px diffusion; light on RAM.",
       "modality": "image",
-      "legacy": true
+      "legacy": true,
+      "license": "CreativeML-OpenRAIL-M"
     }
   ]
 }
