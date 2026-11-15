@@ -349,8 +349,12 @@ curl -s localhost:8799/v1/audio/transcriptions -H "Authorization: Bearer $KEY" \
   ffmpeg, keep 8 to 16 frames (uniform, or where the scene changes), and send
   them to the vision member as ordered images with timestamps. Today a video
   sent to an ensemble isn't watched.
-- **Embedded packaging.** Every runtime and weight in one image. The data model
-  keeps `package_mode`, but the Conductor runs orchestrated.
+- **Embedded packaging.** Every runtime and weight in one image (or one native
+  package). The data model keeps `package_mode`, but the Conductor runs
+  orchestrated. The base for it is `internal/native`'s multi-process
+  supervisor: an embedded Conductor would implement the manager's `Engine`
+  (run, remove, port, state, list, logs) over supervised processes instead of the
+  docker CLI.
 - **Real-time voice and a live avatar.** Room has been left for them: speech
   requests carry `stream_format` for audio.cpp's streaming mode, and
   Moonshine's `/v1/audio/transcriptions/live` is untouched. Neither is wired to

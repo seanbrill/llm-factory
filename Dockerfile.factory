@@ -103,6 +103,8 @@ COPY internal/gate/             /app/internal/gate/
 COPY internal/agent/            /app/internal/agent/
 COPY cmd/videogate/             /app/cmd/videogate/
 COPY cmd/ensemblegate/          /app/cmd/ensemblegate/
+COPY internal/ensemble/         /app/internal/ensemble/
+COPY internal/voice/            /app/internal/voice/
 COPY cmd/pygate/                /app/cmd/pygate/
 COPY --from=filefreak /tools/filefreak /app/tools/filefreak
 COPY --from=build /launchers/   /app/native/launchers/

@@ -89,6 +89,21 @@ func TestStageEnsemblegateCompiles(t *testing.T) {
 	}
 }
 
+// TestFactoryImageShipsEnsembleSources: a factory running in a container
+// stages the Conductor from /app, so its image must carry every package the
+// Conductor compiles from.
+func TestFactoryImageShipsEnsembleSources(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "Dockerfile.factory"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pkg := range ensembleGatePackages {
+		if !strings.Contains(string(b), "COPY "+pkg+"/") {
+			t.Errorf("Dockerfile.factory doesn't copy %s/ (the ensemble build stages it)", pkg)
+		}
+	}
+}
+
 func TestDockerfileEnsembleBuildsTheStagedModule(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("..", "..", "docker", "Dockerfile.ensemble"))
 	if err != nil {
