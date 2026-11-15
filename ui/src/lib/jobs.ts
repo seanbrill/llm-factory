@@ -68,7 +68,8 @@ export function timeText(j: BuildJob): string {
   if (j.status === "running") {
     if (j.eta_seconds > 0) {
       const left = j.eta_seconds - j.elapsed_ms / 1000;
-      return left > 30 ? `about ${dur(left)} left` : "almost done";
+      if (left > 30) return `about ${dur(left)} left`;
+      return left < -60 ? `past the ~${dur(j.eta_seconds)} estimate` : "almost done";
     }
     return `${clock(j.elapsed_ms)} elapsed`;
   }

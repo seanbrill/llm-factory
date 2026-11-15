@@ -5,7 +5,7 @@
 import type { BuildJob, EngineResources, Model, SysInfo } from "./types";
 import { views, type JobView } from "./build.svelte";
 import { ENGINES, compiledOn, history, phase, timeText } from "./jobs";
-import { focusLine, memoryFix, type Explanation, type Fix } from "./explain";
+import { CMAKE_CHECK, focusLine, memoryFix, type Explanation, type Fix } from "./explain";
 import { predictRoute } from "./plan.svelte";
 import { ago, computeName, dur, engineName, plural } from "./format";
 
@@ -214,9 +214,7 @@ export function waitText(j: BuildJob): string {
 /** Time left for a running build; says so when it runs past its estimate. */
 export function leftText(j: BuildJob): string {
   if (j.status !== "running" || !(j.eta_seconds > 0)) return "";
-  const left = j.eta_seconds - j.elapsed_ms / 1000;
-  if (left < -60) return `past the ~${dur(j.eta_seconds)} estimate`;
-  return timeText(j); // "about 3 min left" / "almost done"
+  return timeText(j); // "about 3 min left" / "almost done" / "past the ~X estimate"
 }
 
 /** The llama.cpp release a build compiles, from its log's git clone line ("v0.9.0"). */
@@ -295,10 +293,7 @@ export function logLines(v: JobView | undefined): { lines: string[]; first: numb
   return { lines, first: Math.max(0, v.offset - lines.length) };
 }
 
-// CMake's configure checks ("-- Performing Test X - Failed") report, they don't fail.
-const CMAKE_CHECK = /^(#\d+\s+[\d.]+\s+)?--\s.*\s-\s(failed|not found|no)\s*$/i;
-// The causes worth opening a log on, before any generic error line.
-const CAUSE = /(killed signal|fatal error|out of memory|virtual memory exhausted|no space left|cannot connect|connection refused|isn't answering|tls handshake timeout|temporary failure in name resolution|no such host)/i;
+// A line that reports an error (CMake's configure checks are excluded where it's used).
 const ERROR = /(killed signal|fatal error|\berror\b|out of memory|virtual memory exhausted|no space left|cannot connect|connection refused|did not complete successfully|exit (status|code):? [1-9])/i;
 
 /** A log line that reports an error (highlighted, and counted in "Errors"). */
@@ -311,9 +306,7 @@ export function isErrorLine(l: string): boolean {
  * error, a full disk), else focusLine's pick with CMake's checks left out.
  */
 export function focusAt(lines: string[]): number {
-  const i = lines.findIndex((l) => CAUSE.test(l) && !CMAKE_CHECK.test(l));
-  if (i >= 0) return i;
-  return focusLine(lines.map((l) => (CMAKE_CHECK.test(l) ? "" : l)));
+  return focusLine(lines);
 }
 
 /** Save text as a file (the log's Download button). */

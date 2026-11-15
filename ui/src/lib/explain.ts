@@ -163,9 +163,19 @@ function lastUseful(log: string): string | undefined {
   return undefined;
 }
 
-/** Index of the first log line worth opening on: the error, or the compiler kill. */
+/** CMake's configure checks ("-- Performing Test X - Failed") report a probe, not an error. */
+export const CMAKE_CHECK = /^(#\d+\s+[\d.]+\s+)?--\s.*\s-\s(failed|not found|no)\s*$/i;
+/** The causes worth opening a log on, before any generic error line. */
+export const CAUSE = /(killed signal|fatal error|out of memory|virtual memory exhausted|no space left|cannot connect|connection refused|isn't answering|tls handshake timeout|temporary failure in name resolution|no such host)/i;
+
+/**
+ * Index of the log line to open on: the cause (a compiler kill, a fatal error,
+ * a full disk), else the first error line; CMake's checks never count. -1 when
+ * there's none.
+ */
 export function focusLine(lines: string[]): number {
+  const cause = lines.findIndex((l) => CAUSE.test(l) && !CMAKE_CHECK.test(l));
+  if (cause >= 0) return cause;
   const re = /(killed signal|error:|ERROR:|fatal|failed|no space left|out of memory|cannot connect)/i;
-  const i = lines.findIndex((l) => re.test(l));
-  return i;
+  return lines.findIndex((l) => re.test(l) && !CMAKE_CHECK.test(l));
 }
