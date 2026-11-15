@@ -42,6 +42,11 @@ type Options struct {
 	Harness *agent.Agent
 	// Host names the program in GET /v1/harness when there is no harness.
 	Host string
+	// UpstreamKey, when set, is sent to the upstream as a bearer token, on
+	// proxied requests and the harness's alike. llmpack starts llama-server
+	// with an API key so that only its gate can use it: a web page that finds
+	// llama-server's loopback port gets 401.
+	UpstreamKey string
 }
 
 // Gate is the reverse proxy. Everything but the chat-completions route and
@@ -72,11 +77,32 @@ func New(o Options) (*Gate, error) {
 	// The harness talks to the model server directly: no proxy settings and
 	// no overall timeout (a long answer streams for minutes; the request's
 	// context ends it).
-	client := &http.Client{Transport: &http.Transport{Proxy: nil, MaxIdleConnsPerHost: 8, IdleConnTimeout: 90 * time.Second}}
+	var tr http.RoundTripper = &http.Transport{Proxy: nil, MaxIdleConnsPerHost: 8, IdleConnTimeout: 90 * time.Second}
+	if key := o.UpstreamKey; key != "" {
+		direct := rp.Director
+		rp.Director = func(r *http.Request) {
+			direct(r)
+			r.Header.Set("Authorization", "Bearer "+key)
+		}
+		tr = bearer{key: key, next: tr}
+	}
+	client := &http.Client{Transport: tr}
 	return &Gate{
 		proxy: rp, systemPrompt: o.SystemPrompt, injectMode: o.InjectMode, host: o.Host,
 		harness: o.Harness, upstream: agent.HTTPUpstream(client, base+"/v1/chat/completions"),
 	}, nil
+}
+
+// bearer adds the upstream's API key to the harness's requests.
+type bearer struct {
+	key  string
+	next http.RoundTripper
+}
+
+func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+b.key)
+	return b.next.RoundTrip(r)
 }
 
 // IsChatPath reports whether a path is llama-server's chat-completions route

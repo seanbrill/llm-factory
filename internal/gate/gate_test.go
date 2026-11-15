@@ -2,11 +2,72 @@ package gate
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/seanbrill/local-llm/internal/agent"
 )
+
+func TestUpstreamKey(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.URL.Path+" "+r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`)
+	}))
+	defer up.Close()
+	h, err := agent.New(agent.Config{Tools: []string{agent.ToolsetFetchURL}}, agent.Options{Host: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, harness := range []*agent.Agent{nil, h} {
+		g, err := New(Options{Upstream: up.URL, Harness: harness, UpstreamKey: "s3cret"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, req := range []*http.Request{
+			httptest.NewRequest(http.MethodGet, "/v1/models", nil),
+			httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"hello"}]}`)),
+		} {
+			req.Header.Set("Authorization", "Bearer client-key")
+			rec := httptest.NewRecorder()
+			g.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Errorf("harness=%v %s: %d %s", harness != nil, req.URL.Path, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) < 4 {
+		t.Fatalf("upstream saw %v", seen)
+	}
+	for _, s := range seen {
+		if !strings.HasSuffix(s, " Bearer s3cret") {
+			t.Errorf("upstream request without the key: %q", s)
+		}
+	}
+	// Without a key the client's header passes through, as before.
+	seen = nil
+	mu.Unlock()
+	g, _ := New(Options{Upstream: up.URL})
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer client-key")
+	g.ServeHTTP(httptest.NewRecorder(), req)
+	mu.Lock()
+	if len(seen) != 1 || seen[0] != "/v1/models Bearer client-key" {
+		t.Errorf("no key: %v", seen)
+	}
+}
 
 func roles(t *testing.T, body []byte) []string {
 	t.Helper()

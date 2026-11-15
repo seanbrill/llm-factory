@@ -22,6 +22,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -351,6 +353,14 @@ func (l *launcher) serve(stdout, stderr io.Writer) int {
 	}
 	l.llama.Port = up
 	upstream := "http://127.0.0.1:" + strconv.Itoa(up)
+	// llama-server answers only to the gate: it gets a random API key through
+	// its environment (LLAMA_API_KEY: not on its command line, not in the
+	// log), and the gate sends it. A web page that finds its port gets 401.
+	key, err := randomKey()
+	if err != nil {
+		l.logger.Printf("no random key for llama-server: %v", err)
+		return 1
+	}
 
 	logOut, logErr := stdout, stderr
 	if l.o.quiet {
@@ -364,7 +374,7 @@ func (l *launcher) serve(stdout, stderr io.Writer) int {
 	}
 
 	h := l.harnessAgent()
-	front, err := gate.New(gate.Options{Upstream: upstream, SystemPrompt: l.prompt, InjectMode: l.m.InjectMode, Harness: h, Host: "llmpack"})
+	front, err := gate.New(gate.Options{Upstream: upstream, SystemPrompt: l.prompt, InjectMode: l.m.InjectMode, Harness: h, Host: "llmpack", UpstreamKey: key})
 	if err != nil {
 		l.logger.Print(err)
 		return 1
@@ -375,7 +385,8 @@ func (l *launcher) serve(stdout, stderr io.Writer) int {
 	sup := native.NewSupervisor()
 	args := l.llama.Args()
 	l.logger.Printf("starting: %s %s", filepath.Base(l.server), strings.Join(args, " "))
-	if err := sup.Start(native.Proc{Name: "llama-server", Path: l.server, Args: args, Dir: filepath.Dir(l.server), Stdout: logOut, Stderr: logErr}); err != nil {
+	proc := native.Proc{Name: "llama-server", Path: l.server, Args: args, Dir: filepath.Dir(l.server), Env: []string{"LLAMA_API_KEY=" + key}, Stdout: logOut, Stderr: logErr}
+	if err := sup.Start(proc); err != nil {
 		l.logger.Print(err)
 		l.logger.Print(startHint(err))
 		return 1
@@ -428,7 +439,16 @@ func (l *launcher) serve(stdout, stderr io.Writer) int {
 	return code
 }
 
-// waitReady polls llama-server until the model is loaded.
+// randomKey is a fresh API key for llama-server.
+func randomKey() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// waitReady polls llama-server until the model is loaded (/health needs no key).
 func (l *launcher) waitReady(ctx context.Context, upstream string) {
 	start := time.Now()
 	client := &http.Client{Timeout: 3 * time.Second}
