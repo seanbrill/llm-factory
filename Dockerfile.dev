@@ -45,7 +45,7 @@ EXPOSE 8799
 # mounts (Windows/macOS), so wgo must stat-poll to see host edits. Generic wgo
 # form: `wgo [flags] <command>` — the command is the whole `go run …` line.
 # Serve the UI from disk (-web); -dir /app keeps models/images/config mounted.
-CMD ["wgo", "-poll=700ms", "-xdir=models|images|\\.build|\\.git|config", "-file=\\.go$", \
+CMD ["wgo", "-poll=700ms", "-xdir=models|images|packages|\\.build|\\.git|config", "-file=\\.go$", \
      "go", "run", "./cmd/builder", \
      "-dir", "/app", "-addr", "0.0.0.0:8799", "-open=false", \
      "-web", "/app/internal/server/web"]
