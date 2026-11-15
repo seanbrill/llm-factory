@@ -95,6 +95,29 @@ export const ICONS: Record<string, string> = {
   minus: '<path d="M5 12h14"/>',
   grip: '<circle cx="9" cy="6.5" r="1"/><circle cx="15" cy="6.5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="17.5" r="1"/><circle cx="15" cy="17.5" r="1"/>',
   retry: '<path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4.5v4h-4"/>',
+
+  // Page icons. Each page adds its own icons between its markers only, so
+  // parallel page work merges cleanly.
+
+  // [p1] Overview, System
+
+  // [/p1]
+
+  // [p2] Catalog, Build plan
+
+  // [/p2]
+
+  // [p3] Builds
+
+  // [/p3]
+
+  // [p4] Library, Playground
+
+  // [/p4]
+
+  // [p5] Harness, Ensembles, Personas, Help
+
+  // [/p5]
 };
 
 // Modality -> { icon, label }
