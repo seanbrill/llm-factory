@@ -93,7 +93,7 @@ func main() {
 	go g.mg.Monitor(ctx, 15*time.Second)
 
 	port := env("PORT", "8080")
-	srv := &http.Server{Addr: ":" + port, Handler: g.Handler(), ReadHeaderTimeout: 30 * time.Second}
+	srv := &http.Server{Addr: ":" + port, Handler: agent.NewHostGuard(g.Handler(), nil), ReadHeaderTimeout: 30 * time.Second}
 	router, note, tools := g.routerStatus()
 	log.Printf("ensemble %q (%s) on :%s: %d members, %s routing, %.0f GB budget, members reached at %s",
 		mani.Name, mani.ID, port, len(g.mg.order), router, mani.VRAMBudgetGB, mani.ModelHost)

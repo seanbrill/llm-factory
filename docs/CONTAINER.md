@@ -124,6 +124,8 @@ All tunables have baked defaults; override with `docker run -e KEY=VALUE`.
 | `SYSTEM_PROMPT` | _(unset)_ | Inline prompt; overrides the file if set at run time. |
 | `EXTRA_ARGS` | _(unset)_ | Extra flags appended to `llama-server` (advanced). |
 | `HARNESS_FILE` | `/etc/llmgate/harness.json` | Baked agent harness config. `HARNESS=off` turns the harness off; the other `HARNESS_*` overrides are in [HARNESS.md](HARNESS.md#run-time-overrides). |
+| `GATE_ALLOWED_HOSTS` | *(empty)* | Extra host names the API answers to, comma-separated. It always answers to IP addresses, `localhost`, `*.localhost`, `host.docker.internal`, `host.containers.internal` and the container's own hostname. Any other name is refused, which stops DNS-rebinding attacks from web pages. Ensemble images apply the same rule. |
+| `GATE_ALLOWED_ORIGINS` | *(empty)* | Web pages allowed to call the API from a browser, comma-separated (for example `http://localhost:3000`; `*` allows any). A browser request from a page on the same host is always allowed. Requests from other pages are refused, so a site you visit can't use the model, its tools or an ensemble's cloned voice. Programs that aren't browsers (curl, Open WebUI's server, the factory) send no Origin and aren't affected. |
 
 ---
 
@@ -264,6 +266,9 @@ For structured output, `AnalyzeSignal` asks for `response_format: json_object`
 and decodes the JSON into a typed struct — copy that pattern per task.
 
 ### Node / TypeScript (frontend or worker)
+From a web page, start the container with `-e GATE_ALLOWED_ORIGINS=<your page's origin>`
+(for example `http://localhost:5173`), or the browser's request is refused. A worker
+or server needs nothing extra.
 ```ts
 const res = await fetch("http://localhost:8080/v1/chat/completions", {
   method: "POST",

@@ -75,7 +75,7 @@ func main() {
 
 	// 2. Reverse proxy with system-prompt injection (and the harness loop).
 	front := newGate(cfg, h)
-	httpSrv := &http.Server{Addr: ":" + strconv.Itoa(cfg.publicPort), Handler: front}
+	httpSrv := &http.Server{Addr: ":" + strconv.Itoa(cfg.publicPort), Handler: agent.NewHostGuard(front, nil)}
 	go func() {
 		log.Printf("listening on :%d -> upstream :%d (inject=%q, prompt=%t, harness=%t)",
 			cfg.publicPort, cfg.upstreamPort, cfg.injectMode, cfg.systemPrompt != "", h != nil)
