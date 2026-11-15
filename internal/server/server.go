@@ -223,6 +223,7 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.mux.HandleFunc("/api/version", s.handleVersion)
 	s.mux.HandleFunc("/api/resources", s.handleResources)
 	s.mux.HandleFunc("/api/system/reclaim", s.handleReclaimMemory)
+	s.registerHarness() // model gateway (/v1) + /api/harness (harness.go)
 	return s, nil
 }
 

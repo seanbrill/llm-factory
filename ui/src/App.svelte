@@ -10,6 +10,7 @@
   import Build from "./pages/Build.svelte";
   import Chat from "./pages/Chat.svelte";
   import Settings from "./pages/Settings.svelte";
+  import Harness from "./pages/Harness.svelte";
   import { route, pageDef } from "./lib/router";
   import { loadSysInfo, loadVersion, loadCatalog, loadPersonas, loadEnsembles } from "./lib/stores";
 
@@ -43,6 +44,8 @@
         <Ensembles />
       {:else if $route === "chat"}
         <Chat />
+      {:else if $route === "harness"}
+        <Harness />
       {:else if $route === "settings"}
         <Settings />
       {:else if $route === "help"}

@@ -7,6 +7,8 @@
 #
 #   ./start-dev.sh            # UI at http://localhost:8799, hot-reloads
 #   PORT=9000 ./start-dev.sh
+#   BIND=0.0.0.0 ./start-dev.sh   # also reachable from your network (default:
+#                                 # this computer only; the factory has no login)
 #
 # Stop with ./stop.sh (removes prod and dev containers).
 set -euo pipefail
@@ -16,7 +18,8 @@ command -v docker >/dev/null 2>&1 || { echo "Docker is required and must be runn
 
 NAME=local-llm-factory-dev
 PORT="${PORT:-8799}"
-mkdir -p models images config
+BIND="${BIND:-127.0.0.1}"
+mkdir -p models images config workspace
 
 echo "Building UI (Svelte -> internal/server/web)..."
 docker run --rm -v "$PWD:/app" -w /app/ui node:20-alpine sh -c "npm install --no-audit --no-fund --silent && npm run build" || { echo "ERROR: UI build failed."; exit 1; }
@@ -50,9 +53,13 @@ if command -v podman >/dev/null 2>&1; then
 fi
 
 echo "Starting dev container (hot-reload)..."
+# HOST_HOME / FACTORY_PORT serve the agent harness (Harness page); the repo
+# mount already provides /app/skills and /app/workspace.
 docker run -d --name "$NAME" \
-    -p "$PORT:8799" \
+    -p "$BIND:$PORT:8799" \
     -e "HOST_DIR=$PWD" \
+    -e "HOST_HOME=$HOME" \
+    -e "FACTORY_PORT=$PORT" \
     -v //var/run/docker.sock:/var/run/docker.sock \
     -v "$PWD:/app" \
     -v local-llm-gocache:/root/.cache/go-build \
@@ -61,6 +68,7 @@ docker run -d --name "$NAME" \
     "$NAME"
 
 echo "Dev factory running at http://localhost:$PORT (hot-reload on)"
+[ "$BIND" = "127.0.0.1" ] || echo "WARNING: listening on $BIND:$PORT — anyone who can reach this machine can use the factory (it has no login)."
 echo "  UI:      edit ui/src/* -> auto-rebuild (vite watch) -> refresh the browser"
 echo "  Backend: edit *.go -> auto rebuild/restart (watch: docker logs -f $NAME)"
 echo "Stop:  ./stop.sh"

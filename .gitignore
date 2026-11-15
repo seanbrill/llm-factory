@@ -21,6 +21,12 @@
 /config/build-stats.json
 # Generated reverse-proxy config.
 /config/Caddyfile
+# Harness settings + secrets (gateway key, terminal key); written 0600.
+/config/harness.json
+
+# The harness workspace terminal's shared folder (the model's files).
+/workspace/*
+!/workspace/.gitkeep
 
 # Agent scratch/temp files.
 /scratchpad/

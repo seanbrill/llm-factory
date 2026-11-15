@@ -8,10 +8,12 @@
 #
 #   .\start-dev.ps1            # UI at http://localhost:8799, hot-reloads
 #   .\start-dev.ps1 -Port 9000
+#   .\start-dev.ps1 -Bind 0.0.0.0   # also reachable from your network (default:
+#                                   # this computer only; the factory has no login)
 #
 # Stop with .\stop.ps1 (removes prod and dev containers).
 
-param([int]$Port = 8799)
+param([int]$Port = 8799, [string]$Bind = "127.0.0.1")
 
 # Docker's build context and the bind-mount paths are repo-relative, so the body
 # runs from the repo root. We use Push/Pop (not Set-Location) so invoking this
@@ -26,7 +28,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 }
 
 $name = "local-llm-factory-dev"
-New-Item -ItemType Directory -Force -Path .\models, .\images, .\config | Out-Null
+New-Item -ItemType Directory -Force -Path .\models, .\images, .\config, .\workspace | Out-Null
 
 # Build the Svelte UI once into internal/server/web (the dev container serves it
 # from disk via -web), then keep it rebuilding on source edits below.
@@ -79,9 +81,13 @@ if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
 }
 
 Write-Host "Starting dev container (hot-reload)..." -ForegroundColor Cyan
+# HOST_HOME / FACTORY_PORT serve the agent harness (Harness page); the repo
+# mount already provides /app/skills and /app/workspace.
 docker run -d --name $name `
-    -p "$($Port):8799" `
+    -p "$($Bind):$($Port):8799" `
     -e "HOST_DIR=$($PWD.Path -replace '\\','/')" `
+    -e "HOST_HOME=$($env:USERPROFILE -replace '\\','/')" `
+    -e "FACTORY_PORT=$Port" `
     -v /var/run/docker.sock:/var/run/docker.sock `
     -v "$($PWD.Path):/app" `
     -v local-llm-gocache:/root/.cache/go-build `
@@ -92,6 +98,7 @@ docker run -d --name $name `
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: failed to start dev container." -ForegroundColor Red; exit 1 }
 
 Write-Host "Dev factory running at http://localhost:$Port (hot-reload on)" -ForegroundColor Green
+if ($Bind -ne "127.0.0.1") { Write-Host "WARNING: listening on $($Bind):$Port - anyone who can reach this machine can use the factory (it has no login)." -ForegroundColor Yellow }
 Write-Host "  UI:      edit ui/src/* -> auto-rebuild (vite watch) -> refresh the browser"
 Write-Host "  Backend: edit *.go -> auto rebuild/restart (watch: docker logs -f $name)"
 Write-Host "Stop:  .\stop.ps1"
