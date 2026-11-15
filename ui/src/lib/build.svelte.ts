@@ -9,6 +9,10 @@ import { toast } from "./stores";
 import { ctxDefaultFor, engineBadge } from "./util";
 import type { BuildConfig, BuildJob, BuildSnapshot, Model, SysInfo } from "./types";
 
+// Whether /api/builds has answered at least once (so the Builds page can tell
+// "no builds" from "not loaded yet"), and the last error reaching it.
+export const queue = $state({ loaded: false, error: "" });
+
 export const build = $state({
   // picker + filters
   q: "",
@@ -102,12 +106,20 @@ function trackPhase(v: JobView, line: string) {
   if (/^#\d+/.test(line)) { v.phase = "Building image — " + line.slice(0, 64).trim(); v.pct = null; return; }
 }
 
+// Log fetches in flight, by job id: the poll and a log the reader just opened
+// must not both append the same lines.
+const fetching = new Set<string>();
+
 async function fetchLog(j: BuildJob) {
+  if (fetching.has(j.id)) return;
   const v = view(j.id);
+  const from = v.offset;
+  fetching.add(j.id);
   let st: BuildSnapshot;
   try {
-    st = await api<BuildSnapshot>(`/api/builds/state?id=${encodeURIComponent(j.id)}&offset=${v.offset}`);
-  } catch { return; }
+    st = await api<BuildSnapshot>(`/api/builds/state?id=${encodeURIComponent(j.id)}&offset=${from}`);
+  } catch { return; } finally { fetching.delete(j.id); }
+  if (v.offset !== from) return; // superseded meanwhile
   const lines = st.lines ?? [];
   if (lines.length) {
     v.log += lines.join("\n") + "\n";
@@ -154,10 +166,13 @@ async function tick() {
     for (const j of jobs) noteTransition(j);
     for (const id of Object.keys(views)) if (!jobs.some((j) => j.id === id)) delete views[id];
     lastActive = jobs.some((j) => j.active);
-  } catch {
+    queue.error = "";
+  } catch (e) {
     ok = false; // factory restarting — retry while builds were in flight
+    queue.error = (e as Error).message || "no answer";
   } finally {
     ticking = false;
+    queue.loaded = true;
   }
   if (again) { again = false; schedule(0); }
   else if (lastActive) schedule(ok ? 1000 : 3000);
@@ -242,4 +257,89 @@ export async function attach(catalog: Model[]) {
   if (newest && !build.formTouched) restoreForm(newest.config, catalog);
   const running = build.jobs.find((j) => j.status === "running");
   if (running && !Object.values(views).some((v) => v.open)) view(running.id).open = true;
+}
+
+// ---- Builds page: read a log, reorder, retry ------------------------------------
+
+/** Show job `id`'s log and keep it current (the Builds page's open job). */
+export function openLog(id: string) {
+  const v = view(id);
+  v.open = true;
+  const j = build.jobs.find((x) => x.id === id);
+  if (j && j.line_count > v.offset) fetchLog(j);
+}
+
+/** Stop keeping job `id`'s log current (what it has stays loaded). */
+export function closeLog(id: string) {
+  if (views[id]) views[id].open = false;
+}
+
+/** Cancel a build without asking (the Builds page asks first, in its own UI). */
+export async function stopJob(j: BuildJob): Promise<boolean> {
+  try {
+    await post("/api/builds/cancel", { id: j.id });
+    return true;
+  } catch (e) {
+    toast("Couldn't cancel it: " + (e as Error).message, 6000);
+    return false;
+  } finally {
+    watchQueue();
+  }
+}
+
+/** POST /api/build and /api/builds/retry answer with the new job and its place. */
+export interface Enqueued {
+  status: string;
+  id: string;
+  position: number; // builds ahead on its engine
+  engine: string;
+}
+
+/** Queue a finished (failed, canceled or built) job again with the same settings. */
+export async function retryJob(j: BuildJob): Promise<Enqueued | null> {
+  try {
+    const r = await post<Enqueued>("/api/builds/retry", { id: j.id });
+    seen.set(r.id, "queued");
+    const name = j.name || j.ref;
+    toast(r.position > 0
+      ? `${name} is queued again: ${r.position} ahead on ${engineBadge(r.engine)}.`
+      : `Building ${name} again on ${engineBadge(r.engine)}.`);
+    return r;
+  } catch (e) {
+    toast("Couldn't queue it again: " + (e as Error).message, 7000);
+    return null;
+  } finally {
+    watchQueue();
+  }
+}
+
+export type MoveTo = "up" | "down" | "top" | "bottom";
+
+/** Move a queued build within its engine's lane. */
+export async function moveJob(j: BuildJob, to: MoveTo): Promise<boolean> {
+  try {
+    const r = await post<{ jobs: BuildJob[] }>("/api/builds/move", { id: j.id, to });
+    if (Array.isArray(r.jobs)) build.jobs = r.jobs;
+    return true;
+  } catch (e) {
+    toast("Couldn't move it: " + (e as Error).message, 6000);
+    return false;
+  } finally {
+    watchQueue();
+  }
+}
+
+/**
+ * Move a queued build from place `from` to place `to` among the `count` queued
+ * builds of its lane (a drag). The API moves one step at a time, or to an end.
+ */
+export async function moveJobTo(j: BuildJob, from: number, to: number, count: number): Promise<boolean> {
+  if (to === from) return true;
+  if (to <= 0) return moveJob(j, "top");
+  if (to >= count - 1) return moveJob(j, "bottom");
+  const dir: MoveTo = to < from ? "up" : "down";
+  for (let i = 0; i < Math.abs(to - from); i++) {
+    if (!(await moveJob(j, dir))) return false;
+  }
+  return true;
 }
