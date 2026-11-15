@@ -242,7 +242,7 @@ Linux). See [Choosing an engine & compute](#choosing-an-engine--compute).
   Vulkan host, so the factory's Vulkan image *might* work on it; and Docker Desktop
   advertises an undocumented WebGPU device (`docker.com/gpu=webgpu`, API remoting to
   the host's Dawn/Metal) that llama.cpp can't use yet (its WebGPU backend needs Dawn
-  in the container). **Settings → Check GPU access** shows what each engine gives
+  in the container). **System → Check GPU access** shows what each engine gives
   a container.
 - **GPU container — possible via Podman + libkrun (krunkit), and the factory builds
   it for you.** The community route around the passthrough wall is

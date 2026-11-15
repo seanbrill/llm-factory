@@ -94,7 +94,7 @@ give them the GPU:
   mounts `/usr/lib/webgpu/libwebgpu.so` into the container. llama.cpp's WebGPU
   backend is built against Dawn itself, so the factory can't use this device today.
 
-To see what your engines actually give a container, open **Settings → Check GPU
+To see what your engines actually give a container, open **System → Check GPU
 access**. It starts a tiny throwaway container (alpine) on each engine with
 `--device /dev/dri`, lists what arrives, and reads each engine's CDI devices.
 
