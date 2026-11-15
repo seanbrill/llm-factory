@@ -369,7 +369,7 @@ var homeDirs = []string{"Library", "AppData"}
 // drive letter — it would split the `-v src:dst` spec), it refuses folders that
 // would hand the model more than a project folder: the filesystem root, your
 // home folder or anything above it, hidden folders (~/.ssh, ~/.aws, …), system
-// folders, the repo itself (its config/ holds the harness keys) or anything
+// folders, the repo itself (its config/ holds the access token and the harness keys) or anything
 // inside config/.
 func ValidateWorkspace(p, hostDir, hostHome string) error {
 	raw := strings.TrimSpace(p)
@@ -423,7 +423,7 @@ func ValidateWorkspace(p, hostDir, hostHome string) error {
 	}
 	if repo := NormalizeHostPath(hostDir); hostDir != "" {
 		if within(repo, n) {
-			return errors.New("workspace can't contain the factory folder (its config/ holds the harness keys); use its workspace/ subfolder or another folder")
+			return errors.New("workspace can't contain the factory folder (its config/ holds the access token and the harness keys); use its workspace/ subfolder or another folder")
 		}
 		// Elsewhere in the factory a writable mount would let the model edit
 		// its keys, the skills, the source or the scripts you run on the host.
