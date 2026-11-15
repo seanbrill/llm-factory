@@ -35,6 +35,12 @@
   // elsewhere (another tab, ⌘K) while idle.
   watchQueue();
 
+  // "?q=build qwen" opens the palette with that search (a shareable deep link).
+  {
+    const seed = new URLSearchParams(location.search).get("q");
+    if (seed !== null) openPalette(seed);
+  }
+
   $effect(() => {
     const versionTimer = setInterval(recheckVersion, 60_000);
     const queueTimer = setInterval(() => {

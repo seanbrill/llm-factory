@@ -40,6 +40,10 @@
     return t;
   }
 
+  // Engine machines report a little under their configured size (an 18 GB
+  // Docker Desktop VM reads 18.8e9 bytes): round down, as their settings show it.
+  const memGB = (n: number) => `${Math.max(1, Math.floor(n))} GB`;
+
   const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 </script>
 
@@ -75,9 +79,9 @@
         {#if !e.reachable}
           <span class="dot off"></span>{engineName(e.engine)} <b>off</b>
         {:else if e.low_memory}
-          <Icon name="warn" size={15} />{engineName(e.engine)} <b>{gb(e.mem_gb, 0)}</b>
+          <Icon name="warn" size={15} />{engineName(e.engine)} <b>{memGB(e.mem_gb)}</b>
         {:else}
-          <span class="dot"></span>{engineName(e.engine)} <b>{gb(e.mem_gb, 0)}</b>
+          <span class="dot"></span>{engineName(e.engine)} <b>{memGB(e.mem_gb)}</b>
         {/if}
       </a>
     {/each}
