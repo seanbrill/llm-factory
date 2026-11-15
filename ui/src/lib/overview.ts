@@ -9,6 +9,7 @@ import { ago, engineName, gb, plural, upFor } from "./format";
 import { explainFailure, PODMAN_MEMORY_CMD, type Explanation, type Fix } from "./explain";
 import { terminalState, type HarnessStatus, type Tone } from "./harness";
 import { href } from "./router";
+import { gpuEngines } from "./catalog";
 import {
   compileFloor,
   engineList,
@@ -221,7 +222,13 @@ export function routingSentence(si: SysInfo | null): string {
   const docker = engineOf(si, "docker");
   if (g?.gpu === "vulkan") {
     const cpuWhere = docker?.reachable || !g.reachable ? "Docker" : engineName(g.engine);
-    return `CPU models build and run in ${cpuWhere}. GPU models run in ${engineName(g.engine)}, which passes ${isMac(si) ? "the Mac's GPU" : "the GPU"} into containers as Vulkan.`;
+    const G = engineName(g.engine);
+    const passes = `passes ${isMac(si) ? "the Mac's GPU" : "the GPU"} into containers as Vulkan${g.gpu_experimental ? " (experimental, found by the GPU check)" : ""}.`;
+    let s = cpuWhere === G ? `Models build and run in ${G}, which ${passes}` : `CPU models build and run in ${cpuWhere}. GPU models run in ${G}, which ${passes}`;
+    // Docker VMM beside a libkrun machine: GPU work goes where there's more memory.
+    const other = gpuEngines(si, "vulkan").find((e) => e.engine !== g.engine);
+    if (other) s += ` ${engineName(other.engine)} has the GPU too; builds set to it stay there.`;
+    return s;
   }
   if (g?.gpu === "cuda") return `Models build and run in ${engineName(g.engine)}, which gives containers the NVIDIA GPU through CUDA.`;
   const up = engineList(si).find((e) => e.reachable);
