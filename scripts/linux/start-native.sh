@@ -10,6 +10,8 @@
 #   ./start-native.sh                 # http://127.0.0.1:8799
 #   PORT=9000 ./start-native.sh
 #   OPEN=0 ./start-native.sh          # don't auto-open the browser
+#   FACTORY_DOCKER_SOCK=$XDG_RUNTIME_DIR/docker.sock ./start-native.sh
+#                                     # drive another Docker Engine
 #
 # The factory's API needs its access token (config/factory-token, saved on
 # first start, or FACTORY_TOKEN). The factory logs an "Open:" link carrying it
@@ -25,6 +27,17 @@ command -v go >/dev/null 2>&1 || { echo "Go is required." >&2; exit 1; }
 for d in /opt/podman/bin /usr/local/bin /opt/homebrew/bin; do
   [ -d "$d" ] && case ":$PATH:" in *":$d:"*) ;; *) PATH="$d:$PATH";; esac
 done
+
+# Another Docker Engine to build and run models on, by its socket — for example
+# rootless Docker's. The docker CLI the factory runs follows DOCKER_HOST.
+if [ -n "${FACTORY_DOCKER_SOCK:-}" ]; then
+  if [ ! -S "$FACTORY_DOCKER_SOCK" ]; then
+    echo "FACTORY_DOCKER_SOCK=$FACTORY_DOCKER_SOCK isn't a socket. Start that engine, or unset FACTORY_DOCKER_SOCK to use the default Docker." >&2
+    exit 1
+  fi
+  export DOCKER_HOST="unix://$FACTORY_DOCKER_SOCK"
+  echo "Docker engine for models: $FACTORY_DOCKER_SOCK (FACTORY_DOCKER_SOCK)"
+fi
 
 PORT="${PORT:-8799}"
 mkdir -p models images config

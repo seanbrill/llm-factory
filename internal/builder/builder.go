@@ -52,6 +52,11 @@ type Builder struct {
 	// One `<engine> build` per engine machine at a time (see acquireBuildSlot).
 	slotMu sync.Mutex
 	slots  map[string]chan struct{}
+
+	// Saved GPU check results per engine (gpustate.go), read from
+	// config/gpu-probe.json on first use.
+	gpuMu    sync.Mutex
+	gpuState map[string]GPUCheckRecord
 }
 
 // LogFunc receives one human-readable progress line at a time.
@@ -874,6 +879,37 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 	// Best-effort removal of a stale container occupying the same name/port.
 	_ = engineCmd(ctx, engine, "rm", "-f", name).Run()
 
+	group := -1
+	if o.Compute == "vulkan" {
+		group = vulkanGroup(b.savedGPUCheck(engine))
+	}
+	out, err := engineCmd(ctx, engine, runArgs(engine, name, o, group)...).CombinedOutput()
+	if err != nil {
+		err = fmt.Errorf("%s run: %v: %s", engine, err, strings.TrimSpace(string(out)))
+		// A Vulkan image needs the engine's GPU render node. Docker Desktop on a Mac
+		// (Apple Virtualization) and a non-libkrun Podman machine have none, and
+		// the raw "error gathering device information" says nothing about why.
+		if o.Compute == "vulkan" && strings.Contains(string(out), "/dev/dri") {
+			where, id := dockerElsewhere, EngineIdentity{}
+			if engine == engineDocker {
+				where, id = dockerLocation(ctx)
+			}
+			if hint := gpuDeviceHint(engine, o.Compute, string(out), where); hint != "" {
+				// A saved GPU check that said otherwise is out of date: stop
+				// routing GPU work here until the next check.
+				b.noteVulkanRunFailed(engine, id, string(out), hint)
+				return "", &HintError{Hint: hint, Err: err}
+			}
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// runArgs is the `<engine> run` command line for o, as container name. group
+// is the render node's group a Vulkan container joins (-1 = none, see
+// vulkanGroup).
+func runArgs(engine, name string, o RunOptions, group int) []string {
 	args := []string{
 		"run", "-d", "--name", name,
 		// Bind the published port to loopback only so the model isn't reachable
@@ -890,10 +926,16 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 	case "cuda":
 		args = append(args, "--gpus", "all")
 	case "vulkan":
-		// Paravirtualized GPU: a libkrun/krunkit Podman machine (macOS) or a host
-		// GPU on Linux exposes the DRI render node. llama.cpp's Vulkan backend then
-		// finds the (virtio) device. Requires Podman+libkrun on macOS — see README.
+		// Paravirtualized GPU: a libkrun/krunkit Podman machine, Docker VMM or a
+		// krunkit Lima VM (macOS), or a host GPU on Linux exposes the DRI render
+		// node, and llama.cpp's Vulkan backend finds the (virtio) device. The
+		// node keeps the VM's owner and mode, and the Vulkan images run as an
+		// unprivileged user: when only the node's group may open it (the GPU
+		// check saw that), the container joins that group.
 		args = append(args, "--device", "/dev/dri")
+		if group >= 0 {
+			args = append(args, "--group-add", strconv.Itoa(group))
+		}
 	}
 	if o.MemoryGB > 0 {
 		// MB so fractional GB (e.g. 4.5) is accepted by the engine.
@@ -913,7 +955,9 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 	// seccomp-unconfined on Podman; it's trusted local llama.cpp. label=disable
 	// turns off SELinux confinement so the container can reach the GPU at /dev/dri
 	// on the (SELinux-enforcing) libkrun machine — the Venus/krunkit GPU path needs
-	// it (matches RamaLama). Both are no-ops/irrelevant on Docker.
+	// it (matches RamaLama). Docker needs neither: its client sends no profile
+	// path, and Docker Engine runs without SELinux labels unless its daemon is
+	// set up for them (Docker Desktop's VMs and Lima's default Ubuntu aren't).
 	if engine == enginePodman {
 		args = append(args, "--security-opt", "seccomp=unconfined", "--security-opt", "label=disable")
 	}
@@ -935,23 +979,7 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 			args = append(args, "--label", "local-llm.persona="+p)
 		}
 	}
-	args = append(args, o.Ref)
-
-	out, err := engineCmd(ctx, engine, args...).CombinedOutput()
-	if err != nil {
-		err = fmt.Errorf("%s run: %v: %s", engine, err, strings.TrimSpace(string(out)))
-		// A Vulkan image needs the engine's GPU render node. Docker Desktop on a Mac
-		// (Apple Virtualization) and a non-libkrun Podman machine have none, and
-		// the raw "error gathering device information" says nothing about why.
-		if o.Compute == "vulkan" && strings.Contains(string(out), "/dev/dri") {
-			mac := engine == engineDocker && dockerDesktopMac(ctx)
-			if hint := gpuDeviceHint(engine, o.Compute, string(out), mac); hint != "" {
-				return "", &HintError{Hint: hint, Err: err}
-			}
-		}
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
+	return append(args, o.Ref)
 }
 
 // personaName pulls a persona out of a system prompt ("You are FinBot, a terse…"
@@ -1700,7 +1728,7 @@ func ClassifyEngineError(err error) string {
 	}
 	switch {
 	case strings.Contains(msg, "/dev/dri") && contains("no such file", "error gathering device"):
-		return "This engine has no GPU device (/dev/dri) to give the container. On a Mac, run GPU (Vulkan) images on a Podman libkrun machine — Docker Desktop under Apple Virtualization has no GPU device."
+		return "This engine has no GPU device (/dev/dri) to give the container. On a Mac, run GPU (Vulkan) images on a Podman libkrun machine — Docker Desktop's default VM (Apple Virtualization) has no GPU device; to try Docker's GPU, switch Docker Desktop to Docker VMM and run Check GPU access on the System page again."
 	case contains("connection refused", "cannot connect to podman", "cannot connect to the docker daemon"),
 		strings.Contains(msg, "sock") && strings.Contains(msg, "no such file"):
 		return "Container engine unreachable — the Podman machine or Docker isn't responding. Restart the factory (scripts/<your-os>/start.sh) so it reconnects, then retry."
