@@ -1,89 +1,202 @@
 <script lang="ts">
+  // Personas: named system prompts to bake into a build or apply when running an
+  // image. A list of cards, an inline editor, and where they're used.
   import Icon from "../components/Icon.svelte";
-  import { post } from "../lib/api";
-  import { personas, loadPersonas, toast } from "../lib/stores";
+  import CopyButton from "../components/CopyButton.svelte";
+  import PersonaEditor from "../components/personas/PersonaEditor.svelte";
+  import { api, post } from "../lib/api";
+  import { personas, toast } from "../lib/stores";
   import type { Persona } from "../lib/types";
+  import { routeArg, go } from "../lib/router";
+  import { untrack } from "svelte";
+  import { listLoadError } from "../components/ensembles/util";
 
-  let editing = $state<Persona | null | undefined>(undefined); // undefined = closed
-  let name = $state("");
-  let prompt = $state("");
-
-  function open(p: Persona | null) {
-    editing = p;
-    name = p?.name ?? "";
-    prompt = p?.prompt ?? "";
-  }
-  function close() { editing = undefined; }
-
-  async function save() {
-    if (!name.trim() || !prompt.trim()) { alert("A persona needs a name and a prompt."); return; }
-    const body: Partial<Persona> = { name: name.trim(), prompt: prompt.trim() };
-    if (editing) body.id = editing.id;
+  let loading = $state(true);
+  let loadError = $state("");
+  async function load() {
     try {
-      await post("/api/personas", body);
-    } catch (e) { alert("Save failed: " + (e as Error).message); return; }
-    close();
-    await loadPersonas();
-    toast(`Persona “${name.trim()}” saved.`);
+      const r = await api<{ personas: Persona[] }>("/api/personas");
+      personas.set(r.personas ?? []);
+      loadError = "";
+    } catch (e) {
+      loadError = listLoadError(e, "personas.json");
+    } finally {
+      loading = false;
+    }
+  }
+  $effect(() => {
+    load();
+  });
+
+  let editing = $state<Persona | null | undefined>(undefined); // undefined = closed, null = new
+  let editorKey = $state(0);
+  let topEl: HTMLElement | undefined = $state();
+  function openEditor(p: Persona | null) {
+    editing = p;
+    editorKey++;
+    queueMicrotask(() => topEl?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+  function closeEditor() {
+    editing = undefined;
+    if ($routeArg) go("personas");
+  }
+  async function saved(p: Persona) {
+    closeEditor();
+    await load();
+    toast(`Persona “${p.name}” saved.`);
   }
 
+  // "#personas/new" opens a new one; "#personas/<id>" opens that one's editor.
+  let handledArg = "";
+  $effect(() => {
+    const arg = $routeArg;
+    if (loading || !arg || arg === handledArg) return;
+    handledArg = arg;
+    untrack(() => {
+      const p = arg === "new" ? null : $personas.find((x) => x.id === arg);
+      if (p !== undefined) openEditor(p);
+    });
+  });
   async function del(p: Persona) {
-    if (!confirm(`Delete persona “${p.name}”?`)) return;
+    if (!confirm(`Delete the persona “${p.name}”? Images already built with it keep their prompt.`)) return;
     try {
       await post("/api/personas/delete", { id: p.id });
-    } catch (e) { alert("Delete failed: " + (e as Error).message); return; }
-    await loadPersonas();
+      toast(`Persona “${p.name}” deleted.`);
+    } catch (e) {
+      toast(`It wasn't deleted: ${(e as Error).message || "the factory didn't answer"}.`, 6000);
+    }
+    await load();
   }
+
+  let open = $state<Record<string, boolean>>({});
+  const list = $derived($personas);
+  const words = (s: string) => (s.trim() ? s.trim().split(/\s+/).length : 0);
+  // More than about four lines of the card: show the start, with Show all.
+  const isLong = (s: string) => s.length > 220 || s.split("\n").length > 4;
 </script>
 
-<div class="card">
-  <div class="row-between">
-    <h2>Personas</h2>
-    <button class="ghost small" onclick={() => open(null)}>+ New persona</button>
-  </div>
-  <p class="hint">Named system prompts you can reuse — bake one into a build, or apply it when you Run an image.</p>
-
-  {#if editing !== undefined}
-    <div class="editor">
-      <label>Name <input type="text" bind:value={name} placeholder="FinBot" /></label>
-      <label>System prompt
-        <textarea rows="6" bind:value={prompt} placeholder="You are FinBot, a terse financial-data analyst..."></textarea>
-      </label>
-      <div class="actions">
-        <button class="ghost" onclick={close}>Cancel</button>
-        <button class="primary" onclick={save}>Save persona</button>
-      </div>
-    </div>
-  {/if}
-
-  <div class="list">
-    {#if !$personas.length}
-      <div class="empty">No personas yet. Create one to reuse it across builds and runs.</div>
-    {:else}
-      {#each $personas as p (p.id)}
-        <div class="pcard">
-          <div class="phead">
-            <span class="pname">{p.name}</span>
-            <span class="pactions">
-              <button class="small" onclick={() => open(p)}>Edit</button>
-              <button class="small danger" onclick={() => del(p)} title="Delete persona"><Icon name="trash" /></button>
-            </span>
-          </div>
-          <div class="pprompt">{p.prompt}</div>
-        </div>
-      {/each}
+<div class="pp" bind:this={topEl}>
+  <div class="lead">
+    <p>
+      Named system prompts: who the model is and how it answers. Bake one into an image when you build a model, or apply
+      one when you run an image, without rebuilding.
+    </p>
+    {#if editing === undefined && list.length && !loadError}<!-- the empty state has its own -->
+      <button class="primary" onclick={() => openEditor(null)}><Icon name="plus" size={15} />New persona</button>
     {/if}
   </div>
+
+  {#if editing !== undefined}
+    {#key editorKey}
+      <PersonaEditor persona={editing} existing={list} onclose={closeEditor} onsaved={saved} />
+    {/key}
+  {/if}
+
+  {#if loading && !list.length}
+    <div class="card state" aria-busy="true"><span class="spin" aria-hidden="true"></span>Loading your personas…</div>
+  {:else if loadError}
+    <div class="callout er" role="alert">
+      <Icon name="errc" size={16} />
+      <span>
+        <b>Your personas didn't load.</b>
+        <p>{loadError}</p>
+        <button class="small" onclick={load}><Icon name="retry" size={14} />Try again</button>
+      </span>
+    </div>
+  {:else if !list.length && editing === undefined}
+    <div class="card empty-state">
+      <span class="ei" aria-hidden="true"><Icon name="personas" size={22} /></span>
+      <h2>No personas yet</h2>
+      <p>Write one once — a reviewer, a tutor, a terse analyst — and use it with any model you build or run.</p>
+      <button class="primary" onclick={() => openEditor(null)}><Icon name="plus" size={15} />New persona</button>
+    </div>
+  {:else}
+    <div class="grid">
+      {#each list as p (p.id)}
+        {#if editing?.id !== p.id}
+          <article class="card per" aria-labelledby="per-{p.id}">
+            <div class="ph">
+              <span class="av" aria-hidden="true">{p.name.trim().charAt(0).toUpperCase() || "?"}</span>
+              <h3 id="per-{p.id}">{p.name}</h3>
+              <span class="wc">{words(p.prompt)} words</span>
+            </div>
+            <div class="prompt">
+              <p id="per-{p.id}-text" class:clamp={isLong(p.prompt) && !open[p.id]}>{p.prompt}</p>
+            </div>
+            <div class="pf">
+              {#if isLong(p.prompt)}
+                <button class="small ghost" onclick={() => (open[p.id] = !open[p.id])} aria-expanded={!!open[p.id]} aria-controls="per-{p.id}-text">
+                  {open[p.id] ? "Show less" : "Show all"}
+                </button>
+              {/if}
+              <span class="sp"></span>
+              <CopyButton text={p.prompt} label="Copy" title="Copy the prompt" />
+              <button class="small" onclick={() => openEditor(p)}><Icon name="pen" size={14} />Edit</button>
+              <button class="small ghost icon danger" onclick={() => del(p)} aria-label="Delete {p.name}" title="Delete">
+                <Icon name="trash" size={15} />
+              </button>
+            </div>
+          </article>
+        {/if}
+      {/each}
+    </div>
+  {/if}
 </div>
 
 <style>
-  .editor { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin: 8px 0 14px; background: #12151c; display: flex; flex-direction: column; gap: 10px; }
-  .editor label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
-  .actions { display: flex; justify-content: flex-end; gap: 8px; }
-  .list { display: grid; gap: 10px; }
-  .pcard { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: #12151c; }
-  .phead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-  .pname { font-weight: 600; font-size: 14px; }
-  .pactions { display: inline-flex; gap: 6px; }
-  .pprompt { color: var(--muted); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; max-height: 120px; overflow: auto; }
+  .pp { display: flex; flex-direction: column; gap: 16px; scroll-margin-top: 16px; }
+  .lead { display: flex; align-items: center; gap: 18px; justify-content: space-between; }
+  .lead p { color: var(--mu); font-size: 13.5px; max-width: 720px; line-height: 1.5; }
+  .state { display: flex; align-items: center; gap: 10px; color: var(--mu); font-size: 13px; }
+  .callout button { margin-top: 8px; }
+  .empty-state { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 26px 24px; }
+  .empty-state h2 { font-size: 17px; margin: 4px 0 0; }
+  .empty-state p { color: var(--mu); font-size: 13px; max-width: 520px; line-height: 1.5; }
+  .empty-state button { margin-top: 6px; }
+  .ei { width: 44px; height: 44px; border-radius: 12px; background: var(--prs); color: var(--pr); display: grid; place-items: center; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; align-items: start; }
+  .per { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .ph { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .av {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: var(--prs);
+    color: var(--pr);
+    display: grid;
+    place-items: center;
+    font: 700 14px/1 var(--font-display);
+    flex: none;
+  }
+  h3 { font: 700 15px/1.25 var(--font-display); margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wc { color: var(--fa); font-size: 11.5px; white-space: nowrap; }
+  .prompt {
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--cv);
+    border: 1px solid var(--ln);
+  }
+  .prompt p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--mu);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .prompt p.clamp {
+    max-height: calc(13px * 1.55 * 4);
+    overflow: hidden;
+    mask-image: linear-gradient(to bottom, black 60%, transparent);
+  }
+  .pf { display: flex; align-items: center; gap: 6px; }
+  .pf .sp { flex: 1; }
+  .pf .ghost:first-child { margin-left: -10px; }
+
+  @media (max-width: 760px) {
+    .pp { padding-top: 12px; gap: 12px; }
+    .lead { flex-direction: column; align-items: stretch; }
+    .grid { grid-template-columns: minmax(0, 1fr); }
+  }
 </style>
