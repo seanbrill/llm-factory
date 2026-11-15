@@ -8,11 +8,11 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,6 +28,7 @@ import (
 	"github.com/seanbrill/local-llm/internal/filefreak"
 	"github.com/seanbrill/local-llm/internal/llm"
 	"github.com/seanbrill/local-llm/internal/version"
+	"github.com/seanbrill/local-llm/internal/voice"
 )
 
 //go:embed web
@@ -50,6 +51,13 @@ type Server struct {
 	personasMu sync.Mutex // guards reads/writes of config/personas.json
 
 	ens *ensemble.Store // saved Ensemble (multimodal super-model) definitions
+
+	voices *voice.Store // persona voice clips (config/voices, 0600; never leave this machine)
+
+	// Ports known not to be an ensemble's Conductor (ensembleAt), so chat with
+	// a plain model doesn't probe it every time.
+	gatePortsMu sync.Mutex
+	notGate     map[int]time.Time
 
 	mediaDir string // where generated clips/images are saved + served from
 
@@ -98,6 +106,7 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 		q:         newBuildQueue(),
 		statsPath: filepath.Join(b.BaseDir, "config", "build-stats.json"),
 		ens:       ensemble.NewStore(b.BaseDir),
+		voices:    voice.NewStore(b.ConfigDir),
 		mediaDir:  filepath.Join(b.BaseDir, "media"),
 	}
 	s.loadStats()
@@ -137,6 +146,16 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.mux.HandleFunc("/api/ensembles", s.handleEnsembles)
 	s.mux.HandleFunc("/api/ensembles/delete", s.handleEnsembleDelete)
 	s.mux.HandleFunc("/api/ensemble/build", s.handleEnsembleBuild)
+	s.mux.HandleFunc("/api/ensembles/status", s.handleEnsemblesStatus)
+	s.mux.HandleFunc("/api/ensembles/run", s.handleEnsembleRun)
+	s.mux.HandleFunc("/api/ensembles/stop", s.handleEnsembleStop)
+	s.mux.HandleFunc("/api/ensembles/member", s.handleEnsembleMember)
+	s.mux.HandleFunc("/api/ensembles/voice-chat", s.handleEnsembleVoiceChat)
+	s.mux.HandleFunc("/api/voices", s.handleVoices)
+	s.mux.HandleFunc("/api/voices/update", s.handleVoiceUpdate)
+	s.mux.HandleFunc("/api/voices/delete", s.handleVoiceDelete)
+	s.mux.HandleFunc("/api/voices/audio", s.handleVoiceAudio)
+	s.mux.HandleFunc("/api/voices/transcribe", s.handleVoiceTranscribe)
 	s.mux.HandleFunc("/api/containers", s.handleContainers)
 	s.mux.HandleFunc("/api/container/logs", s.handleContainerLogs)
 	s.mux.HandleFunc("/api/stop", s.handleStop)
@@ -657,9 +676,18 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := s.b.Stop(r.Context(), normalizeEngine(req.Engine), req.ID); err != nil {
+	engine := normalizeEngine(req.Engine)
+	// An ensemble's Conductor started its members; stopping it removes them
+	// too, or they would hold their memory with nothing to manage them.
+	ensID := s.b.EnsembleOfContainer(r.Context(), engine, req.ID)
+	if err := s.b.Stop(r.Context(), engine, req.ID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
 		return
+	}
+	if ensID != "" {
+		if err := s.b.RemoveEnsembleMembers(r.Context(), engine, ensID); err != nil {
+			log.Printf("remove ensemble %s members: %v", ensID, err)
+		}
 	}
 	if err := s.b.RegenProxy(r.Context()); err != nil {
 		log.Printf("regen proxy after stop: %v", err) // non-fatal
@@ -808,6 +836,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	req["model"] = "local-model" // required by schema, ignored with one model loaded
 	req["stream"] = true
 	body, _ := json.Marshal(req)
+	// An ensemble applies its persona itself: make sure it has the current one.
+	s.syncPersonaAt(r.Context(), port)
 
 	upReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, s.modelURL(port, "/v1/chat/completions"), bytes.NewReader(body))
 	if err != nil {
@@ -823,29 +853,16 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		writeJSON(w, resp.StatusCode, map[string]string{"error": strings.TrimSpace(string(b))})
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		writeJSON(w, resp.StatusCode, map[string]string{"error": upstreamError(b)})
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	flusher, _ := w.(http.Flusher)
-	buf := make([]byte, 4096)
-	for {
-		n, rerr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				return
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
-		if rerr != nil {
-			return
-		}
-	}
+	// Line by line, so an ensemble's generated media (data URLs in delta.media)
+	// are saved to /api/media and the browser gets short URLs.
+	s.relaySSE(w, resp.Body)
 }
 
 // handleImageGenerate proxies a text-to-image request to a running sd-server and
@@ -977,58 +994,23 @@ func (s *Server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 	port, _ := strconv.Atoi(r.FormValue("port"))
-
-	var buf bytes.Buffer
-	mw := multipart.NewWriter(&buf)
-	fw, _ := mw.CreateFormFile("file", hdr.Filename)
-	if _, err := io.Copy(fw, file); err != nil {
+	audio, err := io.ReadAll(file)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read uploaded audio: " + err.Error()})
 		return
 	}
-	mw.WriteField("response_format", "json")
-	// audio.cpp images (Moonshine) need the id they serve their model under;
-	// whisper-server ignores the field.
-	mw.WriteField("model", builder.AudioCppSTTModelID)
-	for _, k := range []string{"temperature", "language"} {
-		if v := r.FormValue(k); v != "" {
-			mw.WriteField(k, v)
-		}
-	}
-	mw.Close()
-	payload := buf.Bytes()
-
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
-	defer cancel()
-	post := func(path string) (*http.Response, error) {
-		upReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.modelURL(port, path), bytes.NewReader(payload))
-		upReq.Header.Set("Content-Type", mw.FormDataContentType())
-		return (&http.Client{}).Do(upReq)
-	}
-	// whisper.cpp answers /inference; an audio.cpp image has no such route and
-	// takes the same upload at the OpenAI-style /v1/audio/transcriptions.
-	resp, err := post("/inference")
-	if err == nil && resp.StatusCode == http.StatusNotFound {
-		resp.Body.Close()
-		resp, err = post("/v1/audio/transcriptions")
-	}
+	text, err := s.transcribeAt(r.Context(), port, hdr.Filename, audio,
+		map[string]string{"temperature": r.FormValue("temperature"), "language": r.FormValue("language")})
 	if err != nil {
+		var se *sttError
+		if errors.As(err, &se) && se.status != http.StatusBadGateway {
+			writeJSON(w, se.status, map[string]string{"error": se.msg})
+			return
+		}
 		writeJSON(w, http.StatusBadGateway, engineErrPayload(err))
 		return
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		writeJSON(w, resp.StatusCode, map[string]string{"error": strings.TrimSpace(string(b))})
-		return
-	}
-	var out struct {
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(b, &out) == nil && out.Text != "" {
-		writeJSON(w, http.StatusOK, map[string]string{"text": strings.TrimSpace(out.Text)})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"text": strings.TrimSpace(string(b))})
+	writeJSON(w, http.StatusOK, map[string]string{"text": text})
 }
 
 // handleTTS proxies text to a running Piper server and streams the WAV back.
@@ -1067,7 +1049,10 @@ func (s *Server) handleTTS(w http.ResponseWriter, r *http.Request) {
 		up["instructions"] = req.Instructions
 	}
 	body, _ := json.Marshal(up)
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	// An ensemble speaks in its persona's voice: make sure it has the current one.
+	s.syncPersonaAt(r.Context(), req.Port)
+	// An ensemble may have to start its speech member first.
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 	upReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.modelURL(req.Port, "/v1/audio/speech"), bytes.NewReader(body))
 	upReq.Header.Set("Content-Type", "application/json")
@@ -1078,8 +1063,8 @@ func (s *Server) handleTTS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		writeJSON(w, resp.StatusCode, map[string]string{"error": strings.TrimSpace(string(b))})
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		writeJSON(w, resp.StatusCode, map[string]string{"error": "speech failed: " + upstreamError(b)})
 		return
 	}
 	w.Header().Set("Content-Type", "audio/wav")

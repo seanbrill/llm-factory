@@ -75,7 +75,7 @@ func main() {
 	// The baked harness (built-in tools for the brain): the same file and
 	// HARNESS_* overrides as llmgate. Empty or missing: member tools only.
 	var harness *agent.Config
-	if cfg, ok, err := agent.Load(env("HARNESS_FILE", "/etc/llmgate/harness.json"), os.Getenv); err != nil {
+	if cfg, ok, err := agent.Load(env("HARNESS_FILE", "/etc/ensemblegate/harness.json"), os.Getenv); err != nil {
 		log.Printf("harness: %v; the brain gets the member tools only", err)
 	} else if ok {
 		harness = &cfg

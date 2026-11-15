@@ -1,21 +1,28 @@
 # syntax=docker/dockerfile:1
 #
 # Ensemble (orchestrated): the Conductor (ensemblegate) + a baked manifest. At run
-# time it starts/stops sibling specialist containers via the HOST engine, so it
-# ships the docker CLI and must be run with the host docker socket mounted and
-# host.docker.internal reachable — the factory's Run wires both for ensemble images:
+# time it starts and stops its members as sibling containers through the HOST
+# engine, so it ships the docker CLI and must run with the host docker socket
+# mounted and host.docker.internal reachable. The factory's Run wires both for
+# ensemble images:
 #
-#   docker run -d -p 8080:8080 \
+#   docker run -d -p 127.0.0.1:8200:8080 \
 #     -v /var/run/docker.sock:/var/run/docker.sock \
 #     --add-host host.docker.internal:host-gateway <image>
+#
+# The Go builder stages a tiny context: gate/ (go.mod, cmd/ensemblegate and the
+# stdlib-only internal/ensemble, internal/voice and internal/agent), manifest.json,
+# and harness/ (harness.json, empty unless the ensemble turns on built-in agent
+# tools, plus skills/). Persona and voice are never baked: the factory pushes
+# them to the running Conductor (POST /ensemble/config).
 
 # ---------------------------------------------------------------------------
-# Stage 1: build the Conductor (stdlib Go, static)
+# Stage 1: build the Conductor (stdlib Go, static, offline)
 # ---------------------------------------------------------------------------
 FROM golang:1.22-bookworm AS gate
 WORKDIR /gate
 COPY gate/ ./
-RUN CGO_ENABLED=0 go build -trimpath -o /ensemblegate .
+RUN CGO_ENABLED=0 GOFLAGS=-mod=mod GOPROXY=off go build -trimpath -ldflags "-s -w" -o /ensemblegate ./cmd/ensemblegate
 
 # ---------------------------------------------------------------------------
 # Stage 2: runtime (Conductor + docker CLI + baked manifest)
@@ -26,10 +33,15 @@ ARG MODALITY=ensemble
 ARG CTX_SIZE=0
 RUN apt-get update && apt-get install -y --no-install-recommends \
         docker.io curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /etc/ensemblegate /workspace
 COPY --from=gate /ensemblegate /usr/local/bin/ensemblegate
 COPY manifest.json /ensemble/manifest.json
+# Built-in agent tools for the brain (empty harness.json = member tools only).
+COPY harness/ /etc/ensemblegate/
 ENV PORT=8080 \
-    MANIFEST=/ensemble/manifest.json
+    MANIFEST=/ensemble/manifest.json \
+    HARNESS_FILE=/etc/ensemblegate/harness.json
 EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD curl -fsS http://127.0.0.1:8080/health || exit 1
 ENTRYPOINT ["/usr/local/bin/ensemblegate"]

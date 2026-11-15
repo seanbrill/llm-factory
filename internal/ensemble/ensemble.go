@@ -123,7 +123,7 @@ var shellTools = map[string]bool{agent.ToolsetShell: true, agent.ToolRunCommand:
 // Image paths of an ensemble's baked harness (the same as llmgate images).
 const (
 	HarnessWorkspace = "/workspace"
-	HarnessSkillsDir = "/etc/llmgate/skills"
+	HarnessSkillsDir = "/etc/ensemblegate/skills"
 )
 
 // HarnessConfig returns the agent config an ensemble image bakes from h: its

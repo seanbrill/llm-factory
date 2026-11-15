@@ -682,11 +682,11 @@ func (mg *Manager) Status() ([]ensemble.MemberStatus, float64) {
 		st := mg.members[tool]
 		ms := ensemble.MemberStatus{
 			Tool: tool, Modality: st.m.Modality, Image: st.m.Image, Model: st.m.Model,
-			State: st.state, Error: st.err, Since: st.since.Unix(), Port: st.port,
+			State: st.state, Error: st.err, Since: st.since.UnixMilli(), Port: st.port,
 			MemGB: st.m.VRAMGB, Pinned: st.m.Pinned, Busy: st.busy, VoiceClone: st.m.VoiceClone,
 		}
 		if !st.lastUse.IsZero() {
-			ms.LastUsed = st.lastUse.Unix()
+			ms.LastUsed = st.lastUse.UnixMilli()
 		}
 		out = append(out, ms)
 	}

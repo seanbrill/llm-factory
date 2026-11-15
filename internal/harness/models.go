@@ -23,13 +23,23 @@ type GatewayModel struct {
 }
 
 // gatewayModalities are the modalities served by llama.cpp's OpenAI API (the
-// llmgate shim): chat, code, reasoning, vision and embeddings.
-var gatewayModalities = map[string]bool{"text": true, "code": true, "reasoning": true, "vision": true, "embedding": true}
+// llmgate shim): chat, code, reasoning, vision and embeddings; plus running
+// Ensembles, whose Conductor speaks the same chat API (and speech).
+var gatewayModalities = map[string]bool{"text": true, "code": true, "reasoning": true, "vision": true, "embedding": true, "ensemble": true}
 
 // GatewayModalities lists the modalities the gateway exposes.
 func GatewayModalities() []string {
-	return []string{"text", "code", "reasoning", "vision", "embedding"}
+	return []string{"text", "code", "reasoning", "vision", "embedding", "ensemble"}
 }
+
+// RowLabel reads a label from a Containers() row.
+func RowLabel(row map[string]any, key string) string { return rowLabel(row, key) }
+
+// RowPort is the host port a container's 8080 is published on (0 if none).
+func RowPort(row map[string]any) int { return rowPort(row) }
+
+// RowRunning reports a running container row.
+func RowRunning(row map[string]any) bool { return rowRunning(row) }
 
 // rowLabel reads key from a container row's docker-style "k=v,k=v" Labels
 // (builder normalizes podman's map into the same string).
@@ -158,9 +168,10 @@ func ModelsFromContainers(rows []map[string]any, modalityOf func(modelID string)
 		if i := strings.IndexByte(name, ','); i >= 0 {
 			name = name[:i]
 		}
-		// An Ensemble's Conductor starts and evicts its specialists (ens-<tool>)
+		// An Ensemble's Conductor starts and evicts its members (ens-<id>-<tool>)
 		// on demand; exposing them would hand out models that vanish mid-chat.
-		if strings.HasPrefix(name, "ens-") {
+		// The ensemble itself is listed (modality "ensemble").
+		if strings.HasPrefix(name, "ens-") || rowLabel(row, "local-llm.ensemble-member") != "" {
 			continue
 		}
 		switch rowLabel(row, "local-llm.runtime") {
@@ -224,8 +235,11 @@ func displayName(m GatewayModel, dup bool) string {
 	if m.Persona != "" {
 		extra = append(extra, m.Persona)
 	}
-	if m.Modality == "embedding" {
+	switch m.Modality {
+	case "embedding":
 		extra = append(extra, "embeddings")
+	case "ensemble":
+		extra = append(extra, "ensemble")
 	}
 	if dup {
 		extra = append(extra, "port "+strconv.Itoa(m.Port))

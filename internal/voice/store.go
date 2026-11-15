@@ -32,9 +32,9 @@ type Clip struct {
 	SampleRate int     `json:"sample_rate"`
 	Bytes      int     `json:"bytes"`
 	SHA256     string  `json:"sha256"`
-	CreatedAt  int64   `json:"created_at"`
-	ConsentAt  int64   `json:"consent_at"`
-	Consent    string  `json:"consent"` // the statement ticked
+	CreatedAt  int64   `json:"created_at"` // unix ms
+	ConsentAt  int64   `json:"consent_at"` // unix ms: when the consent statement was ticked
+	Consent    string  `json:"consent"`    // the statement ticked
 }
 
 // ErrNoClip is returned for an unknown clip id.
@@ -115,7 +115,7 @@ func (s *Store) Add(name string, wav []byte, transcript string, consent bool) (C
 		return Clip{}, err
 	}
 	sum := sha256.Sum256(wav)
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 	c := Clip{
 		ID: id, Name: cleanName(name, id), Transcript: strings.TrimSpace(transcript),
 		Seconds: float64(int(w.Seconds()*10+0.5)) / 10, SampleRate: w.SampleRate, Bytes: len(wav),

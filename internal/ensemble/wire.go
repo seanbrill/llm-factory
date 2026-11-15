@@ -75,13 +75,13 @@ type MemberStatus struct {
 	Model      string  `json:"model,omitempty"`
 	State      string  `json:"state"`
 	Error      string  `json:"error,omitempty"`
-	Since      int64   `json:"since,omitempty"` // unix seconds the state began
+	Since      int64   `json:"since,omitempty"` // unix ms the state began
 	Port       int     `json:"port,omitempty"`  // host port while running
 	MemGB      float64 `json:"mem_gb"`
 	Pinned     bool    `json:"pinned,omitempty"`
 	Busy       int     `json:"busy,omitempty"` // requests in flight
 	VoiceClone bool    `json:"voice_clone,omitempty"`
-	LastUsed   int64   `json:"last_used,omitempty"`
+	LastUsed   int64   `json:"last_used,omitempty"` // unix ms
 }
 
 // PersonaStatus says which persona and voice the Conductor applies.
