@@ -94,10 +94,13 @@ refresh plus x alert globe …). Add new ones to src/lib/icons.ts.
   plus `resources`. In a component: `$effect(() => watch("containers", "storage"))`;
   after a change: `refresh("containers")`.
 - `build.svelte.ts` — the build queue: `build.jobs` (BuildJob[] from
-  /api/builds), `views[jobId]` (streamed log, phase, pct), `watchQueue()`,
-  `cancelJob(job)`, `toggleLog(job)`.
+  /api/builds), `queue.loaded`, `views[jobId]` (streamed log, phase, pct),
+  `watchQueue()`, `openLog(id)`, `stopJob(job)`, `retryJob(job)`, `moveJob(job, to)`.
+- `builds.ts` — Builds page helpers: lanes with engine facts, step tracking,
+  log views, fix ordering.
 - `jobs.ts` — `lanes(jobs)`, `history(jobs)`, `counts(jobs)`, `progress(job)`,
-  `phase(job)`, `timeText(job)`, `routeText(buildEngine, engine)`.
+  `phase(job)`, `timeText(job)`, `routeText(buildEngine, engine)`,
+  `compiledOn(job)` (the server's `build_engine`).
 - `explain.ts` — `explainFailure(job, log)` → `{tone, title, why, fixes[]}`;
   fixes carry a `cmd` to copy or an `action` (`retry` `cleanup` `system` `library`).
   `focusLine(lines)` finds the line a log should open on. `PODMAN_MEMORY_CMD`.
