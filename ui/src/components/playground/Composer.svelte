@@ -1,0 +1,188 @@
+<script lang="ts">
+  // The prompt box: one message to the model, or to both in compare mode. Takes
+  // an image (vision) or an audio file (speech to text) by button or paste, the
+  // clip length for video models, and stops replies that are still streaming.
+  import Icon from "../Icon.svelte";
+  import { toast } from "../../lib/stores";
+  import { MODE, send, stopTab, streaming, visiblePanes, save, type Tab, type Target } from "../../lib/chat.svelte";
+
+  let { tab, targets, draft = $bindable("") }: { tab: Tab; targets: Target[]; draft?: string } = $props();
+
+  let image = $state<string | null>(null);
+  let file = $state<File | null>(null);
+  let fileEl: HTMLInputElement | undefined = $state();
+  let ta: HTMLTextAreaElement | undefined = $state();
+
+  const panes = $derived(visiblePanes(tab));
+  const both = $derived(panes.length > 1);
+  const mods = $derived(panes.map((p) => targets.find((t) => t.port === p.port)?.modality ?? p.modality));
+  const accept = $derived([...new Set(mods.map((m) => MODE[m]?.attach).filter(Boolean))].join(","));
+  const takesImage = $derived(accept.includes("image"));
+  const takesAudio = $derived(accept.includes("audio"));
+  const off = $derived(mods.every((m) => MODE[m]?.disabled) || panes.every((p) => !p.port));
+  const busy = $derived(panes.some((p) => p.busy));
+  const live = $derived(streaming(tab));
+  const hasVideo = $derived(mods.includes("video"));
+  const ph = $derived(
+    panes.every((p) => !p.port)
+      ? "Pick a model first"
+      : both && mods[0] !== mods[1]
+        ? "Message both models…"
+        : (MODE[mods[0]]?.ph ?? "Message the model…"),
+  );
+  const attachLabel = $derived(takesImage && takesAudio ? "Attach an image or audio file" : takesImage ? "Attach an image" : "Attach an audio file");
+
+  function grow() {
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
+  }
+
+  function submit(e?: Event) {
+    e?.preventDefault();
+    if (busy || off) return;
+    const text = draft.trim();
+    if (!text && !image && !file) return;
+    const r = send(tab, text, image ?? undefined, file ?? undefined);
+    if (r.notes.length) toast(r.notes.join(" "), 6500);
+    if (r.sent) {
+      draft = "";
+      image = null;
+      file = null;
+      requestAnimationFrame(grow);
+    }
+  }
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key !== "Enter" || e.isComposing) return;
+    if (e.shiftKey && !(e.metaKey || e.ctrlKey)) return; // Shift+Enter: a new line
+    e.preventDefault();
+    submit();
+  }
+
+  function take(f: File) {
+    if (f.type.startsWith("audio/")) {
+      if (!takesAudio) return toast("None of these models transcribes audio.");
+      file = f;
+      image = null;
+    } else if (f.type.startsWith("image/")) {
+      if (!takesImage) return toast("None of these models reads images; pick a vision model to ask about one.");
+      const rd = new FileReader();
+      rd.onload = () => {
+        image = rd.result as string;
+        file = null;
+      };
+      rd.readAsDataURL(f);
+    } else {
+      toast(`That's not an ${takesImage ? "image" : "audio file"}.`);
+    }
+  }
+
+  function onFile() {
+    const f = fileEl?.files?.[0];
+    if (f) take(f);
+    if (fileEl) fileEl.value = "";
+  }
+
+  function onPaste(e: ClipboardEvent) {
+    const f = [...(e.clipboardData?.files ?? [])].find((x) => x.type.startsWith("image/") || x.type.startsWith("audio/"));
+    if (!f || !accept) return;
+    e.preventDefault();
+    take(f);
+  }
+</script>
+
+<form class="comp" onsubmit={submit}>
+  {#if image || file}
+    <div class="att">
+      {#if image}<img src={image} alt="" />{:else}<Icon name="mic" size={14} />{/if}
+      <span>{image ? "Image attached" : file?.name}</span>
+      <button class="small icon" type="button" aria-label="Remove the attachment" title="Remove" onclick={() => ((image = null), (file = null))}><Icon name="xmark" size={13} /></button>
+    </div>
+  {/if}
+  <div class="row">
+    <label class="vh" for="pg-prompt">Message</label>
+    <textarea
+      id="pg-prompt"
+      rows="1"
+      bind:value={draft}
+      bind:this={ta}
+      placeholder={ph}
+      disabled={off}
+      oninput={grow}
+      onkeydown={onKey}
+      onpaste={onPaste}></textarea>
+    <div class="tools">
+      {#if accept}
+        <input type="file" hidden {accept} bind:this={fileEl} onchange={onFile} />
+        <button class="icon" type="button" aria-label={attachLabel} title={attachLabel} disabled={off} onclick={() => fileEl?.click()}><Icon name="attach" size={16} /></button>
+      {/if}
+      {#if hasVideo}
+        <label class="len" title="Longer clips take more time and memory">
+          <span>Length</span>
+          <select value={String(tab.vidFrames ?? 33)} onchange={(e) => ((tab.vidFrames = parseInt(e.currentTarget.value, 10)), save())}>
+            <option value="17">~1 s</option><option value="33">~2 s</option><option value="49">~3 s</option><option value="65">~4 s</option><option value="81">~5 s</option>
+          </select>
+        </label>
+      {/if}
+      {#if live}
+        <button type="button" onclick={() => stopTab(tab)}><Icon name="stopsq" size={14} />Stop</button>
+      {:else}
+        <button class="primary" type="submit" disabled={busy || off}>
+          {#if busy}<span class="spin"></span>{/if}{both ? "Send to both" : "Send"}<Icon name="arrowRight" size={15} />
+        </button>
+      {/if}
+    </div>
+  </div>
+</form>
+
+<style>
+  .comp {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 10px 10px 14px;
+    background: var(--p1);
+    border: 1px solid var(--ln2);
+    border-radius: 16px;
+  }
+  .comp:focus-within { border-color: color-mix(in srgb, var(--pr) 60%, var(--ln2)); }
+  .row { display: flex; align-items: flex-end; gap: 10px; }
+  .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  textarea {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    background: none;
+    box-shadow: none;
+    resize: none;
+    padding: 7px 0;
+    font-size: 14px;
+    line-height: 1.45;
+    max-height: 200px;
+  }
+  textarea:focus { box-shadow: none; }
+  .tools { display: flex; gap: 6px; align-items: center; flex: none; }
+  .len { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--mu); }
+  .len select { width: auto; height: 34px; padding: 0 8px; font-size: 12.5px; }
+  .att {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    align-self: flex-start;
+    padding: 4px 4px 4px 6px;
+    border: 1px solid var(--ln);
+    border-radius: var(--r);
+    background: var(--p2);
+    font-size: 12.5px;
+    color: var(--mu);
+    max-width: 100%;
+  }
+  .att img { width: 32px; height: 32px; object-fit: cover; border-radius: 6px; }
+  .att span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 760px) {
+    .row { flex-wrap: wrap; }
+    textarea { flex-basis: 100%; }
+    .tools { margin-left: auto; }
+  }
+</style>
