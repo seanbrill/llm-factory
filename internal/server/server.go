@@ -59,6 +59,10 @@ type Server struct {
 	gatePortsMu sync.Mutex
 	notGate     map[int]time.Time
 
+	// Test hooks for the ensemble endpoints (nil: the builder's).
+	imageLabelsFn func(ctx context.Context, engine, ref string) (map[string]string, error)
+	containersFn  func(ctx context.Context) ([]map[string]any, error)
+
 	mediaDir string // where generated clips/images are saved + served from
 
 	ff    *filefreak.Archive // the FileFreak model archive (filefreak.go); nil if its config can't be read

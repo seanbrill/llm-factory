@@ -32,6 +32,22 @@ import (
 // ensembleImage is the image an ensemble builds into.
 func ensembleImage(id string) string { return "local-llm/ens-" + id + ":latest" }
 
+// imageLabels reads an image's labels (the builder's, unless a test hooks it).
+func (s *Server) imageLabels(ctx context.Context, engine, ref string) (map[string]string, error) {
+	if s.imageLabelsFn != nil {
+		return s.imageLabelsFn(ctx, engine, ref)
+	}
+	return s.b.ImageLabels(ctx, engine, ref)
+}
+
+// containers lists the factory's containers (the builder's, unless hooked).
+func (s *Server) containers(ctx context.Context) ([]map[string]any, error) {
+	if s.containersFn != nil {
+		return s.containersFn(ctx)
+	}
+	return s.b.Containers(ctx)
+}
+
 // errorJSON writes {"error": msg}.
 func errorJSON(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
@@ -103,7 +119,7 @@ func (s *Server) enrichMembers(ctx context.Context, e *ensemble.Ensemble) {
 	for i := range e.Members {
 		m := &e.Members[i]
 		m.Image = strings.TrimSpace(m.Image)
-		if labels, err := s.b.ImageLabels(ctx, engine, m.Image); err == nil {
+		if labels, err := s.imageLabels(ctx, engine, m.Image); err == nil {
 			if v := labels["local-llm.model"]; v != "" {
 				m.Model = v
 			}
@@ -243,7 +259,7 @@ type ensembleRun struct {
 // ensembleRuns maps ensemble id -> its running Conductor, from the engines'
 // container lists (the image's local-llm.ensemble label).
 func (s *Server) ensembleRuns(ctx context.Context) (map[string]ensembleRun, error) {
-	rows, err := s.b.Containers(ctx)
+	rows, err := s.containers(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +280,7 @@ func (s *Server) ensembleRuns(ctx context.Context) (map[string]ensembleRun, erro
 // usedPorts are the host ports running containers publish.
 func (s *Server) usedPorts(ctx context.Context) map[int]bool {
 	used := map[int]bool{}
-	if rows, err := s.b.Containers(ctx); err == nil {
+	if rows, err := s.containers(ctx); err == nil {
 		for _, row := range rows {
 			if p := harness.RowPort(row); p > 0 {
 				used[p] = true
@@ -405,6 +421,9 @@ func (s *Server) ensembleConfig(e ensemble.Ensemble) (c ensemble.Config, problem
 // and voice (it holds them in memory only, so a restart loses them). st is
 // updated in place; the result is any problem with the voice.
 func (s *Server) syncPersona(ctx context.Context, port int, st *ensemble.Status) string {
+	if s.ens == nil || s.voices == nil {
+		return ""
+	}
 	e, ok, err := s.ens.Get(st.ID)
 	if err != nil || !ok {
 		return ""
@@ -477,7 +496,7 @@ func (s *Server) handleEnsemblesStatus(w http.ResponseWriter, r *http.Request) {
 		go func(i int, e ensemble.Ensemble) {
 			defer wg.Done()
 			live := ensembleLive{ID: e.ID, Image: ensembleImage(e.ID)}
-			labels, err := s.b.ImageLabels(r.Context(), normalizeEngine(e.Engine), live.Image)
+			labels, err := s.imageLabels(r.Context(), normalizeEngine(e.Engine), live.Image)
 			live.Built = err == nil && len(labels) > 0
 			if run, ok := runs[e.ID]; ok {
 				live.Running = &run
@@ -524,7 +543,7 @@ func (s *Server) handleEnsembleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	engine := normalizeEngine(e.Engine)
 	ref := ensembleImage(e.ID)
-	labels, err := s.b.ImageLabels(r.Context(), engine, ref)
+	labels, err := s.imageLabels(r.Context(), engine, ref)
 	if err != nil || len(labels) == 0 {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "build the ensemble first: its image " + ref + " doesn't exist yet", "code": "not_built"})
 		return

@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
@@ -371,8 +372,34 @@ func (h *harnessAPI) handleGateway(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.proxyToModel(w, r, path)
+	case path == "/v1/audio/speech" || path == "/v1/audio/transcriptions":
+		if r.Method != http.MethodPost {
+			oaiError(w, http.StatusMethodNotAllowed, "use POST", "invalid_request_error", "")
+			return
+		}
+		h.proxyToModel(w, r, path)
 	default:
-		oaiError(w, http.StatusNotFound, "the factory gateway serves /v1/models, /v1/chat/completions, /v1/completions and /v1/embeddings", "invalid_request_error", "not_found")
+		oaiError(w, http.StatusNotFound, "the factory gateway serves /v1/models, /v1/chat/completions, /v1/completions and /v1/embeddings, and for running ensembles /v1/audio/speech and /v1/audio/transcriptions", "invalid_request_error", "not_found")
+	}
+}
+
+// multipartField reads one plain field from a multipart body (the model of a
+// transcription upload) without disturbing the bytes forwarded.
+func multipartField(contentType string, body []byte, name string) string {
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil || params["boundary"] == "" {
+		return ""
+	}
+	mr := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	for {
+		part, err := mr.NextPart()
+		if err != nil {
+			return ""
+		}
+		if part.FormName() == name && part.FileName() == "" {
+			b, _ := io.ReadAll(io.LimitReader(part, 512))
+			return strings.TrimSpace(string(b))
+		}
 	}
 }
 
@@ -411,7 +438,16 @@ func (h *harnessAPI) proxyToModel(w http.ResponseWriter, r *http.Request, path s
 	var probe struct {
 		Model string `json:"model"`
 	}
-	if err := json.Unmarshal(body, &probe); err != nil {
+	contentType := "application/json"
+	if path == "/v1/audio/transcriptions" {
+		// An upload: forward it as sent, reading only its model field.
+		contentType = r.Header.Get("Content-Type")
+		probe.Model = multipartField(contentType, body, "model")
+		if !strings.HasPrefix(contentType, "multipart/form-data") {
+			oaiError(w, http.StatusBadRequest, "send the audio as multipart form data (file, model)", "invalid_request_error", "")
+			return
+		}
+	} else if err := json.Unmarshal(body, &probe); err != nil {
 		oaiError(w, http.StatusBadRequest, "the request body must be a JSON object", "invalid_request_error", "")
 		return
 	}
@@ -441,6 +477,16 @@ func (h *harnessAPI) proxyToModel(w http.ResponseWriter, r *http.Request, path s
 	case path != "/v1/embeddings" && m.Modality == "embedding":
 		oaiError(w, http.StatusBadRequest, m.ID+" is an embedding model; use it through /v1/embeddings (e.g. as Open WebUI's embedding model), not for chat", "invalid_request_error", "")
 		return
+	case strings.HasPrefix(path, "/v1/audio/") && m.Modality != "ensemble":
+		oaiError(w, http.StatusBadRequest, fmt.Sprintf("%s is a %s model; speech and transcription go through a running ensemble with speech members", m.ID, m.Modality), "invalid_request_error", "")
+		return
+	case path == "/v1/completions" && m.Modality == "ensemble":
+		oaiError(w, http.StatusBadRequest, m.ID+" is an ensemble; use /v1/chat/completions", "invalid_request_error", "")
+		return
+	}
+	if m.Modality == "ensemble" {
+		// The Conductor applies the persona and voice: make sure they're current.
+		h.s.syncPersonaAt(r.Context(), m.Port)
 	}
 	target := h.s.modelURL(m.Port, path)
 	if r.URL.RawQuery != "" {
@@ -452,7 +498,7 @@ func (h *harnessAPI) proxyToModel(w http.ResponseWriter, r *http.Request, path s
 		return
 	}
 	upReq.ContentLength = int64(len(body))
-	upReq.Header.Set("Content-Type", "application/json")
+	upReq.Header.Set("Content-Type", contentType)
 	if a := r.Header.Get("Accept"); a != "" {
 		upReq.Header.Set("Accept", a)
 	}

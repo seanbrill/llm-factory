@@ -186,7 +186,7 @@ func (s *Server) handleVoiceTranscribe(w http.ResponseWriter, r *http.Request) {
 			sources = append(sources, source{"the ensemble " + req.Ensemble, port})
 		}
 	}
-	if rows, err := s.b.Containers(r.Context()); err == nil {
+	if rows, err := s.containers(r.Context()); err == nil {
 		for _, row := range rows {
 			if harness.RowRunning(row) && harness.RowLabel(row, "local-llm.modality") == "audio-stt" && harness.RowPort(row) > 0 {
 				name := harness.RowLabel(row, "local-llm.model")
