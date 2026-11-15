@@ -112,7 +112,10 @@ export const ICONS: Record<string, string> = {
   // [/p3]
 
   // [p4] Library, Playground
-
+  dots: '<path d="M6 12h.01M12 12h.01M18 12h.01" stroke-width="3"/>',
+  upload: '<path d="M12 15V4M7.5 8.5L12 4l4.5 4.5M5 19.5h14"/>',
+  swap: '<path d="M7 4.5L3.5 8 7 11.5M3.5 8h13M17 12.5l3.5 3.5-3.5 3.5M20.5 16h-13"/>',
+  attach: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M20.5 16l-5-5-9 8.5"/>',
   // [/p4]
 
   // [p5] Harness, Ensembles, Personas, Help

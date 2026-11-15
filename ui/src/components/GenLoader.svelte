@@ -1,8 +1,8 @@
 <script lang="ts">
-  // Circular progress indicator for in-flight media generation. The backend runs
-  // as one long request with no progress stream, so the % is an ESTIMATE from
-  // elapsed time vs. a typical duration (eta), capped at 95% until the result
-  // lands (which unmounts this component). Honest about being an estimate.
+  // Progress ring for a media generation in flight. The factory answers in one
+  // long request with no progress stream, so the % is an estimate from the time
+  // elapsed against a typical duration (eta), held at 95% until the result
+  // lands (which removes this). It says so.
   let { eta = 100000, label = "Generating…" }: { eta?: number; label?: string } = $props();
 
   const start = Date.now();
@@ -24,28 +24,37 @@
   const offset = $derived(CIRC * (1 - pct / 100));
 </script>
 
-<div class="gen">
-  <div class="ring">
-    <svg viewBox="0 0 64 64" width="58" height="58">
+<div class="gen" role="status">
+  <div class="ring" title="An estimate from the usual time; the factory doesn't report progress">
+    <svg viewBox="0 0 64 64" width="56" height="56" aria-hidden="true">
       <circle class="track" cx="32" cy="32" r={R} />
       <circle class="prog" cx="32" cy="32" r={R} style="stroke-dasharray:{CIRC};stroke-dashoffset:{offset}" />
     </svg>
-    <span class="pct">{pct}%</span>
+    <span class="pct">~{pct}%</span>
   </div>
   <div class="meta">
     <div class="label">{label}</div>
-    <div class="sub">{time}{#if over} · taking longer than usual…{/if}</div>
+    <div class="sub">{time}{over ? " · taking longer than usual" : ""}</div>
   </div>
 </div>
 
 <style>
-  .gen { display: flex; align-items: center; gap: 14px; padding: 6px 2px; }
-  .ring { position: relative; width: 58px; height: 58px; flex: none; }
+  .gen { display: flex; align-items: center; gap: 14px; padding: 4px 0; }
+  .ring { position: relative; width: 56px; height: 56px; flex: none; }
   .ring svg { transform: rotate(-90deg); display: block; }
-  .track { fill: none; stroke: #232838; stroke-width: 5; }
-  .prog { fill: none; stroke: var(--accent); stroke-width: 5; stroke-linecap: round; transition: stroke-dashoffset 0.4s linear; }
-  .pct { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+  .track { fill: none; stroke: var(--p3); stroke-width: 5; }
+  .prog { fill: none; stroke: var(--pr); stroke-width: 5; stroke-linecap: round; transition: stroke-dashoffset 0.4s linear; }
+  .pct {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: 600 11.5px var(--font-mono);
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
   .meta { display: flex; flex-direction: column; gap: 3px; }
-  .label { font-size: 13.5px; color: var(--text); }
-  .sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .label { font-size: 13.5px; color: var(--ink); }
+  .sub { font: 12px var(--font-mono); color: var(--mu); font-variant-numeric: tabular-nums; }
 </style>
