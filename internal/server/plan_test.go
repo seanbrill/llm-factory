@@ -197,3 +197,41 @@ func TestStorageUsage(t *testing.T) {
 		t.Fatalf("DiskSpace = %d, %d, %v", total, avail, err)
 	}
 }
+
+// A job's run function reports the engine that compiles it (the builder's
+// OnPlan), for itself and again for a retry, and the queue lists it.
+func TestQueueBuildEngine(t *testing.T) {
+	q := newBuildQueue()
+	calls := 0
+	j := testJob("podman", "x:latest", func(ctx context.Context, log builder.LogFunc) error {
+		calls++
+		reportBuildEngine(ctx)("docker")
+		if calls == 1 {
+			return context.Canceled
+		}
+		return nil
+	})
+	mustEnqueue(t, q, j)
+	waitStatus(t, q, j.id, jobError)
+	engineOf := func(id string) string {
+		for _, s := range q.list() {
+			if s.ID == id {
+				return s.BuildEng
+			}
+		}
+		return "missing"
+	}
+	if got := engineOf(j.id); got != "docker" {
+		t.Fatalf("build_engine = %q, want docker", got)
+	}
+	nj, _, err := q.retry(j.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, q, nj.id, jobDone)
+	if got := engineOf(nj.id); got != "docker" {
+		t.Fatalf("retried build_engine = %q, want docker", got)
+	}
+	// Outside a worker the callback is a harmless no-op.
+	reportBuildEngine(context.Background())("docker")
+}

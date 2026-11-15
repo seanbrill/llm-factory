@@ -439,7 +439,9 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		eta: int(s.etaFor(compute)),
 		run: func(ctx context.Context, log builder.LogFunc) error {
 			start := time.Now()
-			if err := s.b.Build(ctx, opts, log); err != nil {
+			o := opts
+			o.OnPlan = reportBuildEngine(ctx)
+			if err := s.b.Build(ctx, o, log); err != nil {
 				return err
 			}
 			s.recordBuild(compute, time.Since(start).Seconds())

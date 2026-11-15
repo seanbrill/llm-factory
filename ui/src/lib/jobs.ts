@@ -87,8 +87,12 @@ export function routeText(buildEngine: string, engine: string): string {
     : engineName(engine);
 }
 
-/** The compile engine a running/finished job used, read from its log ("…so it compiles on Docker…"). */
+/**
+ * The engine a running/finished job compiles on: the factory's build_engine,
+ * else read from its log ("…so it compiles on Docker…") for older factories.
+ */
 export function compiledOn(j: BuildJob): string {
+  if (j.build_engine) return j.build_engine;
   const v = views[j.id];
   const m = (v?.log || j.last_line || "").match(/so it compiles on (Docker|the Podman machine)/);
   if (!m) return j.engine;

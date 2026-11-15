@@ -87,6 +87,7 @@ export interface BuildJob {
   model_id: string;
   name: string;
   engine: string;        // the engine the image is for (its queue lane)
+  build_engine?: string; // the engine compiling it, once chosen (differs from engine when transferred)
   compute: string;
   config: BuildConfig;
   position: number;      // queued: unfinished builds ahead on its engine

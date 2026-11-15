@@ -465,6 +465,11 @@ type BuildOptions struct {
 	MemoryGB  float64 // container memory limit at run time (0 = no limit)
 	Route     string  // local URL alias -> http://<route>.localhost
 	Autostart bool    // run with --restart unless-stopped
+
+	// OnPlan, when set, learns which engine runs the build once the memory
+	// preflight has chosen: the target, or the other engine when the target is
+	// too small to compile (the image is transferred afterwards).
+	OnPlan func(buildEngine string)
 }
 
 // Ref is the full image reference, e.g. "myorg/qwen-analyzer:latest".
@@ -517,6 +522,9 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		if plan, err = b.planBuild(ctx, engine, compute, log); err != nil {
 			return err
 		}
+	}
+	if o.OnPlan != nil {
+		o.OnPlan(plan.Build)
 	}
 
 	// Self-contained families (tts, python) bake their own model, so there's no

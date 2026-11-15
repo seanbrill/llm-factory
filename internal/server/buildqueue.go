@@ -77,7 +77,8 @@ type buildJob struct {
 	trimmed  int    // lines dropped from the front; offsets stay absolute
 	errMsg   string // the lead error line, for the queue panel
 	cancel   context.CancelFunc
-	canceled bool // cancel requested while running
+	canceled bool   // cancel requested while running
+	buildEng string // engine compiling it, once the builder has chosen ("" = not yet / not a compile)
 }
 
 func (j *buildJob) active() bool { return j.status == jobQueued || j.status == jobRunning }
@@ -131,9 +132,29 @@ func (q *buildQueue) work(lane string) {
 		if j == nil {
 			return
 		}
+		ctx = context.WithValue(ctx, buildEngineKey{}, func(e string) { q.setBuildEngine(j, e) })
 		err := j.run(ctx, func(line string) { q.appendLine(j, line) })
 		q.finish(j, ctx, err)
 	}
+}
+
+// buildEngineKey carries, in a running job's context, the callback that
+// records which engine compiles it (the builder decides at run time).
+type buildEngineKey struct{}
+
+// reportBuildEngine returns the callback a job's run function hands the
+// builder (BuildOptions.OnPlan); a no-op outside a queue worker.
+func reportBuildEngine(ctx context.Context) func(string) {
+	if f, ok := ctx.Value(buildEngineKey{}).(func(string)); ok {
+		return f
+	}
+	return func(string) {}
+}
+
+func (q *buildQueue) setBuildEngine(j *buildJob, engine string) {
+	q.mu.Lock()
+	j.buildEng = engine
+	q.mu.Unlock()
 }
 
 // next marks lane's oldest queued job running and returns it with its context,
@@ -315,6 +336,7 @@ type jobSummary struct {
 	ModelID    string      `json:"model_id"`
 	Name       string      `json:"name"`
 	Engine     string      `json:"engine"`
+	BuildEng   string      `json:"build_engine,omitempty"` // engine that compiles it, once chosen; differs from engine when the image is transferred
 	Compute    string      `json:"compute"`
 	Config     buildConfig `json:"config"`
 	Position   int         `json:"position"`     // queued: unfinished jobs ahead in its engine's lane
@@ -348,7 +370,7 @@ func unixMs(t time.Time) int64 {
 func (q *buildQueue) summary(j *buildJob, now time.Time) jobSummary {
 	s := jobSummary{
 		ID: j.id, Kind: j.kind, Status: j.status, Active: j.active(), Ref: j.ref,
-		ModelID: j.cfg.ModelID, Name: j.name, Engine: j.lane, Compute: j.cfg.Compute, Config: j.cfg,
+		ModelID: j.cfg.ModelID, Name: j.name, Engine: j.lane, BuildEng: j.buildEng, Compute: j.cfg.Compute, Config: j.cfg,
 		CreatedAt: unixMs(j.created), StartedAt: unixMs(j.started), FinishedAt: unixMs(j.finished),
 		EtaSeconds: j.eta, Error: j.errMsg, LineCount: j.trimmed + len(j.lines),
 	}
