@@ -3,7 +3,7 @@
 import { labelVal } from "../../lib/api";
 import { imageRef } from "../../lib/util";
 import { sentence } from "../../lib/harness";
-import type { BuildJob, Ensemble, ImageInfo, Model } from "../../lib/types";
+import type { BuildJob, Ensemble, EnsembleMember, ImageInfo, Model, PersonaVoice } from "../../lib/types";
 
 /** Modality -> the Conductor tool a member of that modality backs. */
 export const TOOL_FOR: Record<string, string> = {
@@ -20,33 +20,68 @@ export const TOOL_FOR: Record<string, string> = {
 /** What a tool does, in words. */
 export const TOOL_TEXT: Record<string, string> = {
   chat: "Chat",
-  see_image: "Images in messages",
+  see_image: "Reads images",
   generate_image: "Draws images",
   generate_video: "Makes videos",
   transcribe: "Speech to text",
   speak: "Speaks replies",
+  _conductor: "Conductor",
 };
 
-/** When the heuristic router sends a request to each tool (ensemblegate classify). */
+/** What sends a request to each tool (cmd/ensemblegate: the router and the voice endpoints). */
 export const TOOL_WHEN: Record<string, string> = {
   chat: "everything else",
   see_image: "a message with an image",
   generate_image: "“draw / make an image …”",
   generate_video: "“make a video …”",
-  speak: "“say / read aloud …”",
-  transcribe: "not routed yet",
+  speak: "spoken answers, /v1/audio/speech, and “say …”",
+  transcribe: "voice questions (the mic) and /v1/audio/transcriptions",
 };
+
+/** With agent routing: when the brain (the chat member) calls each member. */
+export const AGENT_WHEN: Record<string, string> = {
+  see_image: "the brain calls look_at_image (unless it sees images itself)",
+  generate_image: "the brain calls generate_image",
+  generate_video: "the brain calls generate_video",
+  speak: "spoken answers, /v1/audio/speech, and the brain's speak tool",
+  transcribe: "voice questions (the mic) and /v1/audio/transcriptions",
+};
+
+/** The member slots an ensemble is composed of: one member per tool. */
+export interface Slot {
+  tool: string;
+  label: string;
+  mods: string[]; // image modalities that can fill it
+  help: string;
+}
+export const SLOTS: Slot[] = [
+  { tool: "chat", label: "Chat", mods: ["text", "code", "reasoning", "vision"], help: "Answers in the persona's words. Required." },
+  { tool: "see_image", label: "Vision", mods: ["vision"], help: "Reads images you attach. Without one, the chat member gets the text only." },
+  { tool: "transcribe", label: "Speech to text", mods: ["audio-stt"], help: "Turns a spoken question into text, and fills in voice-clip transcripts." },
+  { tool: "speak", label: "Speech", mods: ["tts"], help: "Speaks the answers in the persona's voice." },
+  { tool: "generate_image", label: "Images", mods: ["image"], help: "Draws pictures asked for in the chat." },
+  { tool: "generate_video", label: "Video", mods: ["video"], help: "Makes short clips asked for in the chat." },
+];
 
 export interface Candidate {
   ref: string;
   name: string;
   model: string; // catalog id ("" when unknown)
+  modelName: string; // catalog name, else the image name
   modality: string;
   tool: string;
-  vram: number | null; // catalog min_vram_gb, null when it has none
+  runtime: string; // cpp | python | audiocpp ("" when unlabelled)
+  /** Its memory footprint toward the budget: VRAM on a GPU, RAM on CPU; null when the catalog has no figure. */
+  footprint: number | null;
+  voiceClone: boolean; // a speech model that clones voices
+  needsTranscript: boolean; // ...only with the clip's transcript
+  cloneOnly: boolean; // ...and has no built-in voices
+  family: string; // audio.cpp family ("" otherwise)
   engine: string;
   compute: string;
 }
+
+const gpu = (c: string) => c === "cuda" || c === "vulkan";
 
 /** Built images that can be members (an ensemble image can't be one). */
 export function candidates(images: ImageInfo[], catalog: Model[]): Candidate[] {
@@ -62,18 +97,56 @@ export function candidates(images: ImageInfo[], catalog: Model[]): Candidate[] {
     const tool = TOOL_FOR[modality];
     if (!tool) continue; // embeddings: nothing routes to them
     seen.add(ref);
+    const compute = im.Compute || labelVal(im.Labels, "local-llm.compute") || "";
+    const fp = cat ? (gpu(compute) ? cat.min_vram_gb : cat.min_ram_gb) : 0;
     out.push({
       ref,
       name,
       model,
+      modelName: cat?.name || name.replace(/^(localhost\/)?local-llm\//, ""),
       modality,
       tool,
-      vram: cat?.min_vram_gb || null, // 0 = no figure; saving counts it as 6 GB
+      runtime: labelVal(im.Labels, "local-llm.runtime") || cat?.runtime || "",
+      footprint: fp > 0 ? fp : null,
+      voiceClone: !!cat?.voice_clone,
+      needsTranscript: !!cat?.clone_needs_transcript,
+      cloneOnly: !!cat?.voice_clone && cloneOnly(cat?.audiocpp?.family ?? "", cat?.audiocpp?.default_voice ?? ""),
+      family: cat?.audiocpp?.family ?? "",
       engine: im.Engine || labelVal(im.Labels, "local-llm.engine") || "docker",
-      compute: im.Compute || labelVal(im.Labels, "local-llm.compute") || "",
+      compute,
     });
   }
   return out.sort((a, b) => a.tool.localeCompare(b.tool) || a.name.localeCompare(b.name));
+}
+
+/** The member a slot holds, built from its candidate image. */
+export function memberOf(slot: Slot, c: Candidate, pinned: boolean): EnsembleMember {
+  return {
+    tool: slot.tool,
+    modality: c.modality,
+    image: c.ref,
+    model: c.model || undefined,
+    runtime: c.runtime || undefined,
+    compute: c.compute || undefined,
+    vram_gb: c.footprint ?? 0,
+    pinned: pinned || undefined,
+    voice_clone: c.voiceClone || undefined,
+    clone_needs_transcript: c.needsTranscript || undefined,
+    clone_only: c.cloneOnly || undefined,
+    family: c.family || undefined,
+  };
+}
+
+/** A cloning model with no built-in voices (internal/voice CloneOnly): XTTS v2, and Qwen3-TTS without a default voice (the Base models). */
+export function cloneOnly(family: string, defaultVoice: string): boolean {
+  return family === "xtts_v2" || (family === "qwen3_tts" && !defaultVoice);
+}
+
+/** A persona voice in a few words. */
+export function voiceText(v: PersonaVoice | undefined, clipName?: string): string {
+  if (!v?.kind) return "the speech member's default voice";
+  if (v.kind === "builtin") return v.name ? `the built-in voice “${v.name}”` : "a built-in voice (not picked yet)";
+  return clipName ? `a voice cloned from “${clipName}”` : "a cloned voice";
 }
 
 /** The id the factory gives a new ensemble or persona (Go: Slug / slugify). */

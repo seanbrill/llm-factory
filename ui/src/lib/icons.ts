@@ -137,6 +137,7 @@ export const MODALITY: Record<string, { icon: string; label: string }> = {
   video: { icon: "film", label: "Video gen" },
   "audio-stt": { icon: "mic", label: "Speech→Text" },
   tts: { icon: "speaker", label: "Text→Speech" },
+  ensemble: { icon: "ensembles", label: "Ensemble" },
 };
 export const modMeta = (k: string | undefined) => MODALITY[k ?? "text"] ?? MODALITY.text;
 

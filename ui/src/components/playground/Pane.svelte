@@ -68,6 +68,7 @@
     video: "Describe a short clip; it comes back here. Pick the length next to Send.",
     "audio-stt": "Attach an audio file; its transcript comes back here.",
     tts: "Type something for it to say aloud.",
+    ensemble: "Chat with it, attach an image, ask it to draw a picture or make a short video, or press the mic and ask out loud: it answers in its persona's voice. A member that isn't running yet starts first, which can take a minute.",
   };
 </script>
 
@@ -106,7 +107,9 @@
             <CopyButton text={curl} label="Copy as curl" title={pane.last ? "The request this side sent last, as a curl command" : "The request this side would send now, as a curl command"} />
           {/if}
         {/if}
-        {#if pane.port}
+        {#if target?.ensemble}
+          <a class="btn sm icon" href={href("ensembles")} aria-label="Show {name} on the Ensembles page" title="Its members and their state"><Icon name="ensembles" size={14} /></a>
+        {:else if pane.port}
           <a class="btn sm icon" href={href("library", target?.model || String(pane.port))} aria-label="Show {name} in the Library" title="Show it in the Library"><Icon name="library" size={14} /></a>
         {/if}
       </div>

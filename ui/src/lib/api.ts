@@ -1,5 +1,6 @@
 // Typed fetch client + SSE stream helper for the Go API. Mirrors the vanilla
 // app's api()/streamChat() but with types and one place for error handling.
+import type { MediaItem } from "./types";
 
 // ApiError carries the HTTP status + parsed body so callers can react to
 // structured responses (e.g. the run guardrail's 409 + { code, needs_force }).
@@ -52,14 +53,24 @@ export interface StreamOpts {
   [k: string]: unknown;
 }
 
+/** What an ensemble's stream carries besides tokens (cmd/ensemblegate). */
+export interface StreamExtra {
+  /** Generated images, clips or speech in the reply (delta.media). */
+  onMedia?: (items: MediaItem[]) => void;
+  /** A ": ensemble: <sentence>" comment while a member warms up or media generates. */
+  onStatus?: (text: string) => void;
+}
+
 // streamChat POSTs to /api/chat/stream and calls onDelta for each token. Returns
-// when the stream ends; throws on a non-OK response.
+// when the stream ends; throws on a non-OK response or an error event in the
+// stream (data: {"error": {...}}).
 export async function streamChat(
   port: number,
   messages: unknown[],
   onDelta: (s: string, kind?: "content" | "reasoning") => void,
   signal?: AbortSignal,
   opts?: StreamOpts,
+  extra?: StreamExtra,
 ): Promise<void> {
   const body = { port, messages, max_tokens: 1024, temperature: 0.4, ...(opts ?? {}) };
   const res = await fetch("/api/chat/stream", {
@@ -90,19 +101,32 @@ export async function streamChat(
     while ((nl = buf.indexOf("\n")) >= 0) {
       const line = buf.slice(0, nl).trim();
       buf = buf.slice(nl + 1);
+      if (line.startsWith(":")) {
+        // An SSE comment: keep-alive, or an ensemble saying what it's doing.
+        const m = line.match(/^:\s*ensemble:\s*(.+)$/);
+        if (m) extra?.onStatus?.(m[1].trim());
+        continue;
+      }
       if (!line.startsWith("data:")) continue;
       const d = line.slice(5).trim();
       if (d === "[DONE]") return;
+      let obj: any;
       try {
-        // Reasoning models (e.g. Qwen3 via llama.cpp with a reasoning format) stream
-        // their thinking as delta.reasoning_content and the answer as delta.content —
-        // handle both, or a reasoning model looks like it never replied.
-        const delta = JSON.parse(d).choices?.[0]?.delta;
-        if (delta?.reasoning_content) onDelta(delta.reasoning_content, "reasoning");
-        if (delta?.content) onDelta(delta.content, "content");
+        obj = JSON.parse(d);
       } catch {
-        /* ignore partial */
+        continue; /* ignore partial */
       }
+      if (obj?.error) {
+        const e = obj.error;
+        throw new Error(typeof e === "string" ? e : e.message || "the model sent an error");
+      }
+      // Reasoning models (e.g. Qwen3 via llama.cpp with a reasoning format) stream
+      // their thinking as delta.reasoning_content and the answer as delta.content —
+      // handle both, or a reasoning model looks like it never replied.
+      const delta = obj?.choices?.[0]?.delta;
+      if (delta?.reasoning_content) onDelta(delta.reasoning_content, "reasoning");
+      if (delta?.content) onDelta(delta.content, "content");
+      if (Array.isArray(delta?.media) && delta.media.length) extra?.onMedia?.(delta.media as MediaItem[]);
     }
   }
 }

@@ -1,7 +1,7 @@
 // Typed app stores — replace the vanilla globals (SYSINFO, CATALOG, …). Components
 // subscribe instead of reading a module-level `let`.
 import { writable } from "svelte/store";
-import type { Model, SysInfo, Persona, Ensemble, ResourceBudget, VersionInfo } from "./types";
+import type { Model, SysInfo, Persona, Ensemble, ResourceBudget, VersionInfo, VoiceClip } from "./types";
 import { api } from "./api";
 
 export const sysinfo = writable<SysInfo | null>(null);
@@ -10,6 +10,8 @@ export const appVersion = writable<VersionInfo | null>(null);
 export const catalog = writable<Model[]>([]);
 export const personas = writable<Persona[]>([]);
 export const ensembles = writable<Ensemble[]>([]);
+// Saved voice clips (metadata only; the audio stays in config/voices).
+export const voices = writable<VoiceClip[]>([]);
 export const resources = writable<ResourceBudget | null>(null);
 
 // Set by Images "use as template"; consumed by the Build page to clone an image.
@@ -49,6 +51,12 @@ export async function loadEnsembles() {
   } catch {
     ensembles.set([]);
   }
+}
+/** Reload the voice clips; throws so an editor can say why the list is missing. */
+export async function loadVoices(): Promise<VoiceClip[]> {
+  const v = (await api<{ voices: VoiceClip[] }>("/api/voices")).voices ?? [];
+  voices.set(v);
+  return v;
 }
 export async function loadResources() {
   try {

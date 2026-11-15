@@ -5,13 +5,19 @@
 // transcribe audio; two models can talk to each other (the bridge); every side
 // can copy its last request as curl. Tabs persist in localStorage.
 //
+// An ensemble is one more kind of side: it chats like a text model, but its
+// replies can carry images, clips and speech (delta.media), it says what it's
+// doing while a member warms up (": ensemble: …" comments), and it takes a
+// spoken question (voiceChat: speech to text -> chat -> speech in the
+// persona's voice).
+//
 // A Svelte 5 rune module: every component shares this state. Mutate messages
 // through the $state proxy (pane.msgs[i]), never a raw object, or the change
 // only paints when the stream ends.
-import { post, streamChat, labelVal, type StreamOpts } from "./api";
+import { api, post, streamChat, labelVal, type StreamOpts } from "./api";
 import { imageDefaults, ttsSpec } from "./meta";
 import { containerPort, containerRef, isRunning, isStreamMod } from "./util";
-import type { ContainerInfo, Model, RunningModel } from "./types";
+import type { ContainerInfo, Ensemble, MediaItem, Model, Persona, RunningModel } from "./types";
 
 // ---- types ------------------------------------------------------------------------
 
@@ -43,6 +49,8 @@ export interface Msg {
   // eta = expected duration ms (for the % estimate).
   pending?: { at: number; eta: number; label: string };
   autoplay?: boolean;    // fresh speech plays on arrival (not on reload)
+  spoken?: boolean;      // a question asked out loud (its content is the transcript)
+  note?: string;         // a side remark under the reply (e.g. why it didn't speak)
 }
 
 /** The last request a side sent, for "Copy as curl". */
@@ -88,6 +96,7 @@ export interface Tab {
   ttsSpeed?: number;
   ttsStyle?: string;
   mediaSeed?: number | null;
+  speakReplies?: boolean; // an ensemble also speaks its replies to typed messages
 }
 
 /** A running model the Playground can talk to. */
@@ -101,6 +110,7 @@ export interface Target {
   compute: string;       // cpu | vulkan | cuda
   persona: string;       // its run-time persona, or the name in its baked prompt
   container: string;
+  ensemble?: string;     // the ensemble id, for an ensemble
 }
 
 // ---- state ------------------------------------------------------------------------
@@ -128,6 +138,7 @@ export const MODE: Record<string, { ph: string; attach?: string; disabled?: bool
   "audio-stt": { ph: "Attach an audio file to transcribe…", attach: "audio/*" },
   tts: { ph: "Text to speak aloud…" },
   embedding: { ph: "Embedding models return vectors, not chat.", disabled: true },
+  ensemble: { ph: "Message the ensemble, ask it to draw or film something, or use the mic…", attach: "image/*" },
 };
 
 export function activeTab(): Tab | null {
@@ -154,14 +165,37 @@ function personaName(prompt: string): string {
   return "";
 }
 
-/** Running containers -> the models the Playground can talk to, in port order. */
-export function targetsFrom(containers: ContainerInfo[], catalog: Model[]): Target[] {
+/**
+ * Running containers -> the models the Playground can talk to, in port order.
+ * `ens` names ensembles (and the persona each plays); their members, which
+ * come and go as the Conductor starts and evicts them, are left out.
+ */
+export function targetsFrom(containers: ContainerInfo[], catalog: Model[], ens?: { ensembles: Ensemble[]; personas: Persona[] }): Target[] {
   const out: Target[] = [];
   for (const c of containers) {
     if (!isRunning(c)) continue;
+    if (labelVal(c.Labels, "local-llm.ensemble-member")) continue;
     const port = parseInt(containerPort(c), 10) || 0;
     if (!port) continue;
     const ref = containerRef(c);
+    const container0 = (c.Names || "").replace(/^\//, "");
+    if (labelVal(c.Labels, "local-llm.kind") === "ensemble" || labelVal(c.Labels, "local-llm.modality") === "ensemble") {
+      const eid = labelVal(c.Labels, "local-llm.ensemble");
+      const e = ens?.ensembles.find((x) => x.id === eid);
+      out.push({
+        port,
+        name: e?.name || container0 || `Ensemble on :${port}`,
+        modality: "ensemble",
+        model: "",
+        ref,
+        engine: c.Engine === "podman" ? "podman" : "docker",
+        compute: labelVal(c.Labels, "local-llm.compute") || "cpu",
+        persona: (e?.persona && ens?.personas.find((p) => p.id === e.persona)?.name) || "",
+        container: container0,
+        ensemble: eid,
+      });
+      continue;
+    }
     const id = labelVal(c.Labels, "local-llm.model");
     // Unlabelled (older) containers: the longest catalog id in the image ref.
     const m = id
@@ -375,7 +409,8 @@ export function send(tab: Tab, text: string, image?: string, file?: File): { sen
     } else if (mod === "embedding") {
       notes.push(`${label(p)} is an embedding model: it returns vectors, not replies. Copy its request as curl to try it.`);
     } else {
-      const img = mod === "vision" ? image : undefined;
+      // An ensemble passes an image to its vision member.
+      const img = mod === "vision" || mod === "ensemble" ? image : undefined;
       if (image && !img) notes.push(`${label(p)} doesn't read images, so it got the text only.`);
       if (!text && !img) continue;
       const um: Msg = { role: "user", content: text };
@@ -404,6 +439,7 @@ async function streamTo(tab: Tab, p: Pane) {
   const t0 = performance.now();
   let first = 0;
   let n = 0;
+  const ens = p.modality === "ensemble";
   try {
     await streamChat(
       p.port,
@@ -412,20 +448,154 @@ async function streamTo(tab: Tab, p: Pane) {
         const now = performance.now();
         n++;
         if (!first) first = now;
+        if (a.pending) a.pending = undefined;
         if (kind === "reasoning") a.reasoning = (a.reasoning ?? "") + d;
         else a.content += d;
         a.stats = measure(t0, first, now, n);
       },
       ctrl.signal,
       opts,
+      ens
+        ? {
+            // "Starting the chat member…", "Drawing the image…": shown until words arrive.
+            onStatus: (s) => {
+              if (!a.content && !a.reasoning) a.pending = { at: a.pending?.at ?? Date.now(), eta: a.pending?.eta ?? 60000, label: s };
+            },
+            onMedia: (items) => {
+              a.pending = undefined;
+              addMedia(a, items);
+              a.stats = { ms: performance.now() - t0 };
+            },
+          }
+        : undefined,
     );
-    if (!a.content && !a.reasoning) a.err = `${label(p)} sent an empty reply. Try again, or raise the temperature.`;
+    a.pending = undefined;
+    if (!a.content && !a.reasoning && !hasMedia(a)) a.err = `${label(p)} sent an empty reply. Try again, or raise the temperature.`;
   } catch (e) {
+    a.pending = undefined;
     if ((e as Error).name === "AbortError") a.stopped = true;
     else a.err = failText(p, e);
   } finally {
     p.busy = false;
     streams.delete(p.id);
+    save();
+  }
+  if (ens && tab.speakReplies && a.content && !a.err && !a.audio) speakReply(p, a);
+}
+
+const hasMedia = (m: Msg) => !!(m.images?.length || m.video || m.audio);
+
+/** Put an ensemble's generated media on its reply. */
+function addMedia(a: Msg, items: MediaItem[]) {
+  for (const it of items) {
+    if (!it?.url) continue;
+    if (it.type === "image") a.images = [...(a.images ?? []), it.url];
+    else if (it.type === "video") a.video = it.url;
+    else if (it.type === "audio") {
+      a.audio = it.url;
+      a.autoplay = true;
+    }
+  }
+}
+
+/** Text an ensemble should say aloud: no code, links, markup or thinking. */
+export function speakable(md: string): string {
+  return md
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/```[\s\S]*?```/g, " The code is in the chat. ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/[*_~>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Speak an ensemble's typed-message reply in its persona's voice (Speak replies). */
+async function speakReply(p: Pane, a: Msg) {
+  const text = speakable(a.content);
+  if (!text) return;
+  a.note = "Speaking…";
+  try {
+    const res = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ port: p.port, text }) });
+    if (!res.ok) await fail(res);
+    a.audio = URL.createObjectURL(await res.blob());
+    a.autoplay = true;
+    a.note = undefined;
+  } catch (e) {
+    a.note = `It didn't speak: ${((e as Error).message || "no answer").replace(/\.$/, "")}. Check the ensemble's speech member on the Ensembles page.`;
+  } finally {
+    save();
+  }
+}
+
+/** The answer to a spoken question (POST /api/ensembles/voice-chat). */
+interface VoiceReply {
+  transcript: string;
+  reply: { content: string; media?: MediaItem[] };
+  audio?: string;
+  speech_error?: string;
+  timings?: { stt_ms: number; chat_ms: number; tts_ms: number };
+}
+
+/**
+ * Ask every ensemble on screen a spoken question (a 16 kHz mono WAV): its
+ * speech-to-text member transcribes it, its chat member answers in character,
+ * and its speech member says the answer in the persona's voice.
+ */
+export function sendVoice(tab: Tab, wav: Blob): { sent: boolean; notes: string[] } {
+  const notes: string[] = [];
+  let sent = false;
+  for (const p of visiblePanes(tab)) {
+    if (p.modality !== "ensemble") {
+      if (p.port) notes.push(`${label(p)} isn't an ensemble, so it didn't get the spoken question.`);
+      continue;
+    }
+    if (p.busy) {
+      notes.push(`${label(p)} is still answering; wait for it or stop it.`);
+      continue;
+    }
+    voiceChat(tab, p, wav);
+    sent = true;
+  }
+  return { sent, notes };
+}
+
+async function voiceChat(tab: Tab, p: Pane, wav: Blob) {
+  const history = buildMessages(tab, p);
+  const ui = p.msgs.push({ role: "user", content: "Transcribing…", spoken: true }) - 1;
+  const idx = p.msgs.push({ role: "assistant", content: "", pending: { at: Date.now(), eta: 30000, label: "Listening, thinking, then speaking…" } }) - 1;
+  p.busy = true;
+  p.last = { path: "/api/ensembles/voice-chat", form: { file: "question.wav", port: p.port } };
+  const t0 = performance.now();
+  try {
+    const fd = new FormData();
+    fd.append("file", wav, "question.wav");
+    fd.append("port", String(p.port));
+    fd.append("messages", JSON.stringify(history));
+    const r = await api<VoiceReply>("/api/ensembles/voice-chat", { method: "POST", body: fd });
+    const heard = (r.transcript || "").trim();
+    p.msgs[ui] = heard
+      ? { role: "user", content: heard, spoken: true }
+      : { role: "user", content: "(no words heard)", spoken: true, err: "no words" };
+    const a: Msg = { role: "assistant", content: r.reply?.content ?? "", stats: { ms: performance.now() - t0 } };
+    addMedia(a, r.reply?.media ?? []);
+    if (r.audio) {
+      a.audio = r.audio;
+      a.autoplay = true;
+    }
+    if (r.speech_error) a.note = `It didn't speak: ${r.speech_error.replace(/\.$/, "")}.`;
+    if (!heard) a.err = "Speech-to-text heard no words. Speak closer to the microphone, or check it in your system's sound settings, then try again.";
+    else if (!a.content && !hasMedia(a)) a.err = `${label(p)} sent an empty reply. Try again.`;
+    p.msgs[idx] = a;
+  } catch (e) {
+    p.msgs[ui] = { role: "user", content: "Your spoken question", spoken: true, err: "failed" };
+    p.msgs[idx] = { role: "assistant", content: "", err: failText(p, e) };
+  } finally {
+    p.busy = false;
     save();
   }
 }
@@ -746,9 +916,12 @@ let restored = false;
 
 function storeMsg(m: Msg) {
   // Attached images and audio (data or blob URLs) aren't kept; generated images
-  // and video are small /api/media URLs and reload fine.
+  // and video, and an ensemble's spoken answers, are small /api/media URLs and
+  // reload fine.
+  const kept = (u?: string) => (u && u.startsWith("/api/media/") ? u : undefined);
   return {
     role: m.role, content: m.content || "", reasoning: m.reasoning, kind: m.kind, video: m.video, images: m.images,
+    audio: kept(m.audio), spoken: m.spoken, note: m.note === "Speaking…" ? undefined : m.note,
     bridgeFrom: m.bridgeFrom, bridgeSide: m.bridgeSide, bridgeScene: m.bridgeScene,
     err: m.err, error: m.error, stopped: m.stopped, stats: m.stats,
   };

@@ -7,16 +7,47 @@
   import EnsembleEditor from "../components/ensembles/EnsembleEditor.svelte";
   import HowItWorks from "../components/ensembles/HowItWorks.svelte";
   import { api, post } from "../lib/api";
-  import { ensembles, toast } from "../lib/stores";
+  import { ensembles, toast, loadVoices } from "../lib/stores";
   import { build, watchQueue } from "../lib/build.svelte";
   import { live, watch, refresh } from "../lib/live.svelte";
   import { plural } from "../lib/format";
-  import type { Ensemble } from "../lib/types";
+  import type { Ensemble, EnsembleLive } from "../lib/types";
   import { ensembleRef, listLoadError } from "../components/ensembles/util";
   import { routeArg, go } from "../lib/router";
   import { untrack } from "svelte";
 
   $effect(() => watch("images"));
+  // Clip names for the voice summaries (a failure just leaves "a cloned voice").
+  loadVoices().catch(() => {});
+
+  // ---- live status: one poll for the whole page, every 3 s while it's open ----------
+  let status = $state<Record<string, EnsembleLive>>({});
+  let statusErr = $state("");
+  let polling = false;
+  async function poll() {
+    if (polling) return;
+    polling = true;
+    try {
+      const r = await api<{ ensembles: EnsembleLive[] }>("/api/ensembles/status");
+      status = Object.fromEntries((r.ensembles ?? []).map((x) => [x.id, x]));
+      statusErr = "";
+    } catch (e) {
+      statusErr = (e as Error).message || "The factory didn't answer.";
+    } finally {
+      polling = false;
+    }
+  }
+  $effect(() => {
+    poll();
+    const t = setInterval(() => {
+      if (!document.hidden) poll();
+    }, 3000);
+    return () => clearInterval(t);
+  });
+  function changed() {
+    poll();
+    refresh("containers");
+  }
 
   // ---- the list (own load, so a failure shows instead of an empty list) --------
   let loading = $state(true);
@@ -106,8 +137,9 @@
       if (!before || before === j.status || j.active) continue;
       const name = $ensembles.find((e) => ensembleRef(e) === j.ref)?.name ?? j.name;
       if (j.status === "done") {
-        toast(`“${name}” is built. Run it from the Library.`);
+        toast(`“${name}” is built. Run it from its card.`);
         refresh("images");
+        poll();
       } else if (j.status === "error") toast(`“${name}” didn't build: ${j.error || "see its log"}.`, 9000);
       else if (j.status === "canceled") toast(`The build of “${name}” was canceled.`);
     }
@@ -120,7 +152,8 @@
   <div class="lead">
     <p>
       Put several built images behind one model. A small <b>Conductor</b> sends each request to the right member — chat,
-      vision, image or video generation, speech — and starts members only when they're needed.
+      vision, image or video generation, speech in and out — and starts members only when they're needed. Give it a
+      persona and it answers in character, in the persona's voice.
     </p>
     {#if editing === undefined && list.length && !loadError}<!-- the empty state has its own -->
       <button class="primary" onclick={() => openEditor(null)}><Icon name="plus" size={15} />New ensemble</button>
@@ -158,15 +191,24 @@
         </div>
       {/if}
 
+      {#if statusErr && list.length}
+        <div class="callout wa">
+          <Icon name="warn" size={16} />
+          <span><b>Couldn't read which ensembles are running.</b><p>{statusErr}. This page tries again every few seconds; check the factory is up.</p></span>
+        </div>
+      {/if}
+
       {#each list as e (e.id)}
         {#if editing?.id !== e.id}
           <EnsembleCard
             ens={e}
+            status={status[e.id]}
             starting={!!starting[e.id]}
             startError={startErrors[e.id] || ""}
             onbuild={() => buildImage(e)}
             onedit={() => openEditor(e)}
-            ondelete={() => del(e)} />
+            ondelete={() => del(e)}
+            onchanged={changed} />
         {/if}
       {/each}
     </div>

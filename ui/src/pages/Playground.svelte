@@ -4,7 +4,9 @@
   // one prompt to two side by side: how soon each starts, how fast it streams
   // (measured here) and its memory estimate, plus the exact request as curl.
   // Every kind of model works: chat, vision, image and video generation, speech
-  // in both directions. "#playground/<port>" opens the model on that port.
+  // in both directions, and ensembles (chat with media in the replies, and the
+  // mic for a spoken question answered in the persona's voice).
+  // "#playground/<port>" opens the model on that port.
   import { untrack } from "svelte";
   import { MediaQuery } from "svelte/reactivity";
   import Icon from "../components/Icon.svelte";
@@ -16,7 +18,7 @@
   import OutputPanel from "../components/playground/OutputPanel.svelte";
   import BridgeDialog from "../components/playground/BridgeDialog.svelte";
   import { live, watch } from "../lib/live.svelte";
-  import { catalog, toast } from "../lib/stores";
+  import { catalog, ensembles, personas, toast } from "../lib/stores";
   import { routeArg, href } from "../lib/router";
   import { modMeta } from "../lib/icons";
   import { isStreamMod } from "../lib/util";
@@ -29,7 +31,7 @@
   $effect(() => watch("containers", "resources", "harness"));
   load();
 
-  const targets = $derived(targetsFrom(live.containers, $catalog));
+  const targets = $derived(targetsFrom(live.containers, $catalog, { ensembles: $ensembles, personas: $personas }));
   const tab = $derived(activeTab());
   const panes = $derived(tab ? visiblePanes(tab) : []);
   const modOf = (p: PaneT) => targets.find((t) => t.port === p.port)?.modality ?? p.modality;

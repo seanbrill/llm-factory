@@ -36,7 +36,6 @@ import (
 
 	"github.com/seanbrill/local-llm/internal/agent"
 	"github.com/seanbrill/local-llm/internal/catalog"
-	"github.com/seanbrill/local-llm/internal/ensemble"
 )
 
 // Builder owns the project directories. New ensures they exist — this is the
@@ -936,85 +935,6 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 // exportFileName is the images/ tarball name for a ref ("a/b:c" -> "a_b_c.tar").
 func exportFileName(ref string) string {
 	return strings.NewReplacer("/", "_", ":", "_").Replace(ref) + ".tar"
-}
-
-// BuildEnsemble assembles an Ensemble image: the Conductor (ensemblegate) plus a
-// resolved manifest. Orchestrated images run their specialists as sibling
-// containers via the host engine; embedded (mega) baking is a future path. It
-// assigns each member a host port, synthesises a conductor member for tool-calling,
-// and bakes the manifest. modelHost is where the started specialists are reachable
-// (e.g. host.docker.internal when the Ensemble runs in a container).
-func (b *Builder) BuildEnsemble(ctx context.Context, e ensemble.Ensemble, imageName, tag, engine string, exportTar bool, modelHost string, log LogFunc) (string, error) {
-	eng := resolveEngine(engine)
-	if tag == "" {
-		tag = "latest"
-	}
-	ref := imageName + ":" + tag
-
-	mani := ensemble.Manifest{Ensemble: e, ModelHost: modelHost}
-	if mani.ModelHost == "" {
-		mani.ModelHost = "host.docker.internal"
-	}
-	if mani.Engine == "" {
-		mani.Engine = eng
-	}
-	port := 8101
-	for i := range mani.Members {
-		if mani.Members[i].Port == 0 {
-			mani.Members[i].Port = port
-		}
-		port++
-	}
-	if e.Routing == "tool-calling" && e.Conductor != "" {
-		mani.Members = append(mani.Members, ensemble.Member{Tool: "_conductor", Modality: "text", Image: e.Conductor, Port: 8100, VRAMGB: 4})
-	}
-
-	work := filepath.Join(b.BuildDir, fmt.Sprintf("ens-%d", time.Now().UnixNano()))
-	if err := os.MkdirAll(work, 0o755); err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(work)
-	df, err := os.ReadFile(filepath.Join(b.BaseDir, "docker", "Dockerfile.ensemble"))
-	if err != nil {
-		return "", fmt.Errorf("read Dockerfile.ensemble: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(work, "Dockerfile"), df, 0o644); err != nil {
-		return "", err
-	}
-	if err := stageEnsemblegate(b.BaseDir, work); err != nil {
-		return "", err
-	}
-	mb, _ := json.MarshalIndent(mani, "", "  ")
-	if err := os.WriteFile(filepath.Join(work, "manifest.json"), mb, 0o644); err != nil {
-		return "", err
-	}
-
-	log(fmt.Sprintf("Building ensemble %s [%s, %s mode, %d members] ...", ref, eng, e.PackageMode, len(e.Members)))
-	args := []string{
-		"build", "-t", ref,
-		"--label", "local-llm.tool=builder",
-		"--label", "local-llm.kind=ensemble",
-		"--label", "local-llm.ensemble=" + e.ID,
-		"--label", "local-llm.compute=" + e.Compute,
-		"--label", "local-llm.engine=" + eng,
-	}
-	if eng == enginePodman {
-		args = append(args, "--security-opt", "seccomp=unconfined")
-	}
-	args = append(args, work)
-	if err := runStreaming(ctx, b.BaseDir, eng, log, args...); err != nil {
-		return "", fmt.Errorf("%s build failed: %w", eng, err)
-	}
-	log("Built ensemble image: " + ref)
-
-	if exportTar {
-		out := filepath.Join(b.ImagesDir, exportFileName(ref))
-		log("Exporting to images/" + filepath.Base(out) + " ...")
-		if err := runStreaming(ctx, b.BaseDir, eng, log, "save", "-o", out, ref); err != nil {
-			return "", fmt.Errorf("%s save failed: %w", eng, err)
-		}
-	}
-	return ref, nil
 }
 
 // RunOptions configures starting a container from a built image.
@@ -2022,24 +1942,6 @@ func stageVideogate(baseDir, work string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(gateDir, "go.mod"), []byte("module videogate\n\ngo 1.22\n"), 0o644)
-}
-
-// stageEnsemblegate copies the Conductor (ensemblegate) source into <work>/gate so
-// the ensemble Dockerfile's `gate` stage can compile it.
-func stageEnsemblegate(baseDir, work string) error {
-	src := filepath.Join(baseDir, "cmd", "ensemblegate", "main.go")
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return fmt.Errorf("read ensemblegate source (%s): %w", src, err)
-	}
-	gateDir := filepath.Join(work, "gate")
-	if err := os.MkdirAll(gateDir, 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(gateDir, "main.go"), data, 0o644); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(gateDir, "go.mod"), []byte("module ensemblegate\n\ngo 1.22\n"), 0o644)
 }
 
 // stagePygate copies the pygate shim (Python, interpreted) into <work>/gate so

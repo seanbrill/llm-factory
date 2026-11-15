@@ -31,6 +31,8 @@
 # temp file that a crash mid-write could leave behind.
 /config/factory-token
 /config/.factory-token-*
+# Persona voice clips (recordings of a person's voice; 0600, never uploaded).
+/config/voices/
 
 # The harness workspace terminal's shared folder (the model's files).
 /workspace/*

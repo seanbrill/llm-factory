@@ -165,15 +165,18 @@
           <div>
             <dt><Icon name="personas" size={16} />Personas</dt>
             <dd>
-              Named system prompts. Bake one into an image when you build it, or apply one when you run an image,
-              without rebuilding. <a href={href("personas")}>Your personas</a>.
+              Named system prompts, and optionally a voice: a speech model's built-in voice or one cloned from a clip
+              you record. Bake one into an image when you build it, apply one when you run an image, or give one to an
+              ensemble. <a href={href("personas")}>Your personas</a>.
             </dd>
           </div>
           <div>
             <dt><Icon name="ensembles" size={16} />Ensembles</dt>
             <dd>
-              Several built images behind one model. A small Conductor sends each request to the right member and
-              starts members only when they're needed, within a VRAM budget. <a href={href("ensembles")}>Make one</a>.
+              Several built images behind one model: chat, vision, speech in and out, images and video. A small
+              Conductor sends each request to the right member and starts members only when they're needed, within a
+              memory budget. With a persona it answers in character and speaks in the persona's voice; ask it out loud
+              with the mic in the Playground. <a href={href("ensembles")}>Make one</a>.
             </dd>
           </div>
         </dl>
@@ -184,7 +187,7 @@
         <h2 id="help-models-t">Models</h2>
         <p class="sub">What a model can do is its modality; the factory picks the runtime that serves it.</p>
         <ul class="mods">
-          {#each Object.entries(MODALITY) as [id, m] (id)}
+          {#each Object.entries(MODALITY).filter(([k]) => k !== "ensemble") as [id, m] (id)}
             <li>
               <span class="chip"><Icon name={m.icon} size={13} />{m.label}</span>
               <span>{MOD_TEXT[id] ?? ""}</span>

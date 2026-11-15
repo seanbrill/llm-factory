@@ -1,10 +1,12 @@
 <script lang="ts">
-  // New / edit a persona: a name and a system prompt. Saves to /api/personas.
+  // New / edit a persona: a name, a system prompt and a voice (VoiceEditor).
+  // Saves to /api/personas.
   import { untrack } from "svelte";
   import Icon from "../Icon.svelte";
-  import { post } from "../../lib/api";
+  import VoiceEditor from "./VoiceEditor.svelte";
+  import { post, type ApiError } from "../../lib/api";
   import { ui } from "../../lib/ui.svelte";
-  import type { Persona } from "../../lib/types";
+  import type { Persona, PersonaVoice } from "../../lib/types";
   import { slug } from "../ensembles/util";
 
   let {
@@ -24,6 +26,7 @@
   const isNew = !seed;
   let name = $state(seed?.name ?? "");
   let prompt = $state(seed?.prompt ?? "");
+  let voice = $state<PersonaVoice>(seed?.voice ? { ...seed.voice } : { kind: "" });
   let saving = $state(false);
   let error = $state("");
   let nameInput: HTMLInputElement | undefined = $state();
@@ -59,14 +62,25 @@
         return;
       }
     }
-    const body: Partial<Persona> = { name: n, prompt: p };
+    if (voice.kind === "builtin" && !voice.name?.trim()) {
+      error = "Name the built-in voice, or pick another kind of voice.";
+      return;
+    }
+    if (voice.kind === "clone" && !voice.clip) {
+      error = "Pick or record a voice clip, or pick another kind of voice.";
+      return;
+    }
+    const body: Partial<Persona> = { name: n, prompt: p, voice: voice.kind ? voice : { kind: "" } };
     if (seed) body.id = seed.id;
     saving = true;
     try {
       const saved = await post<Persona>("/api/personas", body);
       onsaved(saved);
     } catch (e) {
-      error = `It wasn't saved: ${(e as Error).message || "the factory didn't answer"}.`;
+      const err = e as ApiError;
+      // A name that clashes comes back as 409 with the sentence to show.
+      error = err.status === 409 && err.message ? err.message : `It wasn't saved: ${err.message || "the factory didn't answer"}.`;
+      if (err.status === 409) nameInput?.focus();
     } finally {
       saving = false;
     }
@@ -117,6 +131,12 @@
     </p>
   </div>
 
+  <fieldset class="grp">
+    <legend>Voice</legend>
+    <p class="hint">How it sounds when an ensemble with this persona speaks. Images built with the persona only take its prompt.</p>
+    <VoiceEditor bind:voice defaultClipName={name.trim() ? `${name.trim()}'s voice` : ""} />
+  </fieldset>
+
   {#if error}
     <div class="callout er" role="alert"><Icon name="errc" size={16} /><span><b>{error}</b></span></div>
   {/if}
@@ -140,6 +160,16 @@
   .count { font-size: 11.5px; color: var(--fa); }
   textarea { font: 13px/1.55 var(--font-body); min-height: 150px; }
   .hint { font-size: 12px; line-height: 1.45; }
+  .grp { border: 0; padding: 0; margin: 14px 0 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .grp legend {
+    padding: 0;
+    margin-bottom: 2px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fa);
+    font-weight: 500;
+  }
   .callout { margin-top: 10px; }
   .acts { display: flex; gap: 8px; margin-top: 14px; align-items: center; flex-wrap: wrap; }
   .kh { margin-left: auto; color: var(--fa); font-size: 12px; }
