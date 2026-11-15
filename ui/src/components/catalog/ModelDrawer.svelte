@@ -13,6 +13,7 @@
   import { href } from "../../lib/router";
   import { ui } from "../../lib/ui.svelte";
   import { needLabel, perfHere, perfTone, isMoE, type Fit, type LibEntry, type PathFit } from "../../lib/catalog";
+  import { canHarness } from "../../lib/baked";
   import type { Model, SysInfo } from "../../lib/types";
 
   let {
@@ -177,6 +178,13 @@
         {#if ctx}<dt>Context</dt><dd>{ctx} tokens</dd>{/if}
         {#if m.computes?.length}<dt>Builds for</dt><dd>{m.computes.map(computeName).join(", ")}</dd>{/if}
         <dt>Runtime</dt><dd>{RUNTIME[m.runtime ?? "cpp"] ?? m.runtime}</dd>
+        {#if canHarness(m)}
+          <dt>Tools</dt>
+          <dd>
+            Can carry its own tools: web search, web pages, files and skills, for any client.
+            {#if selected}<a href={href("plan", m.id)}>Turn them on in its build settings</a>{:else}Turn them on in its build settings once it's in the plan.{/if}
+          </dd>
+        {/if}
         {#if m.repo}<dt>Source</dt><dd><a href="https://huggingface.co/{m.repo}" target="_blank" rel="noreferrer noopener">{m.repo} <Icon name="external" size={12} /></a></dd>{/if}
       </dl>
     </section>

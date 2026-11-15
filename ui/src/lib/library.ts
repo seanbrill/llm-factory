@@ -5,7 +5,8 @@
 // uses. Pure functions: the page passes the live data in.
 import { labelVal } from "./api";
 import { imageRef, containerRef, containerPort, isRunning } from "./util";
-import type { BuildJob, ContainerInfo, ImageInfo, Model, StorageInfo, UsageItem } from "./types";
+import { imageHarness } from "./baked";
+import type { BuildJob, ContainerInfo, ImageHarness, ImageInfo, Model, StorageInfo, UsageItem } from "./types";
 
 export type ModelRow = Model & { downloaded?: boolean; on_disk_gb?: number };
 
@@ -18,6 +19,7 @@ export interface LibImage {
   created: string;     // "2 days ago", "" when the engine doesn't say
   tar: UsageItem | null; // its export under images/
   ensemble: string;    // ensemble id for an ensemble image
+  harness: ImageHarness | null; // tools baked into the image (lib/baked.ts)
   info: ImageInfo;
 }
 
@@ -31,6 +33,7 @@ export interface LibContainer {
   status: string;      // "Up 2 hours", "Exited (1) 6 minutes ago"
   persona: string;     // run-time persona label
   modality: string;
+  workspace: string;   // host folder mounted at /workspace for a baked harness ("" = none)
   info: ContainerInfo;
 }
 
@@ -143,6 +146,7 @@ export function buildLibrary(inp: LibInput): Library {
       created: String((im as Record<string, unknown>).CreatedSince ?? ""),
       tar,
       ensemble: labelVal(im.Labels, "local-llm.ensemble"),
+      harness: imageHarness(im),
       info: im,
     };
     if (isUntagged(im)) {
@@ -173,6 +177,7 @@ export function buildLibrary(inp: LibInput): Library {
       status: c.Status || c.State || "",
       persona: labelVal(c.Labels, "local-llm.persona"),
       modality: labelVal(c.Labels, "local-llm.modality"),
+      workspace: labelVal(c.Labels, "local-llm.workspace"),
       info: c,
     };
     const r = mid

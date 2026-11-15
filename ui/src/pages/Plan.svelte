@@ -25,6 +25,7 @@
     plan, pre, checkPlan, planKey, preflightFor, queueItems, removeFromPlan, movePlanItem, clearPlan,
     updatePlanItem, cloneImage, effectiveCompute, type PlanItem,
   } from "../lib/plan.svelte";
+  import { harnessProblem } from "../lib/baked";
   import type { Model } from "../lib/types";
 
   $effect(() => watch("images", "containers", "files"));
@@ -220,7 +221,7 @@
 
   // ---- queueing -------------------------------------------------------------------------
   let failures = $state<Record<string, string>>({});
-  const ready = $derived(rows.filter((r) => r.m && !r.pf?.error));
+  const ready = $derived(rows.filter((r) => r.m && !r.pf?.error && !harnessProblem(r.it.harness, r.m)));
   const held = $derived(rows.length - ready.length);
   const ahead = $derived(lanesUsed.reduce((n, e) => n + (pre.result?.queued?.[e] ?? 0), 0));
   const weights = $derived(rows.reduce((n, r) => n + (r.pf?.weights_gb ?? 0), 0));

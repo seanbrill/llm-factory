@@ -28,6 +28,35 @@ export interface Model {
   computes?: string[];        // compute targets this model's runtime can be built for
   legacy?: boolean;           // superseded; hidden in the Build picker by default
   compiles?: boolean;         // its build compiles a runtime from source (needs compile_min_gb on the engine)
+  can_harness?: boolean;      // can take a baked agent harness (tools); /api/catalog only
+}
+
+// A baked harness config (harness.json, internal/agent Config): what POST
+// /api/build takes as `harness` and GET /api/image/config returns.
+export interface HarnessConfig {
+  version?: number;
+  tools?: string[];           // toolsets or single tool names; absent = the defaults
+  limits?: {
+    max_steps?: number;
+    max_calls_per_step?: number;
+    tool_timeout?: string | number; // "60s", "1m30s" or seconds
+    max_output_bytes?: number;
+  };
+  search?: { backend?: string; searxng_url?: string; max_results?: number };
+  fetch?: { max_bytes?: number };
+  shell?: { program?: string[]; env?: string[]; allow_root?: boolean };
+  workspace?: string;
+  skills_dir?: string;
+  instructions?: string;
+}
+
+// The harness an image carries, as /api/images reports it (builder.ImageHarness).
+export interface ImageHarness {
+  tools: string[];       // enabled toolsets, in order: web_search fetch_url files skills shell
+  search?: string;       // duckduckgo | searxng | brave, when web_search is on
+  searxng_url?: string;
+  max_steps: number;
+  workspace: boolean;    // files or shell are on: a run mounts a workspace folder at /workspace
 }
 
 // Build identity from /api/version (stamped by the start scripts).
@@ -93,6 +122,7 @@ export interface BuildConfig {
   memory_gb: number;
   route: string;
   autostart: boolean;
+  harness?: HarnessConfig | null; // the baked agent harness, when the build has one
 }
 
 export interface BuildJob {
@@ -162,6 +192,7 @@ export interface ImageInfo {
   Engine?: string;
   Compute?: string;
   Labels?: string | Record<string, string>;
+  Harness?: ImageHarness; // a baked agent harness (its labels don't survive the joined Labels string)
 }
 
 export interface ModelFile {

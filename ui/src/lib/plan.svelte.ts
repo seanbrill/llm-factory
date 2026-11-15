@@ -13,6 +13,7 @@ import { build, watchQueue } from "./build.svelte";
 import { ctxDefaultFor } from "./util";
 import { engineName } from "./format";
 import { CTX_TIERS, defaultPath, effectiveCompute, predictRoute, type ImageConfig } from "./catalog";
+import { defaultHarness, harnessBody, harnessFromConfig, normHarness, type PlanHarness } from "./baked";
 import type { Model, PreflightItem, PreflightResult, SysInfo } from "./types";
 
 export { effectiveCompute, predictRoute, type RoutePrediction } from "./catalog";
@@ -29,6 +30,7 @@ export interface PlanItem {
   memory_gb: number;     // 0 = unlimited
   route: string;         // local URL alias ("" = none)
   autostart: boolean;
+  harness: PlanHarness;  // tools baked into the image (lib/baked.ts); only chat models take them
 }
 
 const KEY = "llmfactory.plan.v1";
@@ -52,7 +54,10 @@ function write(key: string, value: unknown) {
 
 function load(): PlanItem[] {
   const v = read<unknown>(KEY, []);
-  return Array.isArray(v) ? v.filter((x) => x && typeof x.model_id === "string") : [];
+  // Plans saved before an item had a harness get one, turned off.
+  return Array.isArray(v)
+    ? v.filter((x) => x && typeof x.model_id === "string").map((x) => ({ ...x, harness: normHarness(x.harness) }))
+    : [];
 }
 
 export const plan = $state({
@@ -93,6 +98,7 @@ export function defaultsFor(m: Model, si: SysInfo | null): PlanItem {
     memory_gb: 0,
     route: "",
     autostart: false,
+    harness: defaultHarness(false),
   };
 }
 
@@ -171,6 +177,7 @@ export function buildBody(it: PlanItem, m: Model | undefined) {
     memory_gb: it.memory_gb || 0,
     route: it.route,
     autostart: it.autostart,
+    harness: harnessBody(it.harness, m),
   };
 }
 
@@ -374,6 +381,7 @@ export async function cloneImage(t: { ref: string; engine: string }, catalog: Mo
     memory_gb: parseFloat(cfg.memory_gb) || 0,
     route: cfg.route || "",
     autostart: !!cfg.autostart,
+    harness: harnessFromConfig(cfg.harness),
   };
   if (inPlan(m.id)) updatePlanItem(m.id, patch);
   else addToPlan(m, si, patch);
