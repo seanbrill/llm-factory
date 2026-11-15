@@ -61,6 +61,7 @@ red failed, cyan GPU.
 - `.code` / `<CodeLine cmd="…"/>` — a host command with a copy button.
 - `<input type="checkbox" class="tg">` — toggle switch.
 - `table.tbl`, `.stack` (vertical gap 18px), `.cols` (grid gap 14px).
+- `.sr` — text for screen readers only.
 
 Pages don't render their own `<h1>` — the top bar shows the page title.
 Section titles are `<h2>` inside cards. Use scoped `<style>` for layout.

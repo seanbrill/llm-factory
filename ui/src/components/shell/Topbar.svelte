@@ -5,7 +5,7 @@
   // of engine pills.
   import Icon from "../Icon.svelte";
   import Mark from "../Mark.svelte";
-  import { route, pageDef, href } from "../../lib/router";
+  import { route, pageDef, href, navParent } from "../../lib/router";
   import { sysinfo } from "../../lib/stores";
   import { build } from "../../lib/build.svelte";
   import { counts, progress } from "../../lib/jobs";
@@ -14,6 +14,11 @@
   import type { EngineResources } from "../../lib/types";
 
   const def = $derived(pageDef($route));
+  // A page outside the nav (the build plan) shows where it sits: "Catalog › Build plan".
+  const parent = $derived.by(() => {
+    const p = navParent($route);
+    return p && p !== $route ? pageDef(p) : null;
+  });
   const c = $derived(counts(build.jobs));
 
   // Average progress of running builds, for the ring (null parts count as half).
@@ -51,7 +56,9 @@
   <!-- Phone: brand header -->
   <a class="mbrand" href={href("overview")}><Mark size={28} /><b>LLM Factory</b></a>
 
-  <h1>{def.title}</h1>
+  <h1>
+    {#if parent}<a class="crumb" href={href(parent.id)}>{parent.title}</a><span class="sep" aria-hidden="true">›</span>{/if}{def.title}
+  </h1>
 
   <button class="cmd" onclick={() => openPalette()} aria-keyshortcuts={isMac ? "Meta+K" : "Control+K"}>
     <Icon name="find" size={15} />
@@ -104,6 +111,13 @@
     background: var(--cv);
     min-width: 0;
   }
+  .crumb {
+    color: var(--mu);
+    text-decoration: none;
+    font-weight: 600;
+  }
+  .crumb:hover { color: var(--ink); }
+  .sep { color: var(--fa); margin: 0 8px; font-weight: 400; }
   h1 {
     font-size: 21px;
     margin-right: auto;
