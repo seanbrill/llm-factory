@@ -39,16 +39,16 @@ The connector was written against the Open WebUI 0.13.3 API.
    (`HOST_HOME`) and port (`FACTORY_PORT`), and mounts `skills/` and `workspace/`.
    Open the `Open:` link it prints last: it carries the factory's
    [access token](#security-model).
-2. **Run a chat model**: Images → **Run**. Pick one that is good at tool calling,
+2. **Run a chat model**: Library → **Run**. Pick one that is good at tool calling,
    such as Qwen 3.x, Gemma 4 or a recent Mistral or Llama. Very small models often
    call tools badly.
-3. **Start the terminal**: on the Harness page, click **Download (~430 MB) &
-   start** under *Workspace terminal*. Only the first start downloads the Slim
+3. **Start the terminal**: on the Harness page, click **Download (~430 MB) and
+   start** on the *Workspace terminal* card. Only the first start downloads the Slim
    image.
 4. **Get an admin API key from Open WebUI.** Admin Panel → Settings → General →
    turn on **Enable API Keys**. Then, as an admin user, go to Settings → Account →
    API keys → **Create new secret key**.
-5. **Connect**: on the Harness page, under *Connect Open WebUI*, check the URL
+5. **Connect**: on the Harness page, on the *Open WebUI* card, check the URL
    (the default is right for Open WebUI in Docker on port 3000), paste the key,
    then click **Check** and **Connect**. The result lists each change. The key is
    used for that one request and is never stored.
@@ -105,7 +105,7 @@ whatever port you started it with. Open WebUI uses
 
 - **Auth**: every call needs `Authorization: Bearer <gateway key>`. The key
   (`sk-llmf-…`) is generated on first use and shown on the Harness page, where
-  **Regenerate** replaces it.
+  **New** replaces it.
 - **Which models**: running factory containers served by llama.cpp (text, code,
   reasoning, vision and embedding). Image, video and speech models aren't listed.
   Neither are Ensembles yet, because their Conductor starts and stops its
@@ -146,8 +146,8 @@ Open WebUI it gives the model file tools (`list_files`, `read_file`,
   so it comes back after a reboot until you stop it. Like model containers, it
   keeps running when you stop the factory. To stop it without the page, run
   `docker stop local-llm-terminal`.
-- **Settings changes**: when you change a setting or regenerate the terminal key,
-  the page shows *Restart to apply*. Restarting recreates the container, and
+- **Settings changes**: when you change a setting or make a new terminal key,
+  the page asks you to restart; click **Restart now**. Restarting recreates the container, and
   files in the workspace are kept.
 - **Workspace rules**: the folder must be an absolute path on your computer. The
   page refuses system folders, your whole home folder or disk, hidden folders
@@ -216,7 +216,7 @@ so `http://localhost:3000` is rewritten to `http://host.docker.internal:3000`.
 
 ## Manual setup
 
-To set everything up by hand, the Harness page's *Manual setup* card shows the
+To set everything up by hand, the Harness page's *Set it up by hand* card shows the
 same steps with copy buttons:
 
 1. **Models**: Admin Panel → Settings → Connections → OpenAI API → **+**.
@@ -363,8 +363,8 @@ inside its own container.
   ports that are published on the host's `127.0.0.1` through
   `host.docker.internal`. This also affects the factory's own model chat.
   1. Run Open WebUI with `--network host`.
-  2. On the Harness page, under *More options*, set **Open WebUI reaches this
-     computer at** to `127.0.0.1`.
+  2. On the Harness page's *Open WebUI* card, under *More options*, set
+     **Open WebUI reaches this computer at** to `127.0.0.1`.
   3. With host networking Open WebUI listens on port 8080, so set the Open WebUI
      URL to `http://host.docker.internal:8080`.
 - If Open WebUI runs without Docker (pip or uv), also set the reach host to
@@ -396,8 +396,8 @@ terminal settings and click Save. The page also shows the engine's error.
 **The terminal stopped: "ran out of memory".** Raise *Memory limit* in the
 settings. The Full image needs more memory than Slim.
 
-**It worked, then stopped after I clicked Regenerate.**
-- After a **terminal** key change, restart the terminal (*Restart to apply*), then
+**It worked, then stopped after I made a new key.**
+- After a **terminal** key change, restart the terminal (**Restart now**), then
   click Connect again so Open WebUI gets the new key.
 - After a **gateway** key change, click Connect again, or paste the new key into
   Open WebUI's connection.

@@ -43,16 +43,20 @@ Desktop already gives you Podman, so you're set.
    the page asks for it.
 
 ### 3. Build and run your first model
-1. In the web page, under **"1 · Build an image"**, pick a model. Start small —
-   **Qwen3 4B** (marked ★) is a great first pick. The badge shows it's a **💬 Chat**
-   model and whether it **fits your system**.
-2. Set **Engine → Podman** and **Compute → GPU — Vulkan / Apple Metal**.
-3. Click **Build & export .tar**. It downloads the model and builds the image. The
-   first GPU build compiles the inference engine, which takes ~10 minutes (later
-   builds reuse it and are fast).
-4. When it appears under **"2 · Built images"**, click **Run**.
+1. Open **Catalog** in the side menu and click a model's card to pick it. Start
+   small: a model marked ★ (recommended) with a few billion parameters is a good
+   first choice. Each card says whether it can run on this machine and how (CPU on
+   Docker, GPU on Podman). You can pick several; they build one after another.
+2. Click **Review build plan**. Set the row's compute to **Vulkan** (the GPU). The
+   plan routes it to **Podman** for you and checks memory, disk and downloads
+   first. To change the image name, context size or memory limit, open the row's
+   settings.
+3. Click **Queue 1 build**. **Builds** shows its progress. It downloads the model
+   and builds the image. The first GPU build compiles the inference engine, which
+   takes ~10 minutes (later builds reuse it and are fast).
+4. When it finishes, open **Library** and click **Run** on the model.
 5. After it loads, open the URL it gives you (like **http://marvin.localhost**) and
-   start chatting.
+   start chatting, or try it in the **Playground**.
 
 That's it — a private AI running on your Mac's GPU.
 
@@ -73,9 +77,10 @@ That's it — a private AI running on your Mac's GPU.
 Open the **`Open:` link** it prints last (`http://localhost:8799/?token=…`).
 
 ### 3. Build a model
-- **CPU (works anywhere):** pick a model, set **Compute → CPU**, Build, Run, chat.
-- **NVIDIA GPU:** set **Compute → NVIDIA GPU (CUDA)**.
-- **Other GPU (AMD/Intel) via Vulkan:** set **Compute → GPU — Vulkan**.
+Add a model from **Catalog**, then on the **Build plan** set its compute:
+- **CPU (works anywhere):** **CPU**. Queue it, then **Run** it from the Library.
+- **NVIDIA GPU:** **CUDA**.
+- **Other GPU (AMD/Intel) via Vulkan:** **Vulkan**.
 
 ---
 
@@ -91,8 +96,8 @@ Open the **`Open:` link** it prints last (`http://localhost:8799/?token=…`).
 .\scripts\windows\start.ps1
 ```
 Open the **`Open:` link** it prints last (`http://localhost:8799/?token=…`). GPU on
-Windows is best via NVIDIA + WSL2 (Compute →
-CUDA). Otherwise use **Compute → CPU**.
+Windows is best via NVIDIA + WSL2 (compute **CUDA** on the Build plan). Otherwise
+use **CPU**.
 
 ---
 
@@ -102,12 +107,13 @@ CUDA). Otherwise use **Compute → CPU**.
 
 ## Troubleshooting
 - **"Server unavailable" at the chat URL** — the model isn't running. Open the
-  factory (localhost:8799) and click **Run** on the image. After a computer
+  factory (localhost:8799) and click **Run** on the model in the Library. After a computer
   *restart*, the factory tries to bring autostart models back automatically.
 - **An error like "Container engine unreachable"** — your Docker/Podman isn't
   running. On macOS, make sure the Podman machine is **Running** in Podman Desktop,
   then re-run `./scripts/macos/start.sh`.
-- **Build fails** — the factory now shows the real cause (out of disk, port in use,
-  etc.) and auto-opens the build log. See [Architecture](architecture.md) for what a
+- **Build fails** — **Builds** explains the cause in a sentence (out of memory, out
+  of disk, port in use, etc.) with its fixes, and the log opens on the line that
+  matters. **Retry** queues it again. See [Architecture](architecture.md) for what a
   build does.
 </content>

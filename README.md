@@ -61,12 +61,13 @@ running in that terminal.
 
 **3. Open the web page and build a model.** Open the **`Open:` link** the start
 script printed last (`http://localhost:8799/?token=…`), then:
-1. Pick a **model** — start with the ★ recommended one (small and fast).
-2. Leave **Engine = Docker** and **Compute = CPU** (works on any machine), or see
-   [Choosing an engine & compute](#choosing-an-engine--compute) to use a GPU.
-3. Click **Build & export .tar** and watch the progress bar.
-4. Under **Built images**, set a port and click **Run**.
-5. Scroll to **Test**, type a prompt, and click **Send**.
+1. In **Catalog**, click a model's card to pick it — start with a ★ recommended one
+   (small and fast). Pick several to build them one after another.
+2. Click **Review build plan**. Leave compute on **CPU** (works on any machine), or
+   see [Choosing an engine & compute](#choosing-an-engine--compute) to use a GPU.
+3. Click **Queue 1 build** and watch it on **Builds**.
+4. In **Library**, click **Run** on the model.
+5. In **Playground**, type a prompt and send it.
 
 That's the whole loop. Everything you download and build is saved under `./models`
 and `./images` on your computer, so it persists between runs.
@@ -148,10 +149,12 @@ container) reach your host Podman; `start.sh` mounts it automatically when prese
 
 ## Choosing an engine & compute
 
-The build form has two dropdowns. **Engine** is the container runtime (the desktop
-app you installed); **Compute** is how the model runs — on the **CPU** (works
-everywhere) or on a **GPU** (faster, if you have a supported one). When in doubt,
-**Docker + CPU** runs anywhere. Otherwise pick the row that matches your machine:
+Each build has two choices, both on the Build plan page. **Engine** is the
+container runtime (the desktop app you installed); it's picked for you and you can
+change it under the row's settings (**Runs on**). **Compute** is how the model runs:
+on the **CPU** (works everywhere) or on a **GPU** (faster, if you have a supported
+one), set with the row's CPU / Vulkan / CUDA buttons. When in doubt, **Docker +
+CPU** runs anywhere. Otherwise pick the row that matches your machine:
 
 | Your situation | Engine | Compute | What you need |
 |---|---|---|---|
