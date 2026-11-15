@@ -40,11 +40,24 @@ WORKDIR /src/llama.cpp
 # that every Apple Silicon chip (M1 and up) supports, so the image stays
 # portable across M-series Macs while still getting the NEON dot-product kernels
 # that matter most for llama.cpp throughput.
+#
+# Parallel compile jobs: BUILD_JOBS=0 (the default) sizes them to the build
+# machine, min(CPUs, available RAM / 1.5 GiB) and at least 1. A plain
+# `-j $(nproc)` starts one compiler per CPU whatever the RAM, and on a VM with
+# many CPUs but little memory the kernel OOM-kills them ("Killed signal
+# terminated program cc1plus"). --build-arg BUILD_JOBS=N forces N jobs.
+ARG BUILD_JOBS=0
 RUN set -eux; \
     case "${TARGETARCH:-amd64}" in \
       arm64) ARCH_FLAGS="-DCMAKE_C_FLAGS=-march=armv8.2-a+dotprod+fp16 -DCMAKE_CXX_FLAGS=-march=armv8.2-a+dotprod+fp16" ;; \
       *)     ARCH_FLAGS="-DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON" ;; \
     esac; \
+    MEM_KB="$(sed -n 's/^MemAvailable:[[:space:]]*\([0-9]*\).*/\1/p' /proc/meminfo)"; \
+    JOBS=$(( ${MEM_KB:-0} / 1572864 )); \
+    [ "$JOBS" -le "$(nproc)" ] || JOBS="$(nproc)"; \
+    case "${BUILD_JOBS:-0}" in *[!0-9]*) ;; *) [ "${BUILD_JOBS:-0}" -eq 0 ] || JOBS="$BUILD_JOBS" ;; esac; \
+    [ "$JOBS" -ge 1 ] || JOBS=1; \
+    echo "Compiling with $JOBS parallel job(s): $(nproc) CPUs, $(( ${MEM_KB:-0} / 1024 )) MiB RAM available"; \
     cmake -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
@@ -52,7 +65,7 @@ RUN set -eux; \
         -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF \
         -DGGML_NATIVE=OFF \
         ${ARCH_FLAGS} \
-    && cmake --build build --config Release -j "$(nproc)" --target llama-server
+    && cmake --build build --config Release -j "$JOBS" --target llama-server
 
 # ----------------------------------------------------------------------------
 # Stage 2: compile the llmgate entrypoint shim (static, stdlib-only)

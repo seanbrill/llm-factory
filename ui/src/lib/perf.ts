@@ -19,6 +19,27 @@ function capByFit(level: string, need: number, capacity: number): string {
   return level;
 }
 
+// engineSys narrows /api/sysinfo to one engine's machine. Docker Desktop's VM and
+// the Podman machine can differ a lot — on a Mac the (often small) Podman
+// machine is the GPU path — so "fits your system" should describe the engine
+// the image is for. An engine that didn't answer reports unknown (0) memory
+// rather than the other engine's; without per-engine data (an older factory)
+// the summary is used as is.
+export function engineSys(sys: SysInfo | null, engine: string): SysInfo | null {
+  const e = sys?.engines?.find((x) => x.engine === engine);
+  if (!sys || !e) return sys;
+  return {
+    ...sys,
+    engine: e.engine,
+    mem_gb: e.reachable ? e.mem_gb : 0,
+    cpus: e.reachable ? e.cpus : 0,
+    gpu: e.gpu,
+    // FACTORY_VRAM is the NVIDIA card's; a Vulkan GPU in the Podman machine
+    // shares the machine's memory, which hwPerf then uses as the GPU's capacity.
+    vram_gb: e.gpu === "cuda" ? sys.vram_gb : 0,
+  };
+}
+
 export function hwPerf(m: Model, sys: SysInfo | null): { cpu: string; gpu: string } {
   const mod = m.modality ?? "text";
   const gb = m.size_gb || 0;

@@ -1,20 +1,18 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import Icon from "../components/Icon.svelte";
   import ModalityBadge from "../components/ModalityBadge.svelte";
+  import BuildQueue from "../components/BuildQueue.svelte";
   import { api } from "../lib/api";
   import { catalog, sysinfo, personas, buildTemplate } from "../lib/stores";
   import { modMeta } from "../lib/icons";
-  import { hwPerf, PERF_LABEL } from "../lib/perf";
-  import { COMPUTE_BADGE, ctxDefaultFor, fmtTokens } from "../lib/util";
+  import { hwPerf, engineSys, PERF_LABEL } from "../lib/perf";
+  import { COMPUTE_BADGE, ctxDefaultFor, engineBadge, fmtTokens } from "../lib/util";
   import { META, TAG_LIST, dimsFor, catIcon, tip, contextFor, visualSpec } from "../lib/meta";
-  import { build, startBuild, attachIfRunning, effectiveCompute } from "../lib/build.svelte";
-  import type { Model } from "../lib/types";
+  import { build, startBuild, attach, effectiveCompute, applyMachineDefaults } from "../lib/build.svelte";
+  import type { EngineResources, Model } from "../lib/types";
 
   // Page state lives in the `build` store (lib/build.svelte.ts) so it — and the
-  // running build's poll loop — survive navigating to other pages. Only the
-  // DOM ref for log auto-scroll is component-local.
-  let logEl = $state<HTMLPreElement>();
+  // build queue's poll loop — survive navigating to other pages.
 
   // Superseded (legacy) models stay in the catalog so existing images resolve,
   // but the picker only lists them on request.
@@ -62,25 +60,39 @@
     }
   });
 
-  // On (re)mount, reconnect to a build still running on the server — covers a
-  // full page refresh; a no-op on plain page navigation (store still tracks it).
+  // On (re)mount, load the build queue — after a full page refresh this also
+  // restores the form from the newest queued/running build; on plain page
+  // navigation the store still tracks it and this just refreshes.
   let attached = false;
   $effect(() => {
-    if (!attached && $catalog.length) { attached = true; attachIfRunning($catalog); }
+    if (!attached && $catalog.length) { attached = true; attach($catalog); }
   });
+
+  // Start from this machine's engine + compute (podman + vulkan on a Mac with a
+  // libkrun Podman machine, docker + cuda on NVIDIA, else docker + cpu) until
+  // the user picks their own.
+  $effect(() => applyMachineDefaults($sysinfo));
+  const touch = () => (build.formTouched = true);
 
   // What this model builds for: the user's pick unless its runtime lacks that variant.
   const compute = $derived(effectiveCompute());
   const canBuild = (c: string) => !build.selected?.computes?.length || build.selected.computes.includes(c);
 
+  // The machine of the engine this image is for — Docker's VM and the Podman
+  // machine can differ a lot — drives the fit estimates below.
+  const sys = $derived(engineSys($sysinfo, build.engine));
+  const eng = $derived($sysinfo?.engines?.find((e) => e.engine === build.engine));
+  const otherEng = $derived($sysinfo?.engines?.find((e) => e.engine !== build.engine));
+
   const ctxAutoLabel = $derived(`Auto — recommended (${fmtTokens(ctxDefaultFor(compute))})`);
   const memMaxLabel = $derived(
-    $sysinfo?.mem_gb ? `Max for your system (${Math.floor($sysinfo.mem_gb)} GB)` : "Max for your system",
+    sys?.mem_gb ? `Max for ${engineBadge(build.engine)} (${Math.floor(sys.mem_gb)} GB)` : "Max for your system",
   );
 
-  // VRAM right-size warning
+  // VRAM right-size warning (an NVIDIA card's VRAM; a Vulkan GPU in the Podman
+  // machine shares its memory — engineHint covers that).
   const vramWarn = $derived.by(() => {
-    const s = $sysinfo;
+    const s = sys;
     const sel = build.selected;
     if (!sel || !s?.vram_gb || (compute !== "cuda" && compute !== "vulkan")) return "";
     const need = sel.min_vram_gb || sel.size_gb || 0;
@@ -91,11 +103,41 @@
     return "";
   });
 
-  // Keep the log scrolled to the newest line.
-  $effect(() => {
-    build.log;
-    if (logEl) logEl.scrollTop = logEl.scrollHeight;
+  // Engine-memory guidance, mirroring the server's checks: compiling a runtime
+  // from source needs compile_min_gb on the engine that compiles it (the build
+  // borrows the other engine, or stops before downloading anything), and
+  // running needs the weights + ~2 GB in the engine's machine.
+  const where = (e: EngineResources) => (e.engine === "podman" ? "the Podman machine" : "Docker");
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const engineHints = $derived.by((): { warn: boolean; text: string }[] => {
+    const sel = build.selected;
+    const e = eng;
+    if (!sel || !e?.reachable || !e.mem_gb) return [];
+    const out: { warn: boolean; text: string }[] = [];
+    const have = e.mem_gb.toFixed(1);
+    const label = COMPUTE_BADGE[compute] ?? compute;
+    const need = $sysinfo?.compile_min_gb?.[compute] ?? 0;
+    if (sel.compiles && need && e.mem_gb < need) {
+      const o = otherEng;
+      if (o?.reachable && o.mem_gb >= need)
+        out.push({ warn: false, text: `${cap(where(e))} has ${have} GB — too little to compile this ${label} image (it needs ${need} GB) — so it will compile on ${where(o)} (${o.mem_gb.toFixed(1)} GB) and be transferred to ${engineBadge(e.engine)}.` });
+      else
+        out.push({ warn: true, text: `Not enough memory to compile this ${label} image: it needs ${need} GB on the engine that compiles it, but ${where(e)} has ${have} GB${o?.reachable ? ` and ${where(o)} ${o.mem_gb.toFixed(1)} GB` : ""}. The build will stop before downloading anything.` });
+    }
+    const w = sel.size_gb || 0;
+    if (w && w + 2 > e.mem_gb && compute !== "cuda") {
+      if (compute === "vulkan" && w > e.mem_gb)
+        out.push({ warn: true, text: `${sel.name} has ~${w} GB of weights, but ${where(e)} has only ${have} GB — it can't load onto the GPU there.` });
+      else if (compute === "vulkan")
+        out.push({ warn: true, text: `Tight fit: ${sel.name} needs ~${(w + 2).toFixed(1)} GB to run and ${where(e)} has ${have} GB — a long context may not fit.` });
+      else
+        out.push({ warn: true, text: `${sel.name} needs ~${(w + 2).toFixed(1)} GB to run and ${where(e)} has ${have} GB — it will start, but page its weights from disk and run slowly.` });
+    }
+    return out;
   });
+
+  // Unfinished builds already waiting on this engine: a new one queues behind them.
+  const ahead = $derived(build.jobs.filter((j) => j.active && j.engine === build.engine).length);
 
   // Clone-an-image template handoff from the Images page.
   $effect(() => {
@@ -108,6 +150,7 @@
         if (m) pick(m);
         build.engine = cfg.engine || build.engine;
         build.compute = cfg.compute || build.compute;
+        build.formTouched = true;
         build.injectMode = cfg.inject_mode || "missing";
         build.systemPrompt = cfg.system_prompt || "";
         build.nameTouched = true;
@@ -128,7 +171,7 @@
       <button type="button" class="trigger" onclick={() => (build.pickerOpen = !build.pickerOpen)} aria-expanded={build.pickerOpen}>
         {#if build.selected}
           {@const s = build.selected}
-          {@const tp = hwPerf(s, $sysinfo)}
+          {@const tp = hwPerf(s, sys)}
           <span class="opt-ic"><Icon name={modMeta(s.modality).icon} size={16} /></span>
           <span class="trig-main">
             <span class="trig-name">{s.name}{#if s.recommended}<span class="rec">★</span>{/if}</span>
@@ -180,7 +223,7 @@
           </div>
           <ul class="list">
             {#each filtered as m (m.id)}
-              {@const perf = hwPerf(m, $sysinfo)}
+              {@const perf = hwPerf(m, sys)}
               {@const tags = (META[m.id]?.strengths ?? []).slice(0, 3)}
               <li class:sel={build.selected?.id === m.id} onclick={() => pick(m)} onkeydown={(e) => e.key === "Enter" && pick(m)} role="option" aria-selected={build.selected?.id === m.id} tabindex="0">
                 <span class="opt-ic"><Icon name={modMeta(m.modality).icon} size={16} /></span>
@@ -205,7 +248,7 @@
   {#if build.selected}
     {@const s = build.selected}
     {@const meta = META[s.id]}
-    {@const perf = hwPerf(s, $sysinfo)}
+    {@const perf = hwPerf(s, sys)}
     {@const ctx = contextFor(s.id)}
     {@const vs = visualSpec(s.id, s.modality)}
     {@const dims = meta?.ratings ? dimsFor(s.modality).filter((d) => d in meta.ratings) : []}
@@ -256,10 +299,10 @@
 
   <div class="grid">
     <label>Engine
-      <select bind:value={build.engine}><option value="docker">Docker</option><option value="podman">Podman</option></select>
+      <select bind:value={build.engine} onchange={touch}><option value="docker">Docker</option><option value="podman">Podman</option></select>
     </label>
     <label>Compute
-      <select value={compute} onchange={(e) => (build.compute = e.currentTarget.value)}>
+      <select value={compute} onchange={(e) => { build.compute = e.currentTarget.value; touch(); }}>
         {#each [["cpu", "CPU (portable)"], ["cuda", "NVIDIA GPU (CUDA)"], ["vulkan", "GPU — Vulkan / Apple Metal"]] as [c, label] (c)}
           <option value={c} disabled={!canBuild(c)}>{label}{canBuild(c) ? "" : " — not available for this model"}</option>
         {/each}
@@ -274,6 +317,18 @@
     <p class="hint">{build.selected.name} has no {COMPUTE_BADGE[build.compute] ?? build.compute} build — it will be built for {COMPUTE_BADGE[compute] ?? compute}.</p>
   {/if}
   {#if vramWarn}<p class="hint warn">{vramWarn}</p>{/if}
+  {#if engineHints.length && eng}
+    {#each engineHints as h (h.text)}
+      <p class="hint eng-hint" class:warn={h.warn}>{h.warn ? "⚠ " : ""}{h.text}</p>
+    {/each}
+    <p class="hint eng-fix">
+      {#if eng.engine === "podman"}
+        To give the Podman machine more memory, run <code>{eng.fix}</code> on this computer, then restart the factory.
+      {:else}
+        To give Docker more memory: {eng.fix}.
+      {/if}
+    </p>
+  {/if}
 
   <label class="lbl-blk">Initialization prompt (optional) — baked in to specialize startup
     <textarea rows="3" bind:value={build.systemPrompt} placeholder="You are FinBot, a terse financial-data analyst. Always answer with strict JSON."></textarea>
@@ -314,20 +369,17 @@
     <label class="check"><input type="checkbox" bind:checked={build.autostart} /> <span>Start on desktop start</span></label>
   </div>
 
-  <button class="primary build-btn" onclick={startBuild} disabled={build.building}>Build &amp; export .tar</button>
+  <div class="build-row">
+    <button class="primary" onclick={startBuild} disabled={build.submitting || !build.selected}>
+      {ahead ? "Add to queue" : "Build & export .tar"}
+    </button>
+    {#if ahead}
+      <span class="hint">{ahead} build{ahead > 1 ? "s" : ""} ahead on {engineBadge(build.engine)} — builds for the same engine run one at a time.</span>
+    {/if}
+  </div>
+  {#if build.error}<p class="hint err">Couldn't start the build: {build.error}</p>{/if}
 
-  {#if build.building || build.status}
-    <div class="progress">
-      <div class="bar" class:active={build.building && build.pct === null}>
-        <div class="fill" class:determinate={build.pct !== null} style={build.pct !== null ? `width:${build.pct}%` : ""}></div>
-      </div>
-      <div class="row-between">
-        <span class="status">{build.status}{#if build.phase} — {build.phase}{/if}{#if build.pct !== null} ({build.pct}%){/if}</span>
-        <button class="ghost" onclick={() => (build.showLog = !build.showLog)}>{build.showLog ? "Hide" : "Show"} log</button>
-      </div>
-      {#if build.showLog}<pre class="log" bind:this={logEl}>{build.log}</pre>{/if}
-    </div>
-  {/if}
+  <BuildQueue />
 </div>
 
 <style>
@@ -423,16 +475,9 @@
   .check input { width: auto; }
   .subhead { margin: 18px 0 4px; font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
   .warn { color: #e0b341; }
-  .build-btn { margin-top: 14px; }
-
-  /* Build loader */
-  .progress { margin-top: 14px; }
-  .bar { height: 10px; background: #0c0e13; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
-  .fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent-2), var(--accent)); }
-  .fill.determinate { transition: width 0.3s ease; }
-  .bar.active .fill { width: 35%; animation: sweep 1.3s ease-in-out infinite; }
-  @keyframes sweep { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
-  .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
-  .status { color: var(--muted); font-size: 13px; }
-  .log { margin-top: 10px; background: #06080c; border: 1px solid var(--border); border-radius: 8px; padding: 12px; max-height: 320px; overflow: auto; white-space: pre-wrap; font: 12.5px/1.5 ui-monospace, monospace; color: #cbd3e1; }
+  .err { color: #f0a08a; }
+  .hint code { background: #0c0e13; padding: 1px 5px; border-radius: 4px; font-size: 12px; color: #cbd3e1; }
+  .build-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+  .eng-hint { margin: 6px 0 0; }
+  .eng-fix { margin: 4px 0 10px; }
 </style>

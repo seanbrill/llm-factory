@@ -23,12 +23,24 @@ RUN dnf install -y \
 WORKDIR /src
 RUN git clone --depth 1 --branch "${WHISPER_CPP_REF}" https://github.com/ggml-org/whisper.cpp.git
 WORKDIR /src/whisper.cpp
-RUN cmake -B build \
+# Parallel compile jobs: BUILD_JOBS=0 (the default) sizes them to the build
+# machine, min(CPUs, available RAM / 2 GiB) and at least 1, since the Vulkan
+# backend takes a few GB per compiler job and a plain `-j $(nproc)` gets
+# OOM-killed on a small VM. --build-arg BUILD_JOBS=N forces N jobs.
+ARG BUILD_JOBS=0
+RUN set -eu; \
+    MEM_KB="$(sed -n 's/^MemAvailable:[[:space:]]*\([0-9]*\).*/\1/p' /proc/meminfo)"; \
+    JOBS=$(( ${MEM_KB:-0} / 2097152 )); \
+    [ "$JOBS" -le "$(nproc)" ] || JOBS="$(nproc)"; \
+    case "${BUILD_JOBS:-0}" in *[!0-9]*) ;; *) [ "${BUILD_JOBS:-0}" -eq 0 ] || JOBS="$BUILD_JOBS" ;; esac; \
+    [ "$JOBS" -ge 1 ] || JOBS=1; \
+    echo "Compiling with $JOBS parallel job(s): $(nproc) CPUs, $(( ${MEM_KB:-0} / 1024 )) MiB RAM available"; \
+    cmake -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DGGML_NATIVE=OFF \
         -DGGML_VULKAN=ON \
         -DWHISPER_BUILD_SERVER=ON \
-    && cmake --build build --config Release -j "$(nproc)" --target whisper-server
+    && cmake --build build --config Release -j "$JOBS" --target whisper-server
 
 # ----------------------------------------------------------------------------
 # Stage 2: Vulkan runtime (Fedora 44 + PATCHED Venus Mesa) + baked model

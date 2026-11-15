@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"time"
 
+	"github.com/seanbrill/local-llm/internal/builder"
 	"github.com/seanbrill/local-llm/internal/ensemble"
 )
 
@@ -60,8 +60,8 @@ func (s *Server) handleEnsembleDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// handleEnsembleBuild assembles an Ensemble image, streaming progress through the
-// shared build state (so the Build page's progress UI shows it).
+// handleEnsembleBuild queues an Ensemble image build on the shared build queue
+// (so it streams like any other build) and returns {id, position}.
 func (s *Server) handleEnsembleBuild(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -98,23 +98,18 @@ func (s *Server) handleEnsembleBuild(w http.ResponseWriter, r *http.Request) {
 		tag = "latest"
 	}
 	engine := normalizeEngine(e.Engine)
-	ref := imageName + ":" + tag
-	cfg := buildConfig{ImageName: imageName, Tag: tag, Engine: engine, Compute: e.Compute}
-	if !s.bs.tryStart(ref, 90, cfg) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "a build is already in progress"})
+	job := &buildJob{
+		kind: "ensemble", lane: engine, ref: imageName + ":" + tag, name: e.Name, eta: 90,
+		cfg: buildConfig{ImageName: imageName, Tag: tag, Engine: engine, Compute: e.Compute},
+		run: func(ctx context.Context, log builder.LogFunc) error {
+			_, err := s.b.BuildEnsemble(ctx, e, imageName, tag, engine, true, s.modelHost, log)
+			return err
+		},
+	}
+	pos, err := s.q.enqueue(job)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	go func() {
-		log := func(line string) { s.bs.append(line) }
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		if _, err := s.b.BuildEnsemble(ctx, e, imageName, tag, engine, true, s.modelHost, log); err != nil {
-			s.bs.append("ERROR: " + err.Error())
-			s.bs.finish("error")
-			return
-		}
-		s.bs.append("DONE")
-		s.bs.finish("done")
-	}()
-	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+	enqueueResponse(w, job, pos)
 }

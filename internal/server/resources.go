@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seanbrill/local-llm/internal/builder"
 	"github.com/seanbrill/local-llm/internal/catalog"
 )
 
@@ -177,6 +178,15 @@ func cRunning(c map[string]any) bool {
 func (s *Server) resourceBudget(ctx context.Context) ResourceBudget {
 	si := s.b.SysInfo(ctx)
 	b := ResourceBudget{GPU: si.GPU, TotalVRAMGB: si.VRAMGB, TotalRAMGB: si.MemGB}
+	// /proc below is the machine the factory itself runs on — Docker's (the
+	// start scripts run it there) — so take the RAM fallback and the core count
+	// for the load average from Docker's entry, not the GPU engine's.
+	cpus := si.CPUs
+	for _, e := range si.Engines {
+		if e.Engine == "docker" && e.Reachable {
+			b.TotalRAMGB, cpus = e.MemGB, e.CPUs
+		}
+	}
 
 	// Factory-managed footprints (the per-model breakdown + the estimate fallback).
 	cs, _ := s.b.Containers(ctx)
@@ -219,10 +229,10 @@ func (s *Server) resourceBudget(ctx context.Context) ResourceBudget {
 	b.FreeRAMGB = b.TotalRAMGB - b.UsedRAMGB
 
 	// Global CPU pressure (1-min load vs cores).
-	b.CPUs = si.CPUs
-	if l, ok := procCPU(); ok && si.CPUs > 0 {
+	b.CPUs = cpus
+	if l, ok := procCPU(); ok && cpus > 0 {
 		b.CPULoad1 = l
-		if p := l / float64(si.CPUs) * 100; p > 100 {
+		if p := l / float64(cpus) * 100; p > 100 {
 			b.CPUUsedPct = 100
 		} else {
 			b.CPUUsedPct = p
@@ -253,6 +263,61 @@ func (s *Server) runFits(ctx context.Context, modelID, compute string) (msg, cod
 			b.CPUUsedPct, b.CPULoad1, b.CPUs), "cpu_saturated"
 	}
 	return "", ""
+}
+
+// runOverheadGB is what a model needs beyond its weights to run: the context's
+// KV cache, the server process, and the engine VM's own share.
+const runOverheadGB = 2.0
+
+// engineFit checks a model's weights against the memory of the engine machine it
+// will run on — Docker Desktop's VM or the Podman machine, either of which can
+// be much smaller than the computer. It returns block=true with a message when
+// the model obviously can't run there, block=false with a warning when it's a
+// poor or tight fit, and "" when it fits (or a size is unknown).
+//
+// Only a Vulkan run is ever blocked: on a VM GPU (Podman/krunkit) the weights
+// have to sit in the machine's memory to reach the GPU, so weights larger than
+// that memory can't load. CPU runs mmap the GGUF — an oversized model still
+// starts and pages its weights from disk, which is very slow but works — and a
+// CUDA run keeps them in VRAM (checked separately), so those only warn.
+func engineFit(name, engine string, weightsGB, memGB float64, compute string) (block bool, msg string) {
+	if weightsGB <= 0 || memGB <= 0 || weightsGB+runOverheadGB <= memGB {
+		return false, ""
+	}
+	where := "Docker"
+	if engine == "podman" {
+		where = "the Podman machine"
+	}
+	fix := "Give it more memory: " + builder.MemoryFix(engine)
+	if engine == "podman" {
+		fix += " (then restart the factory so it reconnects)"
+	}
+	fix += "."
+	switch {
+	case compute == "vulkan" && weightsGB > memGB:
+		return true, fmt.Sprintf("%s has %.1f GB of weights, but %s has only %.1f GB of memory — it can't load onto the GPU there. %s",
+			name, weightsGB, where, memGB, fix)
+	case compute == "vulkan":
+		return false, fmt.Sprintf("Tight fit: %s needs ~%.1f GB (%.1f GB of weights + ~%.0f GB to run) and %s has %.1f GB — a long context may not fit. %s",
+			name, weightsGB+runOverheadGB, weightsGB, runOverheadGB, where, memGB, fix)
+	default:
+		return false, fmt.Sprintf("%s needs ~%.1f GB (%.1f GB of weights + ~%.0f GB to run) but %s has %.1f GB — it will start, but page its weights from disk and run very slowly. %s",
+			name, weightsGB+runOverheadGB, weightsGB, runOverheadGB, where, memGB, fix)
+	}
+}
+
+// engineFits runs engineFit for a catalog model on engine's machine. Unknown
+// models, or an engine whose memory can't be read, pass (other checks remain).
+func (s *Server) engineFits(ctx context.Context, modelID, engine, compute string) (block bool, msg string) {
+	m := s.modelByID(modelID)
+	if m == nil {
+		return false, ""
+	}
+	memGB, _, err := builder.EngineMemory(ctx, engine)
+	if err != nil {
+		return false, ""
+	}
+	return engineFit(m.Name, engine, s.b.WeightsGB(*m), memGB, compute)
 }
 
 // handleResources returns the live VRAM/RAM budget so the UI can show usage and

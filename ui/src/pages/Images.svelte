@@ -95,8 +95,11 @@
   // Runs, and on the resource guardrail (409 + needs_force) offers to start anyway.
   async function doRun(body: Record<string, unknown>) {
     try {
-      await post("/api/run", body);
-      if ((body.system_prompt as string)?.trim()) toast(`Running ${runRef} on :${runPort} with a custom prompt.`);
+      const r = await post<{ warning?: string }>("/api/run", body);
+      // A poor fit for the engine's machine (e.g. weights larger than its memory
+      // on CPU, which still runs by paging from disk) starts with a warning.
+      if (r?.warning) toast("⚠ " + r.warning, 9000);
+      else if ((body.system_prompt as string)?.trim()) toast(`Running ${runRef} on :${runPort} with a custom prompt.`);
       loadResources();
       setTimeout(load, 600);
     } catch (e) {

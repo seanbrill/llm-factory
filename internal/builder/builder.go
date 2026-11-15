@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -47,6 +48,10 @@ type Builder struct {
 	// in a container (set via HOST_DIR) — needed to bind-mount files into sibling
 	// containers (the Caddy proxy) that run on the host daemon.
 	HostDir string
+
+	// One `<engine> build` per engine machine at a time (see acquireBuildSlot).
+	slotMu sync.Mutex
+	slots  map[string]chan struct{}
 }
 
 // LogFunc receives one human-readable progress line at a time.
@@ -78,6 +83,11 @@ func New(baseDir string) (*Builder, error) {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, err
 		}
+	}
+	// No build can be running yet, so anything left in the build dir is from a
+	// factory that stopped mid-build (possibly a multi-GB copied model).
+	if removed := b.CleanStaleBuildDirs(); len(removed) > 0 {
+		log.Printf("removed %d stale build dir(s) from %s: %s", len(removed), b.BuildDir, strings.Join(removed, ", "))
 	}
 	return b, nil
 }
@@ -498,6 +508,17 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		return fmt.Errorf("read %s (modality %q): %w", dockerfileSrc, o.Model.Mod(), err)
 	}
 
+	// Memory preflight, before downloading anything: compiling llama.cpp & co.
+	// needs a few GB on the engine's machine, which a Podman machine may not have
+	// (a 2 GiB one OOM-killed the Vulkan compile after 29 minutes). Compile on
+	// the target, on the other engine (then transfer), or fail now with the fix.
+	plan := buildPlan{Build: engine, Target: engine}
+	if compilesFromSource(dfData) {
+		if plan, err = b.planBuild(ctx, engine, compute, log); err != nil {
+			return err
+		}
+	}
+
 	// Self-contained families (tts, python) bake their own model, so there's no
 	// GGUF to download/stage. Every other family needs the model on disk.
 	var modelPath string
@@ -640,7 +661,11 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	}
 
 	ref := o.Ref()
-	log(fmt.Sprintf("Building %s [%s/%s] from %s ...", ref, engine, compute, o.Model.Name))
+	if plan.Transfer {
+		log(fmt.Sprintf("Building %s [%s/%s] from %s — compiling on %s ...", ref, engine, compute, o.Model.Name, plan.Build))
+	} else {
+		log(fmt.Sprintf("Building %s [%s/%s] from %s ...", ref, engine, compute, o.Model.Name))
+	}
 	buildArgs := []string{
 		"build", "-t", ref,
 		"--build-arg", "INJECT_MODE=" + injectMode(o.InjectMode),
@@ -650,8 +675,10 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		"--label", "local-llm.model=" + o.Model.ID,
 		"--label", "local-llm.runtime=" + o.Model.Rt(),
 		"--label", "local-llm.compute=" + compute,
-		// Engine the image was built with — Run reads this so a podman-built image
-		// is launched with podman (and vice versa) without the UI having to track it.
+		// Engine the image runs on — Run reads this so a podman image is launched
+		// with podman (and vice versa) without the UI having to track it. It names
+		// the target even when the image compiles on the other engine and is
+		// transferred (the low-memory fallback).
 		"--label", "local-llm.engine=" + engine,
 		// Capture the full creation config so the UI can clone an image as a
 		// template (system prompt may be multiline — exec passes it verbatim).
@@ -671,37 +698,64 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	// which ships the profile at /usr/share/containers/seccomp.json instead, so
 	// the RUN steps fail to open it. The build just compiles llama.cpp, so run it
 	// seccomp-unconfined to sidestep the path mismatch. Docker is unaffected.
-	if engine == enginePodman {
+	if plan.Build == enginePodman {
 		buildArgs = append(buildArgs, "--security-opt", "seccomp=unconfined")
 	}
 	buildArgs = append(buildArgs, work)
-	if err := runStreaming(ctx, b.BaseDir, engine, log, buildArgs...); err != nil {
-		return fmt.Errorf("%s build failed: %w", engine, err)
+	release, err := b.acquireBuildSlot(ctx, plan.Build, log)
+	if err != nil {
+		return err
+	}
+	tail, err := runStreamingTail(ctx, b.BaseDir, plan.Build, log, 200, buildArgs...)
+	release()
+	if err != nil {
+		err = fmt.Errorf("%s build failed: %w", plan.Build, err)
+		if ctx.Err() == nil && compilerOOM(tail) {
+			return &HintError{Hint: oomHint(plan.Build, plan.BuildGB), Err: err}
+		}
+		return err
 	}
 	log("Built image: " + ref)
 
+	var tarPath string
 	if o.ExportTar {
-		safe := strings.NewReplacer("/", "_", ":", "_").Replace(ref)
-		out := filepath.Join(b.ImagesDir, safe+".tar")
-		log("Exporting to images/" + filepath.Base(out) + " ...")
-		if err := runStreaming(ctx, b.BaseDir, engine, log, "save", "-o", out, ref); err != nil {
-			return fmt.Errorf("%s save failed: %w", engine, err)
+		tarPath = filepath.Join(b.ImagesDir, exportFileName(ref))
+		log("Exporting to images/" + filepath.Base(tarPath) + " ...")
+		if err := runStreaming(ctx, b.BaseDir, plan.Build, log, "save", "-o", tarPath, ref); err != nil {
+			return fmt.Errorf("%s save failed: %w", plan.Build, err)
 		}
-		if fi, err := os.Stat(out); err == nil {
-			log(fmt.Sprintf("Exported %.2f GB: images/%s", float64(fi.Size())/1e9, filepath.Base(out)))
+		if fi, err := os.Stat(tarPath); err == nil {
+			log(fmt.Sprintf("Exported %.2f GB: images/%s", float64(fi.Size())/1e9, filepath.Base(tarPath)))
+		}
+	}
+	if plan.Transfer {
+		if err := b.transferImage(ctx, plan.Build, plan.Target, ref, tarPath, log); err != nil {
+			return err
 		}
 	}
 
 	// Reclaim the now-dangling previous build: rebuilding over :latest orphans the
 	// old multi-GB model image as <none>, which otherwise accumulates per rebuild.
 	// Scope strictly to our tool label (and dangling-only — no -a) so it can never
-	// touch the user's other images or the active build cache. Best-effort.
-	if out, err := engineCmd(ctx, engine, "image", "prune", "-f", "--filter", "label=local-llm.tool=builder").CombinedOutput(); err == nil {
-		if s := strings.TrimSpace(string(out)); s != "" && !strings.Contains(s, "reclaimed space: 0B") {
-			log("Reclaimed dangling layers from previous builds.")
+	// touch the user's other images or the active build cache. Best-effort, on
+	// both engines when the image was transferred.
+	pruneEngines := []string{plan.Build}
+	if plan.Transfer {
+		pruneEngines = append(pruneEngines, plan.Target)
+	}
+	for _, e := range pruneEngines {
+		if out, err := engineCmd(ctx, e, "image", "prune", "-f", "--filter", "label=local-llm.tool=builder").CombinedOutput(); err == nil {
+			if s := strings.TrimSpace(string(out)); s != "" && !strings.Contains(s, "reclaimed space: 0B") {
+				log("Reclaimed dangling layers from previous builds.")
+			}
 		}
 	}
 	return nil
+}
+
+// exportFileName is the images/ tarball name for a ref ("a/b:c" -> "a_b_c.tar").
+func exportFileName(ref string) string {
+	return strings.NewReplacer("/", "_", ":", "_").Replace(ref) + ".tar"
 }
 
 // BuildEnsemble assembles an Ensemble image: the Conductor (ensemblegate) plus a
@@ -774,8 +828,7 @@ func (b *Builder) BuildEnsemble(ctx context.Context, e ensemble.Ensemble, imageN
 	log("Built ensemble image: " + ref)
 
 	if exportTar {
-		safe := strings.NewReplacer("/", "_", ":", "_").Replace(ref)
-		out := filepath.Join(b.ImagesDir, safe+".tar")
+		out := filepath.Join(b.ImagesDir, exportFileName(ref))
 		log("Exporting to images/" + filepath.Base(out) + " ...")
 		if err := runStreaming(ctx, b.BaseDir, eng, log, "save", "-o", out, ref); err != nil {
 			return "", fmt.Errorf("%s save failed: %w", eng, err)
@@ -878,7 +931,17 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 
 	out, err := engineCmd(ctx, engine, args...).CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("%s run: %v: %s", engine, err, strings.TrimSpace(string(out)))
+		err = fmt.Errorf("%s run: %v: %s", engine, err, strings.TrimSpace(string(out)))
+		// A Vulkan image needs the engine's GPU render node. Docker Desktop on a Mac
+		// (Apple Virtualization) and a non-libkrun Podman machine have none, and
+		// the raw "error gathering device information" says nothing about why.
+		if o.Compute == "vulkan" && strings.Contains(string(out), "/dev/dri") {
+			mac := engine == engineDocker && dockerDesktopMac(ctx)
+			if hint := gpuDeviceHint(engine, o.Compute, string(out), mac); hint != "" {
+				return "", &HintError{Hint: hint, Err: err}
+			}
+		}
+		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -932,51 +995,6 @@ func (b *Builder) Stop(ctx context.Context, engine, id string) error {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
-}
-
-// SysInfo reports the active engine machine's resources so the UI can show
-// "fits your system" guidance. Best-effort: zero/empty fields when undeterminable.
-type SysInfo struct {
-	MemGB  float64 `json:"mem_gb"`
-	CPUs   int     `json:"cpus"`
-	GPU    string  `json:"gpu"`     // "" | "vulkan" | "cuda"
-	VRAMGB float64 `json:"vram_gb"` // total GPU VRAM (GB), 0 if unknown
-	Engine string  `json:"engine"`  // engine the numbers came from
-}
-
-// SysInfo reports where models actually run. It prefers podman (the GPU path on
-// macOS) over docker, reading each engine's machine memory/CPUs via the remote
-// `info` API (which works from inside the containerized factory, unlike the
-// host-only `machine inspect`). GPU is taken from FACTORY_GPU, which start.sh sets
-// when it detects a GPU-capable Podman machine.
-func (b *Builder) SysInfo(ctx context.Context) SysInfo {
-	si := SysInfo{GPU: os.Getenv("FACTORY_GPU")}
-	if v, err := strconv.ParseFloat(os.Getenv("FACTORY_VRAM"), 64); err == nil {
-		si.VRAMGB = v
-	}
-	for _, engine := range candidateEngines() {
-		// podman exposes host RAM/CPU under .Host; docker at the top level.
-		out, err := engineCmd(ctx, engine, "info", "--format", "{{.Host.MemTotal}} {{.Host.NCPU}}").Output()
-		if err != nil || strings.Contains(string(out), "<no value>") {
-			out, err = engineCmd(ctx, engine, "info", "--format", "{{.MemTotal}} {{.NCPU}}").Output()
-		}
-		if err != nil {
-			continue
-		}
-		var memBytes int64
-		var cpus int
-		fmt.Sscan(strings.TrimSpace(string(out)), &memBytes, &cpus)
-		if memBytes <= 0 {
-			continue
-		}
-		si.MemGB = float64(memBytes) / 1e9
-		si.CPUs = cpus
-		si.Engine = engine
-		if engine == enginePodman {
-			return si // podman is the GPU path — prefer its numbers
-		}
-	}
-	return si
 }
 
 // GPUUsedGB returns the GLOBAL VRAM in use (and total), in GB, by running
@@ -1513,8 +1531,12 @@ func (b *Builder) RemoveImage(ctx context.Context, engine, ref string, alsoTar b
 		return fmt.Errorf("%s rmi: %v: %s", resolveEngine(engine), err, strings.TrimSpace(string(out)))
 	}
 	if alsoTar {
-		safe := strings.NewReplacer("/", "_", ":", "_").Replace(ref)
-		_ = os.Remove(filepath.Join(b.ImagesDir, safe+".tar"))
+		// The row's ref may carry podman's "localhost/" prefix, which the export
+		// (named from the ref as built) doesn't.
+		_ = os.Remove(filepath.Join(b.ImagesDir, exportFileName(ref)))
+		if r := strings.TrimPrefix(ref, "localhost/"); r != ref {
+			_ = os.Remove(filepath.Join(b.ImagesDir, exportFileName(r)))
+		}
 	}
 	return nil
 }
@@ -1539,6 +1561,26 @@ func (b *Builder) ModelOnDisk(m catalog.Model) (bool, int64) {
 		total += mf.Size()
 	}
 	return true, total
+}
+
+// WeightsGB is the size (GB) of the weights a model's image bakes: the catalog
+// size of its main file plus any projector / extra weights already downloaded
+// (the catalog doesn't size those).
+func (b *Builder) WeightsGB(m catalog.Model) float64 {
+	gb := m.SizeGB
+	files := make([]string, 0, len(m.ExtraFiles)+1)
+	if m.MMProjFile != "" {
+		files = append(files, m.MMProjFile)
+	}
+	for _, w := range m.ExtraFiles {
+		files = append(files, w.File)
+	}
+	for _, f := range files {
+		if fi, err := os.Stat(filepath.Join(b.ModelsDir, f)); err == nil {
+			gb += float64(fi.Size()) / 1e9
+		}
+	}
+	return gb
 }
 
 // RemoveModel deletes a model's downloaded weights from ./models (no-op if absent).
@@ -1629,6 +1671,12 @@ func ClassifyEngineError(err error) string {
 	if err == nil {
 		return ""
 	}
+	// Recognized where it happened (e.g. a Vulkan run with no /dev/dri, an
+	// OOM-killed compile), with context this generic matcher lacks.
+	var he *HintError
+	if errors.As(err, &he) && he.Hint != "" {
+		return he.Hint
+	}
 	msg := strings.ToLower(err.Error())
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
@@ -1643,6 +1691,8 @@ func ClassifyEngineError(err error) string {
 		return false
 	}
 	switch {
+	case strings.Contains(msg, "/dev/dri") && contains("no such file", "error gathering device"):
+		return "This engine has no GPU device (/dev/dri) to give the container. On a Mac, run GPU (Vulkan) images on a Podman libkrun machine — Docker Desktop under Apple Virtualization has no GPU device."
 	case contains("connection refused", "cannot connect to podman", "cannot connect to the docker daemon"),
 		strings.Contains(msg, "sock") && strings.Contains(msg, "no such file"):
 		return "Container engine unreachable — the Podman machine or Docker isn't responding. Restart the factory (scripts/<your-os>/start.sh) so it reconnects, then retry."

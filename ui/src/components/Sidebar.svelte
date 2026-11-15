@@ -1,9 +1,10 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import { PAGES, route } from "../lib/router";
-  import { sysinfo, appVersion } from "../lib/stores";
+  import { sysinfo, appVersion, loadSysInfo } from "../lib/stores";
   import { api } from "../lib/api";
-  import type { VersionInfo } from "../lib/types";
+  import { engineBadge } from "../lib/util";
+  import type { EngineResources, VersionInfo } from "../lib/types";
 
   let collapsed = $state(localStorage.getItem("llmfactory.nav.collapsed") === "1");
   function toggle() {
@@ -17,6 +18,7 @@
   let latest = $state<VersionInfo | null>(null);
   async function recheck() {
     try { latest = await api<VersionInfo>("/api/version"); } catch { /* factory restarting */ }
+    loadSysInfo(); // engine machines can be resized or started meanwhile
   }
   $effect(() => {
     const timer = setInterval(recheck, 60_000);
@@ -34,6 +36,27 @@
     const gpu = s.gpu ? `${s.gpu} GPU${s.vram_gb ? " " + s.vram_gb + " GB" : ""}` : "CPU only";
     return `${s.mem_gb.toFixed(0)} GB · ${s.cpus} CPU · ${gpu}`;
   });
+
+  // Each engine's machine on its own line — Docker Desktop's VM and the Podman
+  // machine have separate memory and GPU access. Engines that didn't answer are
+  // left out, except the GPU one (its absence matters).
+  const engines = $derived(($sysinfo?.engines ?? []).filter((e) => e.reachable || e.gpu));
+  function engText(e: EngineResources): string {
+    if (!e.reachable) return "not running";
+    const gpu = e.gpu ? `${e.gpu} GPU${e.gpu === "cuda" && $sysinfo?.vram_gb ? " " + $sysinfo.vram_gb + " GB" : ""}` : "CPU only";
+    return `${e.mem_gb.toFixed(0)} GB · ${e.cpus} CPU · ${gpu}`;
+  }
+  function engTitle(e: EngineResources): string {
+    const name = e.engine === "podman" ? "Podman machine" : "Docker";
+    if (!e.reachable) return `${name}: not reachable — start it, then restart the factory so it reconnects.`;
+    let t = `${name}: ${e.mem_gb.toFixed(1)} GB memory, ${e.cpus} CPUs${e.gpu ? `, ${e.gpu} GPU` : ", no GPU"}.`;
+    if (e.low_memory) {
+      const need = $sysinfo?.compile_min_gb?.[e.gpu] ?? 6;
+      t += `\n⚠ Too little memory to compile GPU images (needs ${need} GB): GPU builds compile on the other engine and are transferred here, and only models that fit in ${e.mem_gb.toFixed(1)} GB can run on its GPU.`;
+      t += `\nGive it more memory: ${e.fix}${e.engine === "podman" ? " (then restart the factory)" : ""}`;
+    }
+    return t;
+  }
 </script>
 
 <aside class="sidebar" class:collapsed>
@@ -52,7 +75,19 @@
     {/each}
   </nav>
   <div class="foot">
-    <div class="sys-pill"><Icon name="cpu" size={14} /> <span>{sysText}</span></div>
+    {#if engines.length}
+      <div class="sys-list">
+        {#each engines as e (e.engine)}
+          <div class="sys-pill" class:low={e.low_memory} class:down={!e.reachable} title={engTitle(e)}>
+            <Icon name={e.gpu ? "gpu" : "box"} size={14} />
+            <span><b>{engineBadge(e.engine)}</b> {engText(e)}</span>
+            {#if e.low_memory}<span class="low-flag"><Icon name="alert" size={13} /></span>{/if}
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <div class="sys-pill"><Icon name="cpu" size={14} /> <span>{sysText}</span></div>
+    {/if}
     {#if stale && latest}
       <button class="ver-new" onclick={() => location.reload()} title="The factory was restarted on a newer build; this page is still the old one.">
         <Icon name="refresh" size={13} /><span>Updated to {verLabel(latest)} — reload</span>
@@ -117,6 +152,13 @@
   }
   .sys-pill :global(.ico) { color: var(--accent); }
   .sidebar.collapsed .sys-pill span { display: none; }
+  .sys-list { display: flex; flex-direction: column; gap: 5px; }
+  .sys-pill b { color: var(--text); font-weight: 600; }
+  .sys-pill.down { opacity: 0.65; }
+  .sys-pill.low { border-color: #4a3c15; }
+  .sys-pill .low-flag { margin-left: auto; display: inline-flex; }
+  .sys-pill .low-flag :global(.ico) { color: #e3b341; }
+  .sidebar.collapsed .sys-pill .low-flag { display: inline-flex; }
   .ver { margin-top: 7px; text-align: center; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .sidebar.collapsed .ver-commit { display: none; }
   .ver-new {

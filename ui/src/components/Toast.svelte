@@ -18,6 +18,7 @@
     padding: 10px 16px;
     border-radius: 10px;
     font-size: 13px;
+    max-width: min(640px, calc(100vw - 32px));
     box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
     z-index: 200;
   }

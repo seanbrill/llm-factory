@@ -50,14 +50,28 @@ WORKDIR /src/llama.cpp
 # nonexistent "b1" bundle and falls back to "latest", which can drift out of
 # step with the pinned source (missing loading.html) and abort the build.
 # With both off, llama.cpp embeds an empty asset table and the build is offline.
-RUN cmake -B build \
+#
+# Parallel compile jobs: BUILD_JOBS=0 (the default) sizes them to the build
+# machine, min(CPUs, available RAM / 2 GiB) and at least 1. ggml-vulkan.cpp alone
+# takes a few GB to compile, and a plain `-j $(nproc)` (7 jobs on a 2 GiB Podman
+# machine) got OOM-killed: "Killed signal terminated program cc1plus".
+# --build-arg BUILD_JOBS=N forces N jobs.
+ARG BUILD_JOBS=0
+RUN set -eu; \
+    MEM_KB="$(sed -n 's/^MemAvailable:[[:space:]]*\([0-9]*\).*/\1/p' /proc/meminfo)"; \
+    JOBS=$(( ${MEM_KB:-0} / 2097152 )); \
+    [ "$JOBS" -le "$(nproc)" ] || JOBS="$(nproc)"; \
+    case "${BUILD_JOBS:-0}" in *[!0-9]*) ;; *) [ "${BUILD_JOBS:-0}" -eq 0 ] || JOBS="$BUILD_JOBS" ;; esac; \
+    [ "$JOBS" -ge 1 ] || JOBS=1; \
+    echo "Compiling with $JOBS parallel job(s): $(nproc) CPUs, $(( ${MEM_KB:-0} / 1024 )) MiB RAM available"; \
+    cmake -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
         -DLLAMA_CURL=OFF \
         -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF \
         -DGGML_NATIVE=OFF \
         -DGGML_VULKAN=ON \
-    && cmake --build build --config Release -j "$(nproc)" --target llama-server
+    && cmake --build build --config Release -j "$JOBS" --target llama-server
 
 # ----------------------------------------------------------------------------
 # Stage 2: compile the llmgate entrypoint shim (static, stdlib-only)

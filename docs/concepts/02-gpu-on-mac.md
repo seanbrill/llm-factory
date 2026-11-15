@@ -71,14 +71,60 @@ and runs at GPU speed.
 3. The factory's Run command automatically adds the flags Venus needs
    (`--device /dev/dri --security-opt label=disable`).
 
+## What about Docker Desktop?
+
+Docker Desktop also runs containers in a Linux VM, but out of the box it can't
+give them the GPU:
+
+- **Apple Virtualization (the default VM manager)** has no virtual GPU, so there's
+  no `/dev/dri` to hand a container. Running a Vulkan image there fails with
+  `error gathering device information while adding custom device "/dev/dri": no
+  such file or directory`; the factory turns that into: *Docker Desktop on this Mac
+  has no GPU device under Apple Virtualization. Run this image on Podman, or switch
+  Docker Desktop to Docker VMM (Settings → General → Virtual Machine Manager) and
+  try again.*
+- **Docker VMM** — *experimental, unverified with this project.* Docker's own VM
+  manager does have a `virtio-gpu` device with a Vulkan host behind it
+  (MoltenVK/KosmicKrisp), and its kernel is built with `CONFIG_DRM_VIRTIO_GPU=y`,
+  so `--device /dev/dri` plus our patched-Venus image *may* work there. Nobody has
+  confirmed it yet.
+- **The WebGPU device** — *undocumented, experimental.* Recent Docker Desktop
+  versions list a CDI device `docker.com/gpu=webgpu` under "Discovered Devices" in
+  `docker info`. It remotes the **WebGPU** API to the host (Dawn on Metal) and
+  mounts `/usr/lib/webgpu/libwebgpu.so` into the container. llama.cpp's WebGPU
+  backend is built against Dawn itself, so the factory can't use this device today.
+
+To see what your engines actually give a container, open **Settings → Check GPU
+access**. It starts a tiny throwaway container (alpine) on each engine with
+`--device /dev/dri`, lists what arrives, and reads each engine's CDI devices.
+
 ## How much memory does it use?
 
 A Mac has **unified memory** (the CPU and GPU share one pool). The model's weights
 load into that shared memory. A practical guide:
-- The Podman machine is given a memory cap (e.g. 16 GB). The model must fit inside
-  that, plus room for its "context" (the conversation history).
-- The factory's build form shows a **"fits your system"** badge to help you pick a
-  model that's comfortable on your RAM.
+- The Podman machine is given a memory cap — **only 2 GB** if you created it with
+  plain `podman machine init`. The model must fit inside that, plus room for its
+  "context" (the conversation history): the factory counts the weights + ~2 GB,
+  and asks before starting a GPU model whose weights are bigger than the machine's
+  memory (a CPU model still starts, but runs slowly paging its weights from disk,
+  so that only warns).
+- **Building** the Vulkan image compiles llama.cpp from source, which needs about
+  **6 GB** in the machine that compiles it (a CPU image about 3 GB). Each compile
+  job takes ~2 GB, so the Dockerfiles run as many in parallel as the memory allows
+  (`BUILD_JOBS=0` = automatic; set a number to force it) instead of one per CPU.
+  If the Podman machine is too small, the factory **compiles on Docker instead and
+  transfers the image** to Podman (`docker save` → `podman load`, each step in the
+  build log); the image is still labelled and run as a Podman image. If no engine
+  has enough memory, the build stops before downloading anything and says how to
+  fix it.
+- The sidebar lists each engine's machine separately and flags a GPU machine
+  that's too small. To resize the Podman machine (then restart the factory so it
+  reconnects):
+  ```bash
+  podman machine stop && podman machine set --memory 12288 && podman machine start
+  ```
+- The factory's build form shows a **"fits your system"** badge — for the engine
+  you picked — to help you choose a model that's comfortable there.
 
 > **Note:** krunkit has a known limit — don't give the Podman machine more than
 > ~27 GB of memory, or it can fail to start.

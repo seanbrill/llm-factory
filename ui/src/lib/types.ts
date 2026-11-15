@@ -27,6 +27,7 @@ export interface Model {
   runtime?: "cpp" | "python" | "audiocpp"; // default cpp (GGUF); python = PyTorch; audiocpp = audio.cpp
   computes?: string[];        // compute targets this model's runtime can be built for
   legacy?: boolean;           // superseded; hidden in the Build picker by default
+  compiles?: boolean;         // its build compiles a runtime from source (needs compile_min_gb on the engine)
 }
 
 // Build identity from /api/version (stamped by the start scripts).
@@ -35,12 +36,87 @@ export interface VersionInfo {
   commit: string;  // short SHA, "-dirty" when built with local edits
 }
 
+// One container engine's machine (Docker Desktop's VM, the Podman machine) as
+// its containers see it, from /api/sysinfo.
+export interface EngineResources {
+  engine: string;       // "docker" | "podman"
+  reachable: boolean;   // answered just now
+  mem_gb: number;
+  cpus: number;
+  gpu: string;          // compute it gives containers: "" | "vulkan" | "cuda"
+  low_memory?: boolean; // a GPU engine too small to compile GPU images
+  fix: string;          // how to give this machine more memory
+}
+
 export interface SysInfo {
+  // Legacy summary: the GPU engine when it's reachable, else the first engine.
   mem_gb: number;
   cpus: number;
   gpu: string;     // "" | "cuda" | "vulkan"
   vram_gb: number; // 0 if unknown
   engine: string;
+  engines?: EngineResources[];
+  default_engine?: string;  // build form defaults for this machine
+  default_compute?: string;
+  compile_min_gb?: Record<string, number>; // compute -> least engine memory to compile
+}
+
+// Build queue (/api/builds). Mirrors internal/server/buildqueue.go.
+export type BuildStatus = "queued" | "running" | "done" | "error" | "canceled";
+
+export interface BuildConfig {
+  model_id: string;
+  image_name: string;
+  tag: string;
+  engine: string;
+  compute: string;
+  system_prompt: string;
+  inject_mode: string;
+  ctx_size: number;
+  memory_gb: number;
+  route: string;
+  autostart: boolean;
+}
+
+export interface BuildJob {
+  id: string;
+  kind: "model" | "ensemble";
+  status: BuildStatus;
+  active: boolean;       // queued or running
+  ref: string;
+  model_id: string;
+  name: string;
+  engine: string;        // the engine the image is for (its queue lane)
+  compute: string;
+  config: BuildConfig;
+  position: number;      // queued: unfinished builds ahead on its engine
+  wait_seconds: number;  // queued: estimated seconds until it starts, 0 = unknown
+  created_at: number;    // unix ms
+  started_at: number;    // unix ms, 0 = not yet
+  finished_at: number;   // unix ms, 0 = not yet
+  elapsed_ms: number;
+  eta_seconds: number;   // expected run time, 0 = unknown
+  last_line: string;
+  error?: string;
+  line_count: number;
+}
+
+export interface BuildSnapshot extends BuildJob {
+  lines: string[];
+  next_offset: number;
+}
+
+// One engine's answer to POST /api/gpu/probe.
+export interface GPUProbe {
+  engine: string;
+  reachable: boolean;
+  system?: string;
+  dri: boolean;
+  dri_devices?: string[];
+  dri_error?: string;
+  cdi_devices?: string[];
+  webgpu: boolean;
+  verdict: string;
 }
 
 // docker/podman list records arrive with capitalised keys + a comma-joined

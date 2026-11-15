@@ -23,12 +23,24 @@ WORKDIR /src
 RUN git clone --recursive --depth 1 --branch "${SDCPP_REF}" \
         https://github.com/leejet/stable-diffusion.cpp.git
 WORKDIR /src/stable-diffusion.cpp
-RUN cmake -B build \
+# Parallel compile jobs: BUILD_JOBS=0 (the default) sizes them to the build
+# machine, min(CPUs, available RAM / 2 GiB) and at least 1 — an nvcc job on the
+# CUDA kernels can take ~2 GiB, so a plain `-j $(nproc)` on a VM with many CPUs
+# but little memory gets OOM-killed. --build-arg BUILD_JOBS=N forces N jobs.
+ARG BUILD_JOBS=0
+RUN set -eu; \
+    MEM_KB="$(sed -n 's/^MemAvailable:[[:space:]]*\([0-9]*\).*/\1/p' /proc/meminfo)"; \
+    JOBS=$(( ${MEM_KB:-0} / 2097152 )); \
+    [ "$JOBS" -le "$(nproc)" ] || JOBS="$(nproc)"; \
+    case "${BUILD_JOBS:-0}" in *[!0-9]*) ;; *) [ "${BUILD_JOBS:-0}" -eq 0 ] || JOBS="$BUILD_JOBS" ;; esac; \
+    [ "$JOBS" -ge 1 ] || JOBS=1; \
+    echo "Compiling with $JOBS parallel job(s): $(nproc) CPUs, $(( ${MEM_KB:-0} / 1024 )) MiB RAM available"; \
+    cmake -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DGGML_NATIVE=OFF \
         -DSD_CUDA=ON \
         -DSD_BUILD_SHARED_LIBS=OFF \
-    && cmake --build build --config Release -j "$(nproc)"
+    && cmake --build build --config Release -j "$JOBS"
 
 # ---------------------------------------------------------------------------
 # Stage 2: build the videogate shim (stdlib Go, static)

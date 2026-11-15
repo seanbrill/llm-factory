@@ -19,7 +19,7 @@ export async function loadSysInfo() {
   try {
     sysinfo.set(await api<SysInfo>("/api/sysinfo"));
   } catch {
-    sysinfo.set(null);
+    /* keep the last known picture (null until the first load) */
   }
 }
 export async function loadVersion() {
@@ -61,8 +61,8 @@ export async function loadResources() {
 // ---- toast -----------------------------------------------------------------
 export const toastMsg = writable<string>("");
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
-export function toast(msg: string) {
+export function toast(msg: string, ms = 2800) {
   toastMsg.set(msg);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastMsg.set(""), 2800);
+  toastTimer = setTimeout(() => toastMsg.set(""), ms);
 }

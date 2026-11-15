@@ -1,13 +1,13 @@
 // Build-page state hoisted to a module store so it survives page navigation.
-// The build runs on the SERVER; this store owns the form selections, the live
-// run state, and a module-scoped poll timer. Because the timer lives here (not
-// in the component), switching app pages no longer drops the active build — the
-// log keeps streaming and returning to Build shows it live. attachIfRunning()
-// additionally reconnects after a full page refresh (which clears module state).
+// Builds run on the SERVER, in a queue: one at a time per engine, the engines in
+// parallel. This store owns the form selections, a mirror of the queue
+// (/api/builds), each job's streamed log, and a module-scoped poll timer — so
+// switching app pages doesn't drop a running build, and attach() picks the
+// queue back up after a full page refresh (which clears module state).
 import { api, post } from "./api";
 import { toast } from "./stores";
-import { ctxDefaultFor } from "./util";
-import type { Model } from "./types";
+import { ctxDefaultFor, engineBadge } from "./util";
+import type { BuildConfig, BuildJob, BuildSnapshot, Model, SysInfo } from "./types";
 
 export const build = $state({
   // picker + filters
@@ -22,25 +22,33 @@ export const build = $state({
   // form
   imageName: "",
   tag: "latest",
+  // Replaced by this machine's defaults from /api/sysinfo (applyMachineDefaults)
+  // until the user picks an engine/compute themselves (formTouched).
   engine: "docker",
-  compute: "cuda",
+  compute: "cpu",
+  formTouched: false,
   systemPrompt: "",
   injectMode: "missing",
   ctxTier: "auto",
   memTier: "0",
   route: "",
   autostart: false,
-  // run state
-  building: false,
-  status: "",
-  phase: "",
-  pct: null as number | null,
-  log: "",
-  showLog: false,
+  // queue
+  submitting: false,
+  error: "",
+  jobs: [] as BuildJob[],
+  showHistory: false,
 });
 
-let timer: ReturnType<typeof setInterval> | undefined;
-let offset = 0;
+// A job's log and progress as this tab has streamed it, keyed by job id.
+export interface JobView {
+  open: boolean; // log expanded
+  log: string;
+  offset: number; // next log line to fetch
+  phase: string;
+  pct: number | null; // determinate progress (downloads), else null
+}
+export const views = $state<Record<string, JobView>>({});
 
 // The compute the selected model will actually build for. build.compute is the
 // user's pick, kept as-is so it comes back when they switch models; a runtime
@@ -58,46 +66,116 @@ export function ctxSize(): number {
   return parseInt(build.ctxTier, 10) || 0;
 }
 
+// Machine-aware form defaults: a Mac with a libkrun Podman machine builds for
+// podman + vulkan, an NVIDIA host for docker + cuda, anything else docker + cpu.
+// Never overrides an engine/compute the user (or a restored build) chose.
+export function applyMachineDefaults(si: SysInfo | null) {
+  if (!si?.default_engine || build.formTouched) return;
+  build.engine = si.default_engine;
+  build.compute = si.default_compute || "cpu";
+}
+
+// ---- queue polling -----------------------------------------------------------
+
+let timer: ReturnType<typeof setTimeout> | undefined;
+let ticking = false;
+let again = false;
+let lastActive = false;
+const seen = new Map<string, string>(); // job id -> status this tab last saw (for toasts)
+
+function view(id: string): JobView {
+  if (!views[id]) views[id] = { open: false, log: "", offset: 0, phase: "", pct: null };
+  return views[id];
+}
+
 // Derive a phase label + determinate % from a streamed log line.
-function trackPhase(line: string) {
+function trackPhase(v: JobView, line: string) {
   const dl = line.match(/Downloading\s+(.+?)\s*\.\.\./);
-  if (dl) { build.phase = "Downloading " + dl[1]; build.pct = 0; return; }
+  if (dl) { v.phase = "Downloading " + dl[1]; v.pct = 0; return; }
   const pc = line.match(/(\d+)%\s*\(([\d.]+)\s*\/\s*([\d.]+)\s*GB\)/);
-  if (pc) { build.pct = parseInt(pc[1], 10); return; }
-  if (/^Saved /.test(line)) { build.pct = 100; return; }
-  if (/^Stag(ing|ed)/.test(line)) { build.phase = line.trim(); build.pct = null; return; }
-  if (/^#\d+/.test(line)) { build.phase = "Building image — " + line.slice(0, 64).trim(); build.pct = null; return; }
+  if (pc) { v.pct = parseInt(pc[1], 10); return; }
+  if (/^Saved /.test(line)) { v.pct = 100; return; }
+  if (/^Stag(ing|ed)/.test(line)) { v.phase = line.trim(); v.pct = null; return; }
+  if (/^(Memory check|Transfer \d\/\d|Loaded into|Exporting)/.test(line) || / so it compiles on /.test(line)) {
+    v.phase = line.trim().slice(0, 140); v.pct = null; return;
+  }
+  if (/^#\d+/.test(line)) { v.phase = "Building image — " + line.slice(0, 64).trim(); v.pct = null; return; }
 }
 
-interface Snap { active?: boolean; status?: string; lines?: string[]; next_offset?: number; config?: Record<string, any> }
-
-function poll() {
-  clearInterval(timer);
-  timer = setInterval(async () => {
-    let st: Snap;
-    try { st = await api("/api/build/state?offset=" + offset); } catch { return; }
-    for (const l of st.lines ?? []) { build.log += l + "\n"; trackPhase(l); }
-    offset = st.next_offset ?? offset;
-    const running = !!st.active || st.status === "running";
-    if (st.status) build.status = running ? "Building…" : st.status === "done" ? "Done ✓" : "Failed";
-    if (!running) {
-      clearInterval(timer); timer = undefined;
-      build.building = false;
-      if (st.status === "done") { build.pct = 100; build.phase = "Image built and exported"; toast("Image built."); }
-      else if (st.status === "failed") { build.phase = "Build failed — see log"; toast("Build failed — see log."); }
-    }
-  }, 800);
+async function fetchLog(j: BuildJob) {
+  const v = view(j.id);
+  let st: BuildSnapshot;
+  try {
+    st = await api<BuildSnapshot>(`/api/builds/state?id=${encodeURIComponent(j.id)}&offset=${v.offset}`);
+  } catch { return; }
+  const lines = st.lines ?? [];
+  if (lines.length) {
+    v.log += lines.join("\n") + "\n";
+    for (const l of lines) trackPhase(v, l);
+  }
+  v.offset = st.next_offset ?? v.offset;
 }
+
+// A finished job this tab watched (or started) gets a toast. Jobs first seen
+// already finished — history after a refresh — don't.
+function noteTransition(j: BuildJob) {
+  const before = seen.get(j.id);
+  seen.set(j.id, j.status);
+  if (j.active || !before || before === j.status) return;
+  const v = views[j.id];
+  if (j.status === "done" && v) { v.pct = 100; v.phase = "Image built and exported"; }
+  if (j.kind !== "model") return; // the Ensembles page reports its own builds
+  if (j.status === "done") toast(`Image built: ${j.ref}`);
+  else if (j.status === "error") toast(`Build failed: ${j.error || "see its log"}`, 9000);
+  else if (j.status === "canceled") toast(`Build canceled: ${j.ref}`);
+}
+
+function schedule(ms: number) {
+  clearTimeout(timer);
+  timer = setTimeout(tick, ms);
+}
+
+async function tick() {
+  timer = undefined;
+  ticking = true;
+  let ok = true;
+  try {
+    const jobs = (await api<{ jobs: BuildJob[] }>("/api/builds")).jobs ?? [];
+    build.jobs = jobs;
+    // Stream every running job, and keep any log this tab opened or followed current.
+    await Promise.all(
+      jobs
+        .filter((j) => {
+          const v = views[j.id];
+          return j.status === "running" || (!!v && (v.open || v.offset > 0) && j.line_count > v.offset);
+        })
+        .map(fetchLog),
+    );
+    for (const j of jobs) noteTransition(j);
+    for (const id of Object.keys(views)) if (!jobs.some((j) => j.id === id)) delete views[id];
+    lastActive = jobs.some((j) => j.active);
+  } catch {
+    ok = false; // factory restarting — retry while builds were in flight
+  } finally {
+    ticking = false;
+  }
+  if (again) { again = false; schedule(0); }
+  else if (lastActive) schedule(ok ? 1000 : 3000);
+}
+
+// watchQueue refreshes the queue now and keeps polling while builds are queued
+// or running.
+export function watchQueue() {
+  if (ticking) { again = true; return; }
+  schedule(0);
+}
+
+// ---- actions -------------------------------------------------------------------
 
 export async function startBuild() {
   if (!build.selected) { alert("Pick a model first."); return; }
-  build.building = true;
-  build.status = "Starting…";
-  build.phase = "";
-  build.pct = null;
-  build.log = "";
-  build.showLog = true;
-  offset = 0;
+  build.submitting = true;
+  build.error = "";
   const body = {
     model_id: build.selected.id, image_name: build.imageName, tag: build.tag,
     engine: build.engine, compute: effectiveCompute(), system_prompt: build.systemPrompt,
@@ -105,39 +183,63 @@ export async function startBuild() {
     route: build.route, autostart: build.autostart,
   };
   try {
-    await post("/api/build", body);
+    const r = await post<{ id: string; position: number; engine: string }>("/api/build", body);
+    seen.set(r.id, "queued");
+    // Follow the new build's log unless the user is already reading another.
+    view(r.id).open = !Object.values(views).some((v) => v.open);
+    toast(r.position > 0
+      ? `Added to the queue — ${r.position} build${r.position > 1 ? "s" : ""} ahead on ${engineBadge(r.engine)}.`
+      : "Build started.");
   } catch (e) {
-    build.status = "Error: " + (e as Error).message;
-    build.building = false;
-    return;
+    build.error = (e as Error).message;
+  } finally {
+    build.submitting = false;
   }
-  poll();
+  watchQueue();
 }
 
-// Reconnect to a build still running on the server. No-op when this store is
-// already tracking one (the page-navigation case — the timer never stopped).
-// Restores the selected model + form from the build's saved config so a page
-// refreshed mid-build comes back looking as it did.
-export async function attachIfRunning(catalog: Model[]) {
-  if (build.building || timer) return;
-  let st: Snap;
-  try { st = await api("/api/build/state?offset=0"); } catch { return; }
-  if (!(st.active || st.status === "running")) return;
-  const c = st.config ?? {};
+export async function cancelJob(j: BuildJob) {
+  if (j.status === "running" && !confirm(`Cancel the running build of ${j.ref}?`)) return;
+  try {
+    await post("/api/builds/cancel", { id: j.id });
+  } catch (e) {
+    toast("Cancel failed: " + (e as Error).message);
+  }
+  watchQueue();
+}
+
+export function toggleLog(j: BuildJob) {
+  const v = view(j.id);
+  v.open = !v.open;
+  if (v.open && j.line_count > v.offset) fetchLog(j);
+}
+
+// restoreForm refills the form from a build's saved config.
+function restoreForm(c: Partial<BuildConfig>, catalog: Model[]) {
   const m = catalog.find((x) => x.id === c.model_id);
   if (m) { build.selected = m; build.nameTouched = true; }
   if (c.image_name) build.imageName = c.image_name;
   if (c.tag) build.tag = c.tag;
   if (c.engine) build.engine = c.engine;
   if (c.compute) build.compute = c.compute;
+  build.formTouched = true;
   if (typeof c.system_prompt === "string") build.systemPrompt = c.system_prompt;
   if (c.inject_mode) build.injectMode = c.inject_mode;
   if (c.route) build.route = c.route;
   build.autostart = !!c.autostart;
-  build.building = true;
-  build.status = "Building…";
-  build.showLog = true;
-  offset = 0;
-  build.log = "";
-  poll();
+}
+
+// attach loads the queue when the Build page mounts. After a full page refresh
+// it also restores the form from the newest queued/running build and opens the
+// running build's log, so the page comes back looking as it did; on plain page
+// navigation it just refreshes the queue (the poll loop never stopped).
+let attached = false;
+export async function attach(catalog: Model[]) {
+  if (attached) { watchQueue(); return; }
+  attached = true;
+  await tick();
+  const newest = [...build.jobs].reverse().find((j) => j.active && j.kind === "model");
+  if (newest && !build.formTouched) restoreForm(newest.config, catalog);
+  const running = build.jobs.find((j) => j.status === "running");
+  if (running && !Object.values(views).some((v) => v.open)) view(running.id).open = true;
 }

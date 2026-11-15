@@ -208,7 +208,16 @@ Linux). See [Choosing an engine & compute](#choosing-an-engine--compute).
   can reach the Metal GPU: Apple Silicon GPUs have no IOMMU (so no PCI
   passthrough), and Apple's own containerization maintainers confirm GPU access is
   unsupported with no roadmap. The **CUDA image is NVIDIA-only**. *Direct* Metal
-  passthrough into a Linux container is genuinely impossible.
+  passthrough into a Linux container is genuinely impossible. Docker Desktop runs
+  its VM on **Apple Virtualization** by default, which has no GPU device at all —
+  run a Vulkan image there and the factory says so and points you to Podman.
+  *Experimental, unverified:* Docker Desktop's other VM manager, **Docker VMM**
+  (Settings → General → Virtual Machine Manager), has a `virtio-gpu` device with a
+  Vulkan host, so the factory's Vulkan image *might* work on it; and Docker Desktop
+  advertises an undocumented WebGPU device (`docker.com/gpu=webgpu`, API remoting to
+  the host's Dawn/Metal) that llama.cpp can't use yet (its WebGPU backend needs Dawn
+  in the container). **Settings → Check GPU access** shows what each engine gives
+  a container.
 - **GPU container — possible via Podman + libkrun (krunkit), and the factory builds
   it for you.** The community route around the passthrough wall is
   paravirtualization: a `virtio-gpu` device plus a Vulkan→Metal (MoltenVK) bridge,
@@ -219,6 +228,22 @@ Linux). See [Choosing an engine & compute](#choosing-an-engine--compute).
   driver; if the container sees no GPU, compare against
   [RamaLama](https://github.com/containers/ramalama) and Red Hat's
   [native-speed write-up](https://developers.redhat.com/articles/2025/09/18/reach-native-speed-macos-llamacpp-container-inference).
+- **Give the Podman machine enough memory.** `podman machine init` creates a
+  **2 GB** machine, and Docker Desktop and the Podman machine are separate VMs
+  (the sidebar lists each one's memory, and flags a GPU machine that's too small).
+  Compiling the Vulkan image needs about **6 GB** (CPU images about 3 GB): the
+  build sizes its parallel compile jobs to the memory it finds, and when the
+  Podman machine is too small it **compiles on Docker and moves the finished
+  image into Podman** (`docker save` → `podman load`, all in the build log) — or,
+  if neither engine has enough, stops before downloading anything and tells you
+  what to change. To *run* on the GPU, the model's weights plus ~2 GB must fit in
+  the machine's memory. Resize it once (then restart the factory so it
+  reconnects):
+  ```bash
+  podman machine stop && podman machine set --memory 12288 && podman machine start
+  ```
+  Both VMs share the Mac's unified memory, so on a 24 GB Mac don't run big
+  models on both engines at once.
 - **Simplest Mac GPU path — run the engine natively** (no container) against the
   GGUF already in `./models`:
   ```bash

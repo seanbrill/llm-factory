@@ -38,7 +38,7 @@ type Server struct {
 	mux       *http.ServeMux
 	modelHost string // host where launched model containers are reachable
 
-	bs buildState // current/last build, buffered so the UI can reconnect after a refresh
+	q *buildQueue // queued/running/recent builds, buffered so the UI can reconnect after a refresh
 
 	statsMu   sync.Mutex
 	buildSecs map[string]float64 // compute -> last successful build duration (s)
@@ -57,107 +57,6 @@ type Server struct {
 	gpuTotal float64
 	gpuOK    bool
 	gpuAt    time.Time
-}
-
-// buildState buffers an in-flight (or just-finished) build so a refreshed UI can
-// reconnect: it holds the streamed log lines plus status/timing. Only one build
-// runs at a time (tryStart enforces it).
-// buildConfig is the form config of a build, kept so a refreshed UI can restore
-// the build form (and show what's building).
-type buildConfig struct {
-	ModelID      string  `json:"model_id"`
-	ImageName    string  `json:"image_name"`
-	Tag          string  `json:"tag"`
-	Engine       string  `json:"engine"`
-	Compute      string  `json:"compute"`
-	SystemPrompt string  `json:"system_prompt"`
-	InjectMode   string  `json:"inject_mode"`
-	CtxSize      int     `json:"ctx_size"`
-	MemoryGB     float64 `json:"memory_gb"`
-	Route        string  `json:"route"`
-	Autostart    bool    `json:"autostart"`
-}
-
-type buildState struct {
-	mu         sync.Mutex
-	active     bool
-	status     string // "" (idle) | running | done | error
-	ref        string
-	cfg        buildConfig
-	etaSecs    int
-	startTime  time.Time
-	finishTime time.Time
-	lines      []string
-}
-
-func (b *buildState) tryStart(ref string, eta int, cfg buildConfig) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.active {
-		return false
-	}
-	b.active = true
-	b.status = "running"
-	b.ref = ref
-	b.cfg = cfg
-	b.etaSecs = eta
-	b.startTime = time.Now()
-	b.finishTime = time.Time{}
-	b.lines = nil
-	return true
-}
-
-func (b *buildState) append(line string) {
-	b.mu.Lock()
-	b.lines = append(b.lines, line)
-	b.mu.Unlock()
-}
-
-func (b *buildState) finish(status string) {
-	b.mu.Lock()
-	b.active = false
-	b.status = status
-	b.finishTime = time.Now()
-	b.mu.Unlock()
-}
-
-type buildSnapshot struct {
-	Active     bool        `json:"active"`
-	Status     string      `json:"status"`
-	ElapsedMs  int64       `json:"elapsed_ms"`
-	EtaSeconds int         `json:"eta_seconds"`
-	Ref        string      `json:"ref"`
-	Compute    string      `json:"compute"`
-	Config     buildConfig `json:"config"`
-	Lines      []string    `json:"lines"`
-	NextOffset int         `json:"next_offset"`
-}
-
-// snapshot returns log lines from offset onward plus current meta.
-func (b *buildState) snapshot(offset int) buildSnapshot {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	total := len(b.lines)
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > total {
-		offset = total
-	}
-	lines := append([]string{}, b.lines[offset:]...)
-	var elapsed int64
-	if !b.startTime.IsZero() {
-		end := time.Now()
-		if !b.active && !b.finishTime.IsZero() {
-			end = b.finishTime
-		}
-		elapsed = end.Sub(b.startTime).Milliseconds()
-	}
-	return buildSnapshot{
-		Active: b.active, Status: b.status, ElapsedMs: elapsed,
-		EtaSeconds: b.etaSecs, Ref: b.ref, Compute: b.cfg.Compute, Config: b.cfg,
-		Lines: lines, NextOffset: total,
-	}
 }
 
 // New constructs the HTTP handler tree. modelHost is where model containers'
@@ -183,6 +82,7 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	}
 	s := &Server{
 		b: b, cat: cat, mux: http.NewServeMux(), modelHost: modelHost,
+		q:         newBuildQueue(),
 		statsPath: filepath.Join(b.BaseDir, "config", "build-stats.json"),
 		ens:       ensemble.NewStore(b.BaseDir),
 		mediaDir:  filepath.Join(b.BaseDir, "media"),
@@ -198,6 +98,10 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.mux.HandleFunc("/api/model/delete", s.handleModelDelete)
 	s.mux.HandleFunc("/api/build", s.handleBuild)
 	s.mux.HandleFunc("/api/build/state", s.handleBuildState)
+	s.mux.HandleFunc("/api/builds", s.handleBuilds)
+	s.mux.HandleFunc("/api/builds/state", s.handleBuildsState)
+	s.mux.HandleFunc("/api/builds/cancel", s.handleBuildsCancel)
+	s.mux.HandleFunc("/api/gpu/probe", s.handleGPUProbe)
 	s.mux.HandleFunc("/api/images", s.handleImages)
 	s.mux.HandleFunc("/api/image/delete", s.handleImageDelete)
 	s.mux.HandleFunc("/api/image/download", s.handleImageDownload)
@@ -249,13 +153,23 @@ func engineErrPayload(err error) map[string]string {
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	// Annotate each model with the compute targets its runtime can be built for,
 	// so the UI only offers those (Piper TTS is CPU-only, image gen Vulkan-only).
+	// Compiles says the build compiles a runtime from source, which needs
+	// sysinfo's compile_min_gb on the engine that builds it.
 	type item struct {
 		catalog.Model
 		Computes []string `json:"computes"`
+		Compiles bool     `json:"compiles"`
 	}
 	out := make([]item, 0, len(s.cat.Models))
+	compiles := map[string]bool{} // runtime|modality (which picks the family) -> Compiles
 	for _, m := range s.cat.Models {
-		out = append(out, item{Model: m, Computes: s.b.Computes(m)})
+		key := m.Rt() + "|" + m.Mod()
+		c, seen := compiles[key]
+		if !seen {
+			c = s.b.Compiles(m)
+			compiles[key] = c
+		}
+		out = append(out, item{Model: m, Computes: s.b.Computes(m), Compiles: c})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -349,8 +263,9 @@ func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, cs)
 }
 
-// handleSysInfo returns the active engine machine's RAM/CPU/GPU so the build form
-// can show whether a model fits the user's actual system.
+// handleSysInfo returns each engine machine's RAM/CPU/GPU (plus a legacy summary
+// and the build form's defaults) so the UI can show whether a model fits where
+// it will build and run.
 func (s *Server) handleSysInfo(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 	defer cancel()
@@ -408,9 +323,10 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"logs": logs})
 }
 
-// handleBuild starts a build (one at a time) and returns immediately. The build
-// runs detached in a goroutine; its log lines + status are buffered in
-// s.bs so the UI can poll /api/build/state and reconnect after a refresh.
+// handleBuild queues a build and returns immediately with {id, position}. It runs
+// detached on its engine's worker (after the jobs ahead of it there); its log
+// lines + status are buffered in the queue so the UI can poll /api/builds/state
+// and reconnect after a refresh.
 func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -438,6 +354,10 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown model id: "+req.ModelID, http.StatusBadRequest)
 		return
 	}
+	if strings.TrimSpace(req.ImageName) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "image name is required"})
+		return
+	}
 
 	engine := normalizeEngine(req.Engine)
 	compute := normalizeCompute(req.Compute)
@@ -463,50 +383,26 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		Engine: engine, Compute: compute, SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode,
 		CtxSize: req.CtxSize, MemoryGB: req.MemoryGB, Route: route, Autostart: req.Autostart,
 	}
-	// One build at a time. tryStart resets the buffer and marks running; a second
-	// attempt (e.g. after a refresh + re-click) is rejected so the UI reconnects.
-	if !s.bs.tryStart(opts.Ref(), int(s.etaFor(compute)), cfg) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "a build is already in progress"})
+	// The job runs on a context of its own (not the request's), so a client
+	// refresh/disconnect can't cancel it; POST /api/builds/cancel can.
+	job := &buildJob{
+		kind: "model", lane: engine, ref: opts.Ref(), name: model.Name, cfg: cfg,
+		eta: int(s.etaFor(compute)),
+		run: func(ctx context.Context, log builder.LogFunc) error {
+			start := time.Now()
+			if err := s.b.Build(ctx, opts, log); err != nil {
+				return err
+			}
+			s.recordBuild(compute, time.Since(start).Seconds())
+			return nil
+		},
+	}
+	pos, err := s.q.enqueue(job)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-
-	go s.runBuild(opts, compute)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
-}
-
-// runBuild executes a build detached from any request, appending progress to the
-// buffered build state.
-func (s *Server) runBuild(opts builder.BuildOptions, compute string) {
-	log := func(line string) { s.bs.append(line) }
-
-	// Detached context so a client refresh/disconnect can't cancel the build.
-	// (Capped so a wedged build can't hold the slot forever.)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
-	defer cancel()
-
-	start := time.Now()
-	if err := s.b.Build(ctx, opts, log); err != nil {
-		// Lead with the recognized cause (engine down / disk / memory / port);
-		// the full engine output was already streamed into the log above.
-		if hint := builder.ClassifyEngineError(err); hint != "" {
-			s.bs.append("ERROR: " + hint)
-			s.bs.append("detail: " + err.Error())
-		} else {
-			s.bs.append("ERROR: " + err.Error())
-		}
-		s.bs.finish("error")
-		return
-	}
-	s.recordBuild(compute, time.Since(start).Seconds())
-	s.bs.append("DONE")
-	s.bs.finish("done")
-}
-
-// handleBuildState returns buffered build progress from ?offset onward so the UI
-// can stream it (and reconnect after a refresh).
-func (s *Server) handleBuildState(w http.ResponseWriter, r *http.Request) {
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	writeJSON(w, http.StatusOK, s.bs.snapshot(offset))
+	enqueueResponse(w, job, pos)
 }
 
 // ---- build-duration stats (for the UI's ETA) ------------------------------
@@ -578,7 +474,17 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	// Resource guardrail: refuse to start a model that would over-subscribe VRAM
 	// or RAM given what's already running (a crash risk), unless the caller forces
 	// it ("Run anyway"). 409 + a structured payload so the UI can offer the choice.
+	// First: can this engine's machine hold the model at all? (A Podman machine
+	// can be far smaller than the Mac.) Blocks only an obvious misfit; a tight
+	// or mmap-able one comes back as a warning on the started run.
+	var warning string
 	if !req.Force {
+		block, msg := s.engineFits(r.Context(), labels["local-llm.model"], engine, compute)
+		if block {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": msg, "code": "engine_memory", "needs_force": true})
+			return
+		}
+		warning = msg
 		if msg, code := s.runFits(r.Context(), labels["local-llm.model"], compute); msg != "" {
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"error": msg, "code": code, "needs_force": true,
@@ -601,6 +507,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		log.Printf("regen proxy after run: %v", err) // non-fatal
 	}
 	resp := map[string]any{"id": id, "port": req.Port, "engine": engine, "compute": compute}
+	if warning != "" {
+		resp["warning"] = warning
+	}
 	if route != "" {
 		resp["url"] = "http://" + route + ".localhost" + proxyURLSuffix(s.b.ProxyPort())
 	}

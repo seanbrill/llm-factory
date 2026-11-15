@@ -1,10 +1,10 @@
 <script lang="ts">
   import Icon from "../components/Icon.svelte";
   import ModalityBadge from "../components/ModalityBadge.svelte";
-  import { api, post, labelVal } from "../lib/api";
+  import { api, post, labelVal, type ApiError } from "../lib/api";
   import { imageRef } from "../lib/util";
   import { ensembles, catalog, loadEnsembles, toast } from "../lib/stores";
-  import type { Ensemble, EnsembleMember, ImageInfo } from "../lib/types";
+  import type { BuildSnapshot, Ensemble, EnsembleMember, ImageInfo } from "../lib/types";
 
   const TOOL_FOR: Record<string, string> = {
     text: "chat", code: "chat", reasoning: "chat", vision: "see_image",
@@ -81,20 +81,28 @@
     await loadEnsembles();
   }
 
+  // Ensemble builds go through the shared build queue (they wait behind model
+  // builds for the same engine); follow this job's own log by its id.
   async function build(e: Ensemble) {
     buildLog = `Building “${e.name}” …\n`;
-    try { await post("/api/ensemble/build", { id: e.id, compute: e.compute }); }
+    let job: { id: string; position: number };
+    try { job = await post("/api/ensemble/build", { id: e.id, compute: e.compute }); }
     catch (err) { buildLog += "ERROR: " + (err as Error).message + "\n"; return; }
+    if (job.position > 0) buildLog += `Queued — ${job.position} build${job.position > 1 ? "s" : ""} ahead on this engine.\n`;
     clearInterval(buildTimer);
     let off = 0;
     buildTimer = setInterval(async () => {
-      let st: { lines?: string[]; next_offset?: number; status?: string };
-      try { st = await api("/api/build/state?offset=" + off); } catch { return; }
+      let st: BuildSnapshot;
+      try { st = await api(`/api/builds/state?id=${encodeURIComponent(job.id)}&offset=${off}`); }
+      catch (err) {
+        if ((err as ApiError).status === 404) clearInterval(buildTimer); // gone (factory restarted)
+        return;
+      }
       for (const l of st.lines ?? []) buildLog += l + "\n";
       off = st.next_offset ?? off;
-      if (st.status && st.status !== "running") {
+      if (!st.active) {
         clearInterval(buildTimer);
-        toast(st.status === "done" ? "Ensemble image built." : "Ensemble build failed — see log.");
+        toast(st.status === "done" ? "Ensemble image built." : st.status === "canceled" ? "Ensemble build canceled." : "Ensemble build failed — see log.");
       }
     }, 1000);
   }
