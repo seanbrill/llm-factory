@@ -489,3 +489,180 @@ func enqueueResponse(w http.ResponseWriter, j *buildJob, position int) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": status, "id": j.id, "position": position, "engine": j.lane})
 }
+
+// ---- reorder and retry --------------------------------------------------------
+
+var (
+	errJobNotQueued = errors.New("only a build that hasn't started can be moved")
+	errJobActive    = errors.New("that build is still queued or running")
+	errBadMove      = errors.New(`"to" must be up, down, top or bottom`)
+)
+
+// move reorders a queued job among the queued jobs of its own lane (to: up,
+// down, top, bottom). Jobs run in slice order per lane, so this swaps slice
+// positions; other lanes' jobs keep their places.
+func (q *buildQueue) move(id, to string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	j := q.find(id)
+	if j == nil {
+		return errJobNotFound
+	}
+	if j.status != jobQueued {
+		return errJobNotQueued
+	}
+	// Indexes (in q.jobs) of this lane's queued jobs, in run order.
+	var lane []int
+	at := -1
+	for i, o := range q.jobs {
+		if o.lane == j.lane && o.status == jobQueued {
+			if o == j {
+				at = len(lane)
+			}
+			lane = append(lane, i)
+		}
+	}
+	dest := at
+	switch to {
+	case "up":
+		dest = at - 1
+	case "down":
+		dest = at + 1
+	case "top":
+		dest = 0
+	case "bottom":
+		dest = len(lane) - 1
+	default:
+		return errBadMove
+	}
+	if dest < 0 || dest >= len(lane) || dest == at {
+		return nil // already there
+	}
+	// Rotate the lane's queued jobs within their own slots.
+	order := make([]*buildJob, len(lane))
+	for k, i := range lane {
+		order[k] = q.jobs[i]
+	}
+	moved := order[at]
+	order = append(order[:at], order[at+1:]...)
+	order = append(order[:dest], append([]*buildJob{moved}, order[dest:]...)...)
+	for k, i := range lane {
+		q.jobs[i] = order[k]
+	}
+	return nil
+}
+
+// retry queues a finished job again with the same settings, as a new job.
+func (q *buildQueue) retry(id string) (*buildJob, int, error) {
+	q.mu.Lock()
+	j := q.find(id)
+	if j == nil {
+		q.mu.Unlock()
+		return nil, 0, errJobNotFound
+	}
+	if j.active() {
+		q.mu.Unlock()
+		return nil, 0, errJobActive
+	}
+	for _, o := range q.jobs {
+		if o.active() && o.ref == j.ref && o.lane == j.lane {
+			q.mu.Unlock()
+			return nil, 0, fmt.Errorf("%s is already queued for %s", j.ref, j.lane)
+		}
+	}
+	nj := &buildJob{kind: j.kind, lane: j.lane, ref: j.ref, name: j.name, cfg: j.cfg, eta: j.eta, run: j.run}
+	q.mu.Unlock()
+	pos, err := q.enqueue(nj)
+	return nj, pos, err
+}
+
+// handleBuildsMove reorders a queued build: POST /api/builds/move {"id", "to"}.
+func (s *Server) handleBuildsMove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+		To string `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	switch err := s.q.move(req.ID, req.To); {
+	case errors.Is(err, errJobNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+	case errors.Is(err, errBadMove):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	case err != nil:
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"jobs": s.q.list()})
+	}
+}
+
+// handleBuildsRetry queues a finished build again: POST /api/builds/retry {"id"}
+// -> the same answer as POST /api/build.
+func (s *Server) handleBuildsRetry(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	j, pos, err := s.q.retry(req.ID)
+	switch {
+	case errors.Is(err, errJobNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+	case err != nil:
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	default:
+		enqueueResponse(w, j, pos)
+	}
+}
+
+// running reports whether any build is running right now.
+func (q *buildQueue) running() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, j := range q.jobs {
+		if j.status == jobRunning {
+			return true
+		}
+	}
+	return false
+}
+
+// activeByLane counts queued + running jobs per engine.
+func (q *buildQueue) activeByLane() map[string]int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := map[string]int{}
+	for _, j := range q.jobs {
+		if j.active() {
+			out[j.lane]++
+		}
+	}
+	return out
+}
+
+// whileIdle runs fn only when no build is running, holding the queue lock so
+// none can start meanwhile (a starting job takes the lock in next). It reports
+// whether fn ran.
+func (q *buildQueue) whileIdle(fn func()) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, j := range q.jobs {
+		if j.status == jobRunning {
+			return false
+		}
+	}
+	fn()
+	return true
+}
