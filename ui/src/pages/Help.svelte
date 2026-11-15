@@ -148,8 +148,10 @@
             <dt><Icon name="trash" size={16} />Cleanup</dt>
             <dd>
               If the factory stops in the middle of a build, that build's folder — and an image it was moving between
-              engines — stays on disk. The factory removes them when it starts again, or run “Clean up leftover build
-              folders” from {isMac ? "⌘" : "Ctrl+"}K. It won't clean up while a build is running.
+              engines — stays on disk. The factory removes them when it starts again; you can also clear them from
+              the Library's “Space nothing is using” card or with “Clean up leftover build folders” from
+              {isMac ? "⌘" : "Ctrl+"}K. It won't clean up while a build is running. The same card lists files no image
+              uses, which you delete one by one.
             </dd>
           </div>
           <div>
