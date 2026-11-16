@@ -27,7 +27,7 @@ export interface PlanItem {
   tag: string;
   system_prompt: string;
   inject_mode: string;   // "missing" | "always"
-  ctx_tier: string;      // "auto" | "2048" … "32768" | "max"
+  ctx_tier: string;      // "auto" | "2048" … "65536" | "max"
   memory_gb: number;     // 0 = unlimited
   route: string;         // local URL alias ("" = none)
   autostart: boolean;

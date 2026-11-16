@@ -138,6 +138,7 @@
         <option value="8192">8K</option>
         <option value="16384">16K</option>
         <option value="32768">32K</option>
+        <option value="65536">64K</option>
         <option value="max">{ctxMax}</option>
       </select>
     </label>

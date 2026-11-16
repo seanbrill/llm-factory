@@ -739,4 +739,4 @@ export interface ImageConfig {
   tuning?: Tuning | null;          // baked runtime tuning (label local-llm.tuning)
 }
 
-export const CTX_TIERS = ["2048", "4096", "8192", "16384", "32768"];
+export const CTX_TIERS = ["2048", "4096", "8192", "16384", "32768", "65536"];
