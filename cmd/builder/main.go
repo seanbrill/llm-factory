@@ -18,9 +18,11 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/seanbrill/local-llm/internal/builder"
@@ -106,6 +108,17 @@ func main() {
 	// routes (Podman's restart policy doesn't reliably fire after a machine stop).
 	// Runs in the background so it never blocks serving the UI.
 	go b.RecoverOnStartup(context.Background(), func(s string) { log.Printf("startup recovery: %s", s) })
+
+	// On Ctrl-C or a container stop, stop what runs in the background first: a
+	// tuning benchmark's container is removed rather than left running.
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		log.Print("shutting down")
+		srv.Close()
+		os.Exit(0)
+	}()
 
 	log.Fatal(httpSrv.ListenAndServe())
 }

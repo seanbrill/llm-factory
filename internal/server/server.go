@@ -75,6 +75,10 @@ type Server struct {
 	gpuTotal float64
 	gpuOK    bool
 	gpuAt    time.Time
+
+	// Runtime tuning (tuning.go), made on first use.
+	tuneOnce sync.Once
+	tune     *tuneState
 }
 
 // New constructs the HTTP handler tree. modelHost is where model containers'
@@ -179,6 +183,7 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.openArchive()     // the FileFreak archive, asked before every weight download (filefreak.go)
 	s.registerFileFreak()
 	s.registerNative() // native packages (native.go)
+	s.registerTuning() // runtime tuning, presets and the benchmark (tuning.go)
 	return s, nil
 }
 
@@ -429,6 +434,10 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		// Harness bakes the agent harness: a harness.json object, true for
 		// the defaults, or false/null/absent for none.
 		Harness json.RawMessage `json:"harness"`
+		// Tuning bakes runtime tuning (docs/TUNING.md): a Tuning object, or
+		// {"preset": "speed"} to size one for the engine. ctx_size still
+		// works on its own, and fills in a tuning that sets no context.
+		Tuning json.RawMessage `json:"tuning"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
@@ -459,6 +468,11 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 	engine := normalizeEngine(req.Engine)
 	compute := normalizeCompute(req.Compute)
 	route := sanitizeRoute(req.Route)
+	tune, draft, err := s.buildTuning(r.Context(), req.Tuning, model, engine, compute, req.CtxSize)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	opts := builder.BuildOptions{
 		Model:        model,
@@ -474,13 +488,15 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		Route:        route,
 		Autostart:    req.Autostart,
 		Harness:      harnessCfg,
+		Tuning:       tune,
+		Draft:        draft,
 	}
 
 	cfg := buildConfig{
 		ModelID: req.ModelID, ImageName: req.ImageName, Tag: req.Tag,
 		Engine: engine, Compute: compute, SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode,
 		CtxSize: req.CtxSize, MemoryGB: req.MemoryGB, Route: route, Autostart: req.Autostart,
-		Harness: harnessCfg,
+		Harness: harnessCfg, Tuning: tune,
 	}
 	// The job runs on a context of its own (not the request's), so a client
 	// refresh/disconnect can't cancel it; POST /api/builds/cancel can.
@@ -552,6 +568,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		// Workspace is the host folder an image with a baked harness gets at
 		// /workspace ("" = the factory's workspace/ folder). See runWorkspace.
 		Workspace string `json:"workspace"`
+		// Tuning overrides the image's runtime tuning for this run (no
+		// rebuild), merged on tuning_base: "saved" (default: baked < saved
+		// < tuning) or "baked" (baked < tuning). See docs/TUNING.md.
+		Tuning     json.RawMessage `json:"tuning"`
+		TuningBase string          `json:"tuning_base"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -579,6 +600,13 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	// Runtime tuning (tuning.go): nil when neither the image, the saved
+	// settings nor the request set one, so an untuned run is unchanged.
+	tuned, err := s.runTuningFor(r.Context(), req.Ref, engine, req.Tuning, req.TuningBase)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	// Resource guardrail: refuse to start a model that would over-subscribe VRAM
 	// or RAM given what's already running (a crash risk), unless the caller forces
@@ -589,6 +617,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	var warning string
 	if !req.Force {
 		block, msg := s.engineFits(r.Context(), labels["local-llm.model"], engine, compute)
+		if tuned != nil {
+			// The tuning's estimate (context, cache, draft…) replaces the
+			// weights-plus-2-GB rule of thumb.
+			block, msg = tunedFit(tuned, compute)
+		}
 		if block {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": msg, "code": "engine_memory", "needs_force": true})
 			return
@@ -603,11 +636,16 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	id, err := s.b.Run(r.Context(), builder.RunOptions{
+	runOpts := builder.RunOptions{
 		Ref: req.Ref, HostPort: req.Port, Engine: engine, Compute: compute,
 		MemoryGB: memGB, Route: route, Autostart: autostart, Orchestrator: orchestrator,
 		SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode, Workspace: workspace,
-	})
+	}
+	if tuned != nil {
+		runOpts.Env = append(runOpts.Env, tuned.env...)
+		runOpts.Labels = append(runOpts.Labels, tuned.label)
+	}
+	id, err := s.b.Run(r.Context(), runOpts)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
 		return
@@ -622,6 +660,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if workspace != "" {
 		resp["workspace"] = workspace
+	}
+	if tuned != nil {
+		resp["tuning"], resp["estimate"] = tuned.effective, tuned.priced.Estimate
 	}
 	if route != "" {
 		resp["url"] = "http://" + route + ".localhost" + proxyURLSuffix(s.b.ProxyPort())

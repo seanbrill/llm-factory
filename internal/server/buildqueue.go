@@ -20,6 +20,7 @@ import (
 
 	"github.com/seanbrill/local-llm/internal/agent"
 	"github.com/seanbrill/local-llm/internal/builder"
+	"github.com/seanbrill/local-llm/internal/tuning"
 )
 
 // Job statuses.
@@ -58,6 +59,8 @@ type buildConfig struct {
 	Autostart    bool    `json:"autostart"`
 	// Harness is the agent harness baked into the image (nil = none).
 	Harness *agent.Config `json:"harness,omitempty"`
+	// Tuning is the runtime tuning baked into the image (nil = none).
+	Tuning *tuning.Tuning `json:"tuning,omitempty"`
 }
 
 // buildJob is one queued, running or finished image build.
