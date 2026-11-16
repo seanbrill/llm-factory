@@ -62,7 +62,7 @@ export interface TuningInfo {
   effective?: Tuning | null;
   source?: "baked" | "saved";
   presets: PresetOption[];
-  model?: { id?: string; name?: string; trained_ctx?: number; vision?: boolean; draft?: string; draft_baked?: boolean; modality?: string; arch?: string };
+  model?: { id?: string; name?: string; trained_ctx?: number; vision?: boolean; draft?: string; draft_baked?: boolean; modality?: string; arch?: { arch?: string; reasoning_effort?: boolean; thinks?: boolean } };
   engine?: { name?: string; compute?: string; mem_gb?: number; usable_gb?: number };
   estimate?: Estimate;
   fits?: boolean;
@@ -149,6 +149,7 @@ export function tuningChips(t: Tuning | null | undefined): string[] {
   if (t.parallel) out.push(t.parallel === 1 ? "1 request at a time" : `${t.parallel} requests${t.kv_unified ? " share it" : " at once"}`);
   if (t.reasoning === "on") out.push("Thinking on");
   else if (t.reasoning === "off") out.push("Thinking off");
+  if (t.reasoning_effort) out.push(`${t.reasoning_effort[0].toUpperCase()}${t.reasoning_effort.slice(1)} effort`);
   return out;
 }
 
@@ -161,6 +162,7 @@ export function tuningLine(t: Tuning | null | undefined): string {
   if (t.spec && t.spec !== "none") out.push("look-ahead");
   if (t.parallel && t.parallel > 1) out.push(`${t.parallel} requests`);
   if (t.reasoning === "on") out.push("thinking on");
+  if (t.reasoning_effort) out.push(`${t.reasoning_effort} effort`);
   return out.join(" · ");
 }
 

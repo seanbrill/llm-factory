@@ -205,6 +205,15 @@
   const sourceText = $derived(
     info?.source === "saved" || (savedT && !info?.source) ? "Saved on the Tune page" : "Baked into the image when it was built",
   );
+  type Effort = NonNullable<Tuning["reasoning_effort"]>;
+  // Templates that read reasoning_effort (gpt-oss) always think: effort, not on/off.
+  const effortModel = $derived(!!info?.model?.arch?.reasoning_effort);
+  const effortOpts: { value: Effort | ""; label: string }[] = [
+    { value: "", label: "Default" },
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High" },
+  ];
   const flashOpts: { value: Switch; label: string }[] = [
     { value: "auto", label: "Auto" },
     { value: "on", label: "On" },
@@ -335,6 +344,15 @@
                   {/if}
                 </div>
               </div>
+              {#if effortModel}
+              <div class="row">
+                <div class="k"><b>Reasoning effort</b><small>How long it thinks before answering. Low answers sooner; High helps with hard coding and debugging. Model default is medium.</small></div>
+                <div class="v">
+                  <Seg label="Reasoning effort" value={draft.reasoning_effort ?? ""} onchange={(v: Effort | "") => set("reasoning_effort", v || undefined)} options={effortOpts} />
+                </div>
+              </div>
+              {/if}
+              {#if !effortModel || info?.model?.arch?.thinks}
               <div class="row">
                 <div class="k"><b>Thinking</b><small>Off answers sooner. On helps with multi-step coding. A limit caps how long it thinks.</small></div>
                 <div class="v">
@@ -344,6 +362,7 @@
                   {/if}
                 </div>
               </div>
+              {/if}
               <details class="more">
                 <summary>
                   <span class="k"><b>Sampling and memory</b><small>{[
