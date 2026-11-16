@@ -23,8 +23,10 @@ export interface Tuning {
   draft_max?: number;
   draft_min?: number;
   reasoning?: Switch;
+  reasoning_effort?: "low" | "medium" | "high";
   reasoning_budget?: number;
-  cache_ram_mb?: number;
+  cache_ram_mb?: number; // MiB; -1 = no limit, 0 = off
+  ctx_checkpoints?: number;
   threads?: number;
   temperature?: number;
   top_p?: number;
@@ -33,7 +35,16 @@ export interface Tuning {
   repeat_penalty?: number;
 }
 
-export interface Estimate { weights_gb: number; kv_gb: number; total_gb: number }
+export interface Estimate {
+  weights_gb: number;
+  kv_gb: number;
+  total_gb: number;
+  compute_gb?: number;
+  state_gb?: number;
+  cache_gb?: number;
+  overhead_gb?: number;
+  approx?: boolean;
+}
 
 export interface PresetOption {
   id: Preset;
@@ -51,8 +62,13 @@ export interface TuningInfo {
   effective?: Tuning | null;
   source?: "baked" | "saved";
   presets: PresetOption[];
-  model?: { id?: string; name?: string; trained_ctx?: number; vision?: boolean; draft?: string };
-  engine?: { name?: string; mem_gb?: number };
+  model?: { id?: string; name?: string; trained_ctx?: number; vision?: boolean; draft?: string; draft_baked?: boolean; modality?: string; arch?: string };
+  engine?: { name?: string; compute?: string; mem_gb?: number; usable_gb?: number };
+  estimate?: Estimate;
+  fits?: boolean;
+  warning?: string;
+  notes?: string[];
+  error?: string;
 }
 
 export interface EstimateResult {
@@ -68,6 +84,8 @@ export interface BenchResult {
   tuning: Tuning;
   ok: boolean;
   error?: string;
+  skipped?: boolean;
+  estimate?: Estimate;
   load_s?: number;
   prompt_tps?: number;
   gen_tps?: number;
@@ -82,6 +100,7 @@ export interface BenchState {
   step?: number;
   total?: number;
   current?: string;
+  phase?: string;
   error?: string;
   results: BenchResult[];
 }
@@ -187,8 +206,8 @@ export const saveTuning = (ref: string, engine: string, tuning: Tuning) =>
   api<TuningInfo>("/api/tuning", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref, engine, tuning: clean(tuning) }) });
 export const clearTuning = (ref: string, engine: string) => api(`/api/tuning?${q({ ref, engine })}`, { method: "DELETE" });
 
-export const startBench = (body: { ref: string; engine: string; compute: string; presets?: string[]; candidates?: Tuning[]; workload: "coding" | "chat" }) =>
-  post<{ id: string }>("/api/tuning/benchmark", body);
+export const startBench = (body: { ref: string; engine: string; compute: string; presets?: string[]; candidates?: Tuning[]; labels?: string[]; workload: "coding" | "chat" }) =>
+  post<{ id: string; total?: number }>("/api/tuning/benchmark", body);
 export const benchState = (id: string) => api<BenchState>(`/api/tuning/benchmark/${encodeURIComponent(id)}`);
 export const cancelBench = (id: string) => post(`/api/tuning/benchmark/${encodeURIComponent(id)}/cancel`, {});
 export const applyBench = (id: string, index: number) => post(`/api/tuning/benchmark/${encodeURIComponent(id)}/apply`, { index });

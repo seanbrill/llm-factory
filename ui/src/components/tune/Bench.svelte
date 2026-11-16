@@ -94,7 +94,7 @@
     busy = true;
     error = "";
     try {
-      const r = await startBench({ ref, engine, compute, candidates: candidates.map((c) => c.tuning), workload });
+      const r = await startBench({ ref, engine, compute, candidates: candidates.map((c) => c.tuning), labels: candidates.map((c) => c.label), workload });
       id = r.id;
       st = null;
       remember(r.id);
@@ -131,6 +131,7 @@
     if (!live) return [] as string[];
     return candidates.slice(results.length + (st?.current ? 1 : 0)).map((c) => c.label);
   });
+  const PHASE: Record<string, string> = { starting: "Starting the model", loading: "Loading the model", warmup: "Warming up", workload: "Measuring" };
   const n1 = (v: number | undefined) => (v == null ? "—" : v >= 100 ? v.toFixed(0) : v.toFixed(1));
 </script>
 
@@ -151,14 +152,14 @@
       {#each results as r, i (i)}
         <li class="done" class:bad={!r.ok}>
           <span class="m">{#if r.ok}<Icon name="check" size={13} />{:else}<Icon name="xmark" size={13} />{/if}</span>
-          <span class="n"><b>{r.label}</b><small>{r.ok ? tuningLine(r.tuning) : r.error || "It didn't finish."}</small></span>
+          <span class="n"><b>{r.label}</b><small>{r.ok ? tuningLine(r.tuning) : r.skipped ? r.error || "Skipped: it doesn't fit." : r.error || "It didn't finish."}</small></span>
           <span class="r">{r.ok ? `${n1(r.gen_tps)} tok/s` : "—"}</span>
         </li>
       {/each}
       {#if st?.current}
         <li class="cur">
           <span class="m"><span class="spin"></span></span>
-          <span class="n"><b>{candidates[results.length]?.label ?? "Next"}</b><small>{st.current}</small><span class="bar busy"><i></i></span></span>
+          <span class="n"><b>{st.current}</b><small>{PHASE[st.phase ?? ""] ?? "Working"}{engineName(engine) ? ` on ${engineName(engine)}` : ""}</small><span class="bar busy"><i></i></span></span>
           <span class="r">—</span>
         </li>
       {/if}

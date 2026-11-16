@@ -114,7 +114,7 @@
   const memGB = $derived(info?.engine?.mem_gb || $sysinfo?.engines?.find((e) => e.engine === target.engine)?.mem_gb || 0);
 
   // The draft model can only be used when it's baked into the image.
-  const draftBaked = $derived(!!(info?.baked?.draft_model || info?.baked?.spec === "draft"));
+  const draftBaked = $derived(!!(info?.model?.draft_baked || info?.baked?.draft_model || info?.baked?.spec === "draft"));
   const draftTitle = $derived(
     draftBaked
       ? ""

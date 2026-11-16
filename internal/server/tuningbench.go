@@ -637,6 +637,7 @@ func (s *Server) handleBenchStart(w http.ResponseWriter, r *http.Request) {
 		Compute    string            `json:"compute"`
 		Candidates []json.RawMessage `json:"candidates"`
 		Presets    []string          `json:"presets"`
+		Labels     []string          `json:"labels"` // optional names for candidates, in order
 		Workload   string            `json:"workload"`
 		Force      bool              `json:"force"`
 	}
@@ -672,6 +673,11 @@ func (s *Server) handleBenchStart(w http.ResponseWriter, r *http.Request) {
 			label = tuning.PresetLabel(t.Preset)
 			if !t.Generated() {
 				label += " (edited)"
+			}
+		}
+		if i < len(req.Labels) {
+			if l := strings.TrimSpace(req.Labels[i]); l != "" && len(l) <= 40 {
+				label = l
 			}
 		}
 		cands = append(cands, benchCandidate{label: label, tuning: t})
