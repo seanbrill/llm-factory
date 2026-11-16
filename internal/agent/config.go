@@ -153,6 +153,9 @@ type Config struct {
 	AdminToken string `json:"-"`
 	// MCPChatOff turns the /mcp chat commands off (HARNESS_MCP_CHAT=off).
 	MCPChatOff bool `json:"-"`
+	// ChecksOff turns off the loop's notes about repeated failures and
+	// unchecked changes (HARNESS_CHECKS=off; checks.go).
+	ChecksOff bool `json:"-"`
 }
 
 // Limits bound the tool loop.
@@ -317,6 +320,8 @@ func off(v string) bool {
 //	HARNESS_MAX_OUTPUT_BYTES  limits.max_output_bytes
 //	HARNESS_MCP               MCP servers (a JSON array), merged by name into "mcp"
 //	HARNESS_MCP_CHAT          "off" turns the /mcp chat commands off
+//	HARNESS_CHECKS            "off" turns the repeated-failure and check-your-work notes off
+//	HARNESS_MAX_CALLS_PER_STEP limits.max_calls_per_step
 //	HARNESS_STATE_DIR         where run-time changes are saved
 //	HARNESS_HOST_ALIAS        the host's name inside the container
 //	HARNESS_ADMIN_TOKEN       bearer token of the admin API (off without one)
@@ -330,6 +335,7 @@ func (c Config) WithEnv(getenv func(string) string) (Config, error) {
 		c.MCP = MergeMCP(c.MCP, servers)
 	}
 	c.MCPChatOff = off(get("HARNESS_MCP_CHAT"))
+	c.ChecksOff = off(get("HARNESS_CHECKS"))
 	if v := get("HARNESS_STATE_DIR"); v != "" {
 		c.StateDir = v
 	}
@@ -370,6 +376,7 @@ func (c Config) WithEnv(getenv func(string) string) (Config, error) {
 		dst *int
 	}{
 		{"HARNESS_MAX_STEPS", &c.Limits.MaxSteps},
+		{"HARNESS_MAX_CALLS_PER_STEP", &c.Limits.MaxCallsPerStep},
 		{"HARNESS_MAX_OUTPUT_BYTES", &c.Limits.MaxOutputBytes},
 	} {
 		if v := get(e.key); v != "" {

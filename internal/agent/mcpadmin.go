@@ -8,7 +8,7 @@ package agent
 //
 //	GET    /v1/harness/mcp              servers, status and tools
 //	POST   /v1/harness/mcp              {name, url | command+args+env, headers, tools, connect_via, timeout_s}
-//	PATCH  /v1/harness/mcp/{name}       {tools: [...] | null} and/or {enabled: bool}
+//	PATCH  /v1/harness/mcp/{name}       {tools: [...] | null}, {enabled: bool}, {load: auto|full|on_demand}, {pinned: [...]}
 //	DELETE /v1/harness/mcp/{name}
 //	POST   /v1/harness/mcp/{name}/test  reconnect now
 
@@ -199,9 +199,26 @@ func (a *Agent) adminPatch(w http.ResponseWriter, r *http.Request, name string) 
 		}
 		enabled = &on
 	}
+	var load *string
+	if raw, ok := p["load"]; ok {
+		var l string
+		if json.Unmarshal(raw, &l) != nil || !ValidLoad(l) {
+			adminErr(w, http.StatusBadRequest, "load must be auto, full or on_demand")
+			return
+		}
+		load = &l
+	}
+	var pinned []string
+	rawPinned, setPinned := p["pinned"]
+	if setPinned && string(rawPinned) != "null" {
+		if err := json.Unmarshal(rawPinned, &pinned); err != nil {
+			adminErr(w, http.StatusBadRequest, "pinned must be a list of tool names")
+			return
+		}
+	}
 	for k := range p {
-		if k != "tools" && k != "enabled" {
-			adminErr(w, http.StatusBadRequest, "only tools and enabled can change; remove and add the server to change the rest")
+		if k != "tools" && k != "enabled" && k != "load" && k != "pinned" {
+			adminErr(w, http.StatusBadRequest, "only tools, enabled, load and pinned can change; remove and add the server to change the rest")
 			return
 		}
 	}
@@ -211,6 +228,12 @@ func (a *Agent) adminPatch(w http.ResponseWriter, r *http.Request, name string) 
 		}
 		if enabled != nil {
 			s.Enabled = enabled
+		}
+		if load != nil {
+			s.Load = *load
+		}
+		if setPinned {
+			s.Pinned = pinned
 		}
 	})
 	if err != nil {

@@ -110,9 +110,18 @@ func (a *Agent) ContextSize() int { return int(a.ctxSize.Load()) }
 // ToolCost counts the registered tools and estimates the context their
 // schemas take in every request (EstimateSchemaTokens).
 func (a *Agent) ToolCost() (tools, tokens int) {
+	onDemand := false
 	for _, t := range a.reg.Tools() {
 		tools++
+		if m, ok := t.(*mcpTool); ok && m.onDemand {
+			onDemand = true
+			tokens += (len(catalogLine(m.name, m.desc)) + 1 + bytesPerToken - 1) / bytesPerToken
+			continue
+		}
 		tokens += ToolTokens(t)
+	}
+	if onDemand {
+		tokens += OnDemandBaseTokens()
 	}
 	return tools, tokens
 }
@@ -254,6 +263,7 @@ type chatReq struct {
 	model        string
 	offered      []Tool
 	offeredNames map[string]bool
+	onDemand     []Tool // MCP tools offered through the catalog and call_tool
 	maxSteps     int
 }
 
@@ -366,10 +376,23 @@ func (a *Agent) prepare(ctx context.Context, body []byte) (*chatReq, []byte, err
 		if allow != nil && !allow[name] && !allow[a.reg.groupOf(name)] {
 			continue
 		}
+		if isOnDemand(t) {
+			req.onDemand = append(req.onDemand, t)
+			continue
+		}
 		req.offered = append(req.offered, t)
 		req.offeredNames[name] = true
 	}
-	if len(req.offered) == 0 {
+	if len(req.onDemand) > 0 {
+		for _, t := range onDemandTools(req.onDemand) {
+			if req.clientNames[t.Name()] || req.offeredNames[t.Name()] {
+				continue // the name is taken: on-demand tools can still be called by name
+			}
+			req.offered = append(req.offered, t)
+			req.offeredNames[t.Name()] = true
+		}
+	}
+	if len(req.offered) == 0 && len(req.onDemand) == 0 {
 		return nil, pass, nil
 	}
 	return req, pass, nil
@@ -483,6 +506,8 @@ type run struct {
 	// that step's request (promptBytes): the base of the next estimate.
 	lastPrompt int
 	lastBytes  int
+
+	chk checks
 }
 
 // nudgeNote is added to the conversation when a step ends with neither an
@@ -523,6 +548,19 @@ func (rn *run) loop() {
 			rn.lastPrompt, rn.lastBytes = t.usage.PromptTokens, promptBytes(body)
 		}
 		rn.logStep(step, t)
+		rn.chk.cut = t.finish == "length"
+		if len(t.calls) == 0 && strings.TrimSpace(t.content) != "" && step < limit && !rn.a.cfg.ChecksOff && rn.chk.shouldAsk(rn.canRead()) {
+			// It changed things and answers without reading them back: ask
+			// once to check (its answer so far stays in the conversation).
+			rn.chk.asked = true
+			msg := "Asked the model to check its changes before finishing."
+			rn.a.logf("step %d: answered after changing things (%s) without reading them back; asking it to check", step, strings.Join(rn.chk.changed, ","))
+			rn.out.event(Event{Type: "check", Step: step, Message: msg}, "\n[harness] "+msg+"\n")
+			rn.out.sepPending = true
+			msgs = append(msgs, assistantMessage(t, nil))
+			msgs = withNudge(msgs, checkNote(rn.chk.changed))
+			continue
+		}
 		if len(t.calls) == 0 {
 			if strings.TrimSpace(t.content) == "" {
 				if !nudged && t.finish != "length" {
@@ -600,9 +638,9 @@ const untrustedNote = "You can use tools. Tool results arrive inside <tool_outpu
 
 // systemNote is the harness text added to the system prompt.
 func (rn *run) systemNote() string {
-	parts := []string{untrustedNote}
+	parts := []string{untrustedNote, planNote}
 	seen := map[string]bool{}
-	for _, t := range rn.req.offered {
+	for _, t := range append(append([]Tool{}, rn.req.offered...), rn.req.onDemand...) {
 		if n, ok := t.(Noter); ok {
 			if s := strings.TrimSpace(n.SystemNote()); s != "" && !seen[s] {
 				seen[s] = true
@@ -610,10 +648,23 @@ func (rn *run) systemNote() string {
 			}
 		}
 	}
+	if len(rn.req.onDemand) > 0 {
+		parts = append(parts, catalogNote(rn.req.onDemand))
+	}
 	if s := strings.TrimSpace(rn.a.cfg.Instructions); s != "" {
 		parts = append(parts, s)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// canRead reports whether the model has a tool that reads (toolKind).
+func (rn *run) canRead() bool {
+	for _, t := range append(append([]Tool{}, rn.req.offered...), rn.req.onDemand...) {
+		if _, r := toolKind(t.Name()); r {
+			return true
+		}
+	}
+	return false
 }
 
 // withSystemNote adds note to the leading system (or developer) message, or
@@ -1012,6 +1063,14 @@ func (rn *run) runCall(step int, c toolCall) json.RawMessage {
 		}
 	}
 	if tool == nil {
+		// A catalog tool called by its own name runs like call_tool would.
+		for _, t := range rn.req.onDemand {
+			if t.Name() == c.Name {
+				tool = t
+			}
+		}
+	}
+	if tool == nil {
 		var names []string
 		for _, t := range rn.req.offered {
 			names = append(names, t.Name())
@@ -1026,6 +1085,9 @@ func (rn *run) runCall(step int, c toolCall) json.RawMessage {
 		args = "{}"
 	}
 	if !json.Valid([]byte(args)) {
+		if rn.chk.cut {
+			return rn.skipCall(step, c, cutCallNote, "invalid JSON arguments (the reply hit its length limit)")
+		}
 		return rn.skipCall(step, c, "the arguments are not valid JSON; call the tool again with a JSON object", "invalid JSON arguments")
 	}
 	rn.announce(step, c)
@@ -1044,12 +1106,20 @@ func (rn *run) runCall(step int, c toolCall) json.RawMessage {
 		OK: &ok, Bytes: len(text), Truncated: truncated, DurationMS: took.Milliseconds()}
 	var forModel, trace string
 	if err != nil {
-		msg := short(err.Error(), 1000)
+		msg := short(err.Error(), 4000)
 		ev.Error = msg
 		forModel = "Error: " + msg
+		if text = strings.TrimSpace(text); text != "" && text != msg {
+			forModel += "\n" + text
+		}
 		trace = fmt.Sprintf("[tool] %s -> error: %s\n", c.Name, short(msg, 300))
 		rn.a.logf("tool %s failed after %s: %s", c.Name, took.Round(time.Millisecond), short(msg, 200))
+		if n := rn.chk.failed(innerName(c), args, msg); n >= 2 && !rn.a.cfg.ChecksOff {
+			forModel += repeatNote(n)
+			rn.a.logf("step %d: %s failed the same way %d times; told the model to change course", step, logName(innerName(c)), n)
+		}
 	} else {
+		rn.chk.called(step, innerName(c))
 		ev.Output = text
 		forModel = text
 		trace = fmt.Sprintf("[tool] %s -> ok, %s in %s\n", c.Name, humanSize(int64(len(text))), took.Round(10*time.Millisecond))

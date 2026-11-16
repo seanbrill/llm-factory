@@ -62,6 +62,15 @@ type MCPServer struct {
 	TimeoutS int `json:"timeout_s,omitempty"`
 	// Enabled false keeps the server configured but unused (nil = on).
 	Enabled *bool `json:"enabled,omitempty"`
+	// Load is how its tools reach the model: "full" sends every allowed
+	// tool's whole schema in each request; "on_demand" sends a one-line
+	// catalog, and the model reads a tool's arguments with tool_info and runs
+	// it with call_tool; "auto" ("" too) is on demand when the allowed tools'
+	// schemas cost more than OnDemandOver tokens.
+	Load string `json:"load,omitempty"`
+	// Pinned tools (MCP names) are always sent in full, even on demand: the
+	// few a model uses most.
+	Pinned []string `json:"pinned,omitempty"`
 }
 
 // On reports whether the server is enabled.
@@ -195,6 +204,9 @@ func (s MCPServer) Validate() error {
 			add("tools has an empty name")
 			break
 		}
+	}
+	if !ValidLoad(s.Load) {
+		add("load must be auto, full or on_demand")
 	}
 	if s.TimeoutS < 0 || s.TimeoutS > maxMCPTimeout {
 		add("timeout_s must be 0 to %d", maxMCPTimeout)
@@ -1017,6 +1029,9 @@ type mcpTool struct {
 	remote string // the server's name for it
 	desc   string
 	params json.RawMessage
+	// onDemand: the model gets it through the catalog, tool_info and
+	// call_tool instead of its schema in every request.
+	onDemand bool
 }
 
 func (t *mcpTool) Name() string                { return t.name }

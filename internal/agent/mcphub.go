@@ -51,25 +51,34 @@ type MCPToolStatus struct {
 	Description  string `json:"description"`
 	Tokens       int    `json:"tokens"` // estimated schema cost
 	Allowed      bool   `json:"allowed"`
+	Pinned       bool   `json:"pinned,omitempty"`
 }
 
 // MCPStatus describes a server without its secrets.
 type MCPStatus struct {
-	Name         string          `json:"name"`
-	Transport    string          `json:"transport"` // http | stdio
-	Endpoint     string          `json:"endpoint"`  // scheme://host:port, or stdio:<program>
-	ConnectVia   string          `json:"connect_via,omitempty"`
-	Headers      []string        `json:"headers,omitempty"` // names only
-	Source       string          `json:"source"`            // config | runtime
-	Enabled      bool            `json:"enabled"`
-	Status       string          `json:"status"`
-	Error        string          `json:"error,omitempty"`
-	RetryAt      *time.Time      `json:"retry_at,omitempty"`
-	ToolsOffered int             `json:"tools_offered"` // tools the server has (as of the last connect)
-	ToolsAllowed []string        `json:"tools_allowed"` // the allowlist: null = all
-	ToolCount    int             `json:"tool_count"`    // tools the model gets
-	SchemaTokens int             `json:"schema_tokens"` // their estimated cost
-	Tools        []MCPToolStatus `json:"tools,omitempty"`
+	Name         string     `json:"name"`
+	Transport    string     `json:"transport"` // http | stdio
+	Endpoint     string     `json:"endpoint"`  // scheme://host:port, or stdio:<program>
+	ConnectVia   string     `json:"connect_via,omitempty"`
+	Headers      []string   `json:"headers,omitempty"` // names only
+	Source       string     `json:"source"`            // config | runtime
+	Enabled      bool       `json:"enabled"`
+	Status       string     `json:"status"`
+	Error        string     `json:"error,omitempty"`
+	RetryAt      *time.Time `json:"retry_at,omitempty"`
+	ToolsOffered int        `json:"tools_offered"` // tools the server has (as of the last connect)
+	ToolsAllowed []string   `json:"tools_allowed"` // the allowlist: null = all
+	ToolCount    int        `json:"tool_count"`    // tools the model gets
+	SchemaTokens int        `json:"schema_tokens"` // their estimated cost in full
+	// Load, Pinned: as configured. OnDemand: its tools reach the model
+	// through the catalog (ondemand.go). RequestTokens: what they cost each
+	// request (catalog lines and pinned schemas when on demand; tool_info's
+	// and call_tool's own schemas, once for all servers, aren't included).
+	Load          string          `json:"load,omitempty"`
+	Pinned        []string        `json:"pinned,omitempty"`
+	OnDemand      bool            `json:"on_demand"`
+	RequestTokens int             `json:"request_tokens"`
+	Tools         []MCPToolStatus `json:"tools,omitempty"`
 }
 
 // mcpStateFile is <StateDir>/mcp.json.
@@ -550,6 +559,17 @@ func (c *mcpConn) reregister() {
 		return
 	}
 	allow := allowSet(c.srv)
+	pinned := map[string]bool{}
+	for _, p := range c.srv.Pinned {
+		pinned[p] = true
+	}
+	cost := 0
+	for _, d := range c.catalog {
+		if allow == nil || allow[d.Name] || allow[mcpToolName(c.srv.Name, d.Name)] {
+			cost += defTokens(c.srv.Name, d)
+		}
+	}
+	onDemand := LoadOnDemand(c.srv.Load, cost)
 	for _, d := range c.catalog {
 		reg := mcpToolName(c.srv.Name, d.Name)
 		if allow != nil && !allow[d.Name] && !allow[reg] {
@@ -563,7 +583,8 @@ func (c *mcpConn) reregister() {
 			sfx := fmt.Sprintf("_%d", i)
 			name = truncateUTF8(reg, 64-len(sfx)) + sfx
 		}
-		t := &mcpTool{conn: c, name: name, remote: d.Name, desc: toolDesc(d.Description), params: toolParams(d.InputSchema)}
+		t := &mcpTool{conn: c, name: name, remote: d.Name, desc: toolDesc(d.Description), params: toolParams(d.InputSchema),
+			onDemand: onDemand && !pinned[d.Name] && !pinned[reg]}
 		if err := c.hub.reg.Register(ToolsetMCP, t); err != nil {
 			c.hub.logf("mcp: %s: tool %s left out: %v", c.srv.Name, short(d.Name, 64), err)
 			continue
@@ -691,6 +712,10 @@ func (c *mcpConn) status(detail bool) MCPStatus {
 		st.RetryAt = &t
 	}
 	allow := allowSet(s)
+	pinned := map[string]bool{}
+	for _, p := range s.Pinned {
+		pinned[p] = true
+	}
 	for _, d := range c.catalog {
 		reg := mcpToolName(s.Name, d.Name)
 		ok := allow == nil || allow[d.Name] || allow[reg]
@@ -700,7 +725,25 @@ func (c *mcpConn) status(detail bool) MCPStatus {
 			st.SchemaTokens += tok
 		}
 		if detail {
-			st.Tools = append(st.Tools, MCPToolStatus{Name: d.Name, RegisteredAs: reg, Description: short(d.Description, 300), Tokens: tok, Allowed: ok})
+			st.Tools = append(st.Tools, MCPToolStatus{Name: d.Name, RegisteredAs: reg, Description: short(d.Description, 300), Tokens: tok,
+				Allowed: ok, Pinned: pinned[d.Name] || pinned[reg]})
+		}
+	}
+	st.Load, st.Pinned = s.Load, s.Pinned
+	st.OnDemand = LoadOnDemand(s.Load, st.SchemaTokens)
+	st.RequestTokens = st.SchemaTokens
+	if st.OnDemand {
+		st.RequestTokens = 0
+		for _, d := range c.catalog {
+			reg := mcpToolName(s.Name, d.Name)
+			if allow != nil && !allow[d.Name] && !allow[reg] {
+				continue
+			}
+			if pinned[d.Name] || pinned[reg] {
+				st.RequestTokens += defTokens(s.Name, d)
+			} else {
+				st.RequestTokens += CatalogLineTokens(s.Name, d.Name, d.Description)
+			}
 		}
 	}
 	return st

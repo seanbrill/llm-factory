@@ -26,6 +26,7 @@ type fakeTurn struct {
 	status    int    // non-200: an error response
 	body      string // error body
 	usage     Usage
+	finish    string // overrides the finish reason ("length")
 }
 
 type fakeModel struct {
@@ -91,6 +92,11 @@ func (f *fakeModel) json(t fakeTurn) string {
 	finish := "stop"
 	if len(t.calls) > 0 {
 		finish = "tool_calls"
+	}
+	if t.finish != "" {
+		finish = t.finish
+	}
+	if len(t.calls) > 0 {
 		var tcs []map[string]any
 		for _, c := range t.calls {
 			tcs = append(tcs, map[string]any{"id": c.ID, "type": "function", "function": map[string]any{"name": c.Name, "arguments": f.args(c.Args)}})
@@ -129,6 +135,9 @@ func (f *fakeModel) sse(t fakeTurn) string {
 	finish := "stop"
 	if len(t.calls) > 0 {
 		finish = "tool_calls"
+	}
+	if t.finish != "" {
+		finish = t.finish
 	}
 	ev(map[string]any{}, finish)
 	u, _ := json.Marshal(map[string]any{"id": "up", "object": "chat.completion.chunk", "choices": []any{}, "usage": t.usage})
