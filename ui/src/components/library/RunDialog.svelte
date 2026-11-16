@@ -10,7 +10,7 @@
   import { api, post, type ApiError } from "../../lib/api";
   import { personas, sysinfo, toast } from "../../lib/stores";
   import { searchName, toolsText } from "../../lib/baked";
-  import { homeOf, tildePath } from "../../lib/harness";
+  import { homeOf, tildePath, listMcp, mcpAllowed, tokText, type McpServer } from "../../lib/harness";
   import { live, refresh } from "../../lib/live.svelte";
   import { nextFreePort, type LibImage } from "../../lib/library";
   import { containerPort, isRunning } from "../../lib/util";
@@ -44,6 +44,9 @@
   let tinfo = $state<TuningInfo | null>(null);
   let choice = $state("saved"); // "saved" | "baked" | a preset id
   let ctx = $state<number | undefined>(undefined); // context override for this run
+  // MCP servers registered on the Harness page, connected for this run.
+  let mcpServers = $state<McpServer[]>([]);
+  let mcpOn = $state<string[]>([]);
 
   // Reset each time it opens for an image.
   let openedFor = "";
@@ -66,7 +69,14 @@
     tinfo = null;
     choice = "saved";
     ctx = undefined;
+    mcpServers = [];
+    mcpOn = [];
     const ref = image.ref, engine = image.engine;
+    if (image.harness) {
+      listMcp()
+        .then((l) => { if (openedFor === engine + ref) mcpServers = l.servers ?? []; })
+        .catch(() => { /* no MCP section */ });
+    }
     if (tunable) {
       getTuning(ref, engine)
         .then((t) => {
@@ -104,12 +114,13 @@
     const tun = runTuning();
     if (tun) body.tuning = tun;
     if (tinfo && choice === "baked" && tinfo.saved) body.tuning_base = "baked";
+    if (h && mcpOn.length) body.mcp = mcpOn;
     busy = true;
     error = "";
     try {
-      const r = await post<{ warning?: string; url?: string; port?: number; workspace?: string }>("/api/run", body);
+      const r = await post<{ warning?: string; url?: string; port?: number; workspace?: string; mcp_notes?: string[] }>("/api/run", body);
       open = false;
-      const ws = r?.workspace ? ` Its workspace is ${tildePath(r.workspace, home)}.` : "";
+      const ws = (r?.workspace ? ` Its workspace is ${tildePath(r.workspace, home)}.` : "") + (r?.mcp_notes?.length ? " " + r.mcp_notes.join(" ") : "");
       if (r?.warning) toast(r.warning + ws, 9000);
       else toast(`${name} is starting on :${port}.${r?.url ? " Also at " + r.url : ""}${ws}`, 5000);
       onstarted?.(port);
@@ -161,6 +172,13 @@
   });
   const memGB = $derived(tinfo?.engine?.mem_gb || 0);
   const memPct = $derived(runEst?.estimate && memGB ? Math.min(100, (runEst.estimate.total_gb / memGB) * 100) : 0);
+
+  // ---- MCP for this run ----
+  const mcpTokens = $derived(mcpServers.filter((m) => mcpOn.includes(m.name)).reduce((a, m) => a + (m.selected_tokens || 0), 0));
+  const runCtx = $derived(ctxNow || 0);
+  function toggleMcp(name: string, on: boolean) {
+    mcpOn = on ? [...mcpOn, name] : mcpOn.filter((n) => n !== name);
+  }
 
   // ---- baked tools ----
   const h = $derived(image?.harness ?? null);
@@ -252,6 +270,29 @@
       {#if h.tools.includes("shell")}
         <p class="sub warn"><Icon name="warn" size={13} /><span>The shell is on: the model can run commands in the container and change files in the workspace.</span></p>
       {/if}
+      <div class="mh"><h3 class="lbl" id="run-mcp"><Icon name="plug" size={13} />MCP servers</h3><a class="lk" href={href("harness")} onclick={() => (open = false)}>{mcpServers.length ? "Choose tools on the Harness page" : "Add one on the Harness page"}</a></div>
+      {#if mcpServers.length}
+        <div class="mcps" role="group" aria-labelledby="run-mcp">
+          {#each mcpServers as m (m.name)}
+            {@const allowed = mcpAllowed(m)}
+            {@const none = m.tools != null && m.tools.length === 0}
+            <label class="mcp" class:on={mcpOn.includes(m.name)} class:dis={none}>
+              <input type="checkbox" checked={mcpOn.includes(m.name)} disabled={none} onchange={(e) => toggleMcp(m.name, e.currentTarget.checked)} />
+              <span class="mt">
+                <b>{m.name}</b>
+                <small>{none ? "No tools chosen yet: pick some on the Harness page" : m.catalog?.length ? `${allowed.length} of its ${m.catalog.length} tools` : m.error ? "Its last test failed" : "Not tested yet"}</small>
+              </span>
+              {#if !none && m.selected_tokens}<span class="chip" class:ok={mcpOn.includes(m.name)}>{tokText(m.selected_tokens)} tokens</span>{/if}
+            </label>
+          {/each}
+        </div>
+        {#if mcpTokens}
+          <p class="hint" class:warnt={runCtx > 0 && mcpTokens > runCtx * 0.25}>
+            Their tool descriptions take {tokText(mcpTokens)} tokens of every request{runCtx ? `, ${Math.round((mcpTokens / runCtx) * 100)}% of a ${ctxText(runCtx)} context` : ""}.
+          </p>
+        {/if}
+      {/if}
+      <p class="hint">While it runs you can add more from any chat, Open WebUI included: type <span class="mono">/mcp help</span>.</p>
       {#if h.workspace}
         <label class="full">
           <span class="lbl">Workspace folder</span>
@@ -321,6 +362,17 @@
   .memb { display: flex; flex-direction: column; gap: 6px; padding-bottom: 3px; }
   .memb small { font-size: 12px; color: var(--mu); }
   .memb b { color: var(--ink); font-family: var(--font-mono); font-weight: 500; }
+  .mh { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+  .mh h3 { margin: 0; display: flex; align-items: center; gap: 6px; }
+  .mcps { display: flex; flex-direction: column; gap: 6px; }
+  .mcp { display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 9px 12px; border: 1px solid var(--ln2); border-radius: var(--r); background: var(--p2); cursor: pointer; }
+  .mcp.on { border-color: color-mix(in srgb, var(--pr) 55%, transparent); }
+  .mcp.dis { opacity: 0.7; cursor: not-allowed; }
+  .mcp input { accent-color: var(--pr); }
+  .mt { display: flex; flex-direction: column; gap: 1px; min-width: 0; margin-right: auto; }
+  .mt b { font-size: 13.5px; }
+  .mt small { font-size: 12px; color: var(--mu); }
+  .warnt { color: var(--wa); }
   .tools { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--ln); display: flex; flex-direction: column; gap: 8px; }
   .tools h3 { margin: 0; display: flex; align-items: center; gap: 6px; }
   .tools .sub { line-height: 1.5; }
