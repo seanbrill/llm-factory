@@ -148,6 +148,7 @@ func (a *Archive) SetKey(ctx context.Context, key string) (folderErr error, err 
 	}); err != nil {
 		return nil, err
 	}
+	a.ScanSoon() // weights already on disk (scan.go)
 	if _, err := a.helper.Check(ctx); err != nil {
 		a.kick()
 		return err, nil

@@ -4,7 +4,7 @@
   // factory downloads from Hugging Face. Builds look there first and use its
   // copy only when the SHA-256 matches the one Hugging Face publishes. With an
   // upload key, files the archive lacks are queued for upload after the build
-  // downloads them. The key is sent once and only its hint comes back.
+  // downloads them, and weights already on disk are found by a periodic scan. The key is sent once and only its hint comes back.
   // internal/filefreak, docs/FILEFREAK.md.
   import Icon from "../Icon.svelte";
   import CopyButton from "../CopyButton.svelte";
@@ -234,6 +234,10 @@
         <button class="small" onclick={() => (replacing = true)}>Replace</button>
         <button class="small danger" onclick={removeKey} disabled={busy === "unkey"}>Remove</button>
       </div>
+      <p class="hint">
+        New downloads are queued after their build. Weights already on this computer are checked soon after a key is set and every 6
+        hours: each one that matches Hugging Face's SHA-256 and has an open license is queued too.
+      </p>
       {#if st.key_folder}
         <p class="sub fold">
           <span>Uploads go to <a href={st.key_folder.url} target="_blank" rel="noreferrer">{st.key_folder.username}/{st.key_folder.name}</a>{st.key_folder.public ? ", a public folder without Shard Protection." : "."}</span>

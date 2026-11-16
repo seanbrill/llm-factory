@@ -76,6 +76,15 @@ Paste a FileFreak key on the System page (**Upload key**). From then on:
    **public with no Shard Protection**, so anyone can download it with the SDK and no
    key.
 
+**Weights already on disk.** Files downloaded before the key was set, or reused by
+later builds, are found by a scan: two minutes after the factory starts, right after a
+key is set, and every 6 hours. For each catalog weight in `models/` (the model, its
+vision projector and extra files), it asks Hugging Face for the file's revision and
+SHA-256, checks the [license rule](#the-license-rule), and only then hashes the local
+copy. A copy that matches is queued like a fresh download. A copy of an older revision
+(a different SHA-256 or size) is left alone. Hashes are cached by size and modified
+time in `config/filefreak-scan.json`, so a file is read once, not every scan.
+
 The queue is saved in `config/filefreak-queue.json`. An upload that was cut off
 resumes where it stopped after a restart. One that fails is tried again after 1,
 4, 16 and 64 minutes, then 4 hours: six tries in all, then it shows as **Failed**. The card shows each file's

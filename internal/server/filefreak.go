@@ -11,6 +11,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -35,6 +36,40 @@ func (s *Server) openArchive() {
 	}
 	s.ff = arc
 	s.b.Archive = arc
+	// Weights already on disk that the archive may take are queued too, with
+	// an upload key: soon after start, every few hours, and right after a key
+	// is set (filefreak/scan.go).
+	arc.StartScans(2*time.Minute, 6*time.Hour, s.localWeights)
+}
+
+// localWeights lists the catalog's weight files that are on disk, with the
+// Hugging Face URL each came from: the model, its vision projector and its
+// extra files. Several models can share a file; it's listed once.
+func (s *Server) localWeights() []filefreak.LocalFile {
+	var out []filefreak.LocalFile
+	seen := map[string]bool{}
+	add := func(file, url, label string) {
+		if file == "" || url == "" {
+			return
+		}
+		p := filepath.Join(s.b.ModelsDir, file)
+		if seen[p] {
+			return
+		}
+		if fi, err := os.Stat(p); err != nil || fi.Size() == 0 {
+			return
+		}
+		seen[p] = true
+		out = append(out, filefreak.LocalFile{URL: url, Path: p, Label: label})
+	}
+	for _, m := range s.cat.Models {
+		add(m.File, m.URL, m.Name)
+		add(m.MMProjFile, m.MMProjURL, m.Name+" (vision projector)")
+		for _, w := range m.ExtraFiles {
+			add(w.File, w.URL, m.Name+" ("+w.File+")")
+		}
+	}
+	return out
 }
 
 func (s *Server) registerFileFreak() {

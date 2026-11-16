@@ -92,6 +92,11 @@ type Archive struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
+	// Scans of weights already on disk (scan.go): one at a time.
+	scanning  sync.Mutex
+	scanCache *scanCache
+	scanWake  chan struct{}
+
 	mu      sync.Mutex
 	running bool
 	current string             // the job being worked on
@@ -131,7 +136,9 @@ func newArchive(store *Store, q *queue, hf *HF, r runner, opts Options) *Archive
 		staging: opts.StagingDir, version: opts.Version, now: time.Now,
 		retryIn: backoff,
 		ctx:     ctx, cancel: cancel,
-		wake: make(chan struct{}, 1),
+		wake:      make(chan struct{}, 1),
+		scanCache: openScanCache(scanCachePath(opts.ConfigDir)),
+		scanWake:  make(chan struct{}, 1),
 	}
 }
 
