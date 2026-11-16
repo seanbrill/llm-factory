@@ -59,3 +59,8 @@
 /config/run-tokens.json
 /config/filefreak-scan.json
 /config/*.tmp
+# Saved Playground prompts and their benchmark results (export them from the Prompts page to share).
+/config/prompts.json
+/config/prompt-results.json
+/config/.prompts.json-*
+/config/.prompt-results.json-*

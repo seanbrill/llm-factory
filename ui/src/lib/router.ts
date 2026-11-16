@@ -33,6 +33,8 @@ export const PAGES: PageDef[] = [
     blurb: "Tools for Open WebUI: the gateway, a workspace terminal, skills and web search." },
   { id: "playground", label: "Playground", title: "Playground", icon: "playground", group: "main", key: "p",
     blurb: "Try a running model, or send one prompt to two models and compare." },
+  { id: "prompts", label: "Prompts", title: "Saved prompts", icon: "bookmark", group: "hidden",
+    blurb: "Saved prompts: run them on several models and compare the answers and speed." },
   { id: "ensembles", label: "Ensembles", title: "Ensembles", icon: "ensembles", group: "compose",
     blurb: "Combine built images into one multimodal model with a Conductor." },
   { id: "personas", label: "Personas", title: "Personas", icon: "personas", group: "compose",
@@ -54,7 +56,7 @@ export const ALIASES: Record<string, string> = {
 };
 
 // The nav item to highlight for a page that isn't in the nav itself.
-const NAV_PARENT: Record<string, string> = { plan: "catalog", tune: "library", help: "" };
+const NAV_PARENT: Record<string, string> = { plan: "catalog", tune: "library", prompts: "playground", help: "" };
 
 const ids = new Set(PAGES.map((p) => p.id));
 const DEFAULT = "overview";

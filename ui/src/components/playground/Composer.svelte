@@ -9,8 +9,17 @@
   import { toast } from "../../lib/stores";
   import { startRecording, toWav, audioError, elapsed, STT_RATE, type Recording } from "../../lib/audio";
   import { MODE, send, sendVoice, stopTab, streaming, visiblePanes, save, type Tab, type Target } from "../../lib/chat.svelte";
+  import type { SavedPrompt } from "../../lib/prompts.svelte";
 
-  let { tab, targets, draft = $bindable("") }: { tab: Tab; targets: Target[]; draft?: string } = $props();
+  let {
+    tab,
+    targets,
+    draft = $bindable(""),
+    fromPrompt = $bindable(null),
+  }: { tab: Tab; targets: Target[]; draft?: string; fromPrompt?: SavedPrompt | null } = $props();
+
+  // The box still holds the saved prompt it was filled with (unchanged).
+  const saved = $derived(fromPrompt && draft.trim() === fromPrompt.text.trim() ? fromPrompt : null);
 
   let image = $state<string | null>(null);
   let file = $state<File | null>(null);
@@ -102,10 +111,11 @@
     if (busy || off) return;
     const text = draft.trim();
     if (!text && !image && !file) return;
-    const r = send(tab, text, image ?? undefined, file ?? undefined);
+    const r = send(tab, text, image ?? undefined, file ?? undefined, saved ? { prompt: saved, targets } : undefined);
     if (r.notes.length) toast(r.notes.join(" "), 6500);
     if (r.sent) {
       draft = "";
+      fromPrompt = null;
       image = null;
       file = null;
       requestAnimationFrame(grow);
@@ -161,6 +171,13 @@
     </div>
   {:else if converting}
     <div class="recbar" role="status"><span class="spin" aria-hidden="true"></span><span>Preparing your question…</span></div>
+  {/if}
+  {#if saved}
+    <div class="att sp">
+      <Icon name="bookmark" size={14} />
+      <span>Saved prompt: {saved.name}</span>
+      <button class="small icon" type="button" aria-label="Forget the saved prompt" title="Send it as a plain message (not recorded)" onclick={() => (fromPrompt = null)}><Icon name="xmark" size={13} /></button>
+    </div>
   {/if}
   {#if image || file}
     <div class="att">

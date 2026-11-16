@@ -235,7 +235,12 @@ browser in):
    and container. *Run*, *Stop*, view logs, download the `.tar`, delete, and clean
    up the space nothing uses.
 5. **Playground** — send a prompt to a running model, or to two at once to compare
-   speed, and copy the exact request as curl.
+   speed, and copy the exact request as curl. Its **Prompts** menu keeps saved
+   prompts for benchmarks: the **Prompts** page (`#prompts`) runs one, or every
+   prompt in the list, on the running models one at a time and compares time to
+   the first token, tokens per second and the answers. Prompts and results are
+   kept in `config/prompts.json` and `config/prompt-results.json`; export and
+   import them as JSON to move them between machines.
 6. **Harness** — give the models web search, a workspace terminal and skills in
    Open WebUI ([docs/HARNESS.md](docs/HARNESS.md)). **System** shows both engines'
    memory and GPU and plans the memory between them.

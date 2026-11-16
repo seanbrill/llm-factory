@@ -17,6 +17,8 @@
   import PersonaPanel from "../components/playground/PersonaPanel.svelte";
   import OutputPanel from "../components/playground/OutputPanel.svelte";
   import BridgeDialog from "../components/playground/BridgeDialog.svelte";
+  import PromptsMenu from "../components/playground/PromptsMenu.svelte";
+  import type { SavedPrompt } from "../lib/prompts.svelte";
   import { live, watch } from "../lib/live.svelte";
   import { catalog, ensembles, personas, toast } from "../lib/stores";
   import { routeArg, href } from "../lib/router";
@@ -24,7 +26,7 @@
   import { isStreamMod } from "../lib/util";
   import {
     chat, load, newTab, closeTab, activeTab, visiblePanes, targetsFrom, openTarget, setCompare, swapSides,
-    clearTab, exportTab, lastStats, winners, setTarget,
+    clearTab, exportTab, lastStats, winners, setTarget, send, applyPrompt,
     type Tab, type Pane as PaneT,
   } from "../lib/chat.svelte";
 
@@ -40,6 +42,21 @@
   const media = $derived([...new Set(mods.filter((m): m is "image" | "video" | "tts" => m === "image" || m === "video" || m === "tts"))]);
   const owui = $derived(live.harness?.openwebui?.url ?? "");
   let draft = $state("");
+  let fromPrompt = $state<SavedPrompt | null>(null);
+  let promptsOpen = $state(false);
+
+  /** Send a saved prompt now, as it is (its system prompt and sampling set first). */
+  function sendSaved(p: SavedPrompt) {
+    if (!tab) return;
+    const changed = applyPrompt(tab, p);
+    if (changed.length) toast(`Set this chat's ${changed.join(" and ")} from “${p.name}”.`, 4000);
+    const r = send(tab, p.text, undefined, undefined, { prompt: p, targets });
+    if (r.notes.length) toast(r.notes.join(" "), 6500);
+    if (r.sent) {
+      draft = "";
+      fromPrompt = null;
+    }
+  }
   let bridgeOpen = $state(false);
   let moreOpen = $state(false);
   // On a phone the settings buttons shrink to icons so the row fits.
@@ -172,6 +189,9 @@
             <span>Compare two models</span>
           </label>
           {#if chatty}
+            <Popover label="Prompts" icon={phone.current ? "bookmark" : ""} iconOnly={phone.current} title="Saved prompts" wide bind:open={promptsOpen}>
+              <PromptsMenu {tab} bind:draft bind:fromPrompt bind:open={promptsOpen} onSend={sendSaved} />
+            </Popover>
             <Popover label={personaLabel} icon={phone.current ? "persona" : ""} iconOnly={phone.current} title="Persona and system prompt" wide><PersonaPanel {tab} /></Popover>
             <Popover label={tempLabel} icon={phone.current ? "sliders" : ""} iconOnly={phone.current} title="Temperature, top-p and seed"><StylePanel {tab} /></Popover>
           {/if}
@@ -214,7 +234,7 @@
 
     {#if !tab.bridge}
       <div class="cw">
-        <Composer {tab} {targets} bind:draft />
+        <Composer {tab} {targets} bind:draft bind:fromPrompt />
         <p class="hints">
           <span><span class="kbd">Enter</span> send</span>
           <span><span class="kbd">Shift</span> <span class="kbd">Enter</span> new line</span>

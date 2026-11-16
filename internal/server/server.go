@@ -80,6 +80,10 @@ type Server struct {
 	// Runtime tuning (tuning.go), made on first use.
 	tuneOnce sync.Once
 	tune     *tuneState
+
+	// Saved prompts and their results (prompts.go), made on first use.
+	promptOnce sync.Once
+	promptSt   *promptStore
 }
 
 // New constructs the HTTP handler tree. modelHost is where model containers'
@@ -183,8 +187,9 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.registerHarness() // model gateway (/v1) + /api/harness (harness.go)
 	s.openArchive()     // the FileFreak archive, asked before every weight download (filefreak.go)
 	s.registerFileFreak()
-	s.registerNative() // native packages (native.go)
-	s.registerTuning() // runtime tuning, presets and the benchmark (tuning.go)
+	s.registerNative()  // native packages (native.go)
+	s.registerTuning()  // runtime tuning, presets and the benchmark (tuning.go)
+	s.registerPrompts() // saved prompts and their results (prompts.go)
 	return s, nil
 }
 

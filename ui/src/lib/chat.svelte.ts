@@ -18,6 +18,7 @@ import { api, post, streamChat, labelVal, type StreamOpts } from "./api";
 import { imageDefaults, ttsSpec } from "./meta";
 import { containerPort, containerRef, isRunning, isStreamMod } from "./util";
 import type { ContainerInfo, Ensemble, MediaItem, Model, Persona, RunningModel } from "./types";
+import { recordResult, resultOf, type RunOutcome, type SavedPrompt } from "./prompts.svelte";
 
 // ---- types ------------------------------------------------------------------------
 
@@ -378,7 +379,35 @@ function failText(p: Pane, e: unknown): string {
  * Returns whether anything went out, and a sentence for each side that
  * couldn't use the input.
  */
-export function send(tab: Tab, text: string, image?: string, file?: File): { sent: boolean; notes: string[] } {
+/** A saved prompt being sent from the Playground, so its answers are recorded
+ *  as results (lib/prompts.svelte.ts). The targets give each side's image. */
+export interface SavedSend {
+  prompt: SavedPrompt;
+  targets: Target[];
+}
+
+/** Set a tab's system prompt and sampling to what a saved prompt asks for;
+ *  returns what changed, for a note. */
+export function applyPrompt(tab: Tab, p: SavedPrompt): string[] {
+  const changed: string[] = [];
+  if (p.system?.trim() && tab.system !== p.system) {
+    tab.system = p.system;
+    tab.persona = "";
+    changed.push("system prompt");
+  }
+  if (p.temperature != null && tab.temp !== p.temperature) {
+    tab.temp = p.temperature;
+    changed.push("temperature");
+  }
+  if (p.top_p != null && tab.topP !== p.top_p) {
+    tab.topP = p.top_p;
+    changed.push("top-p");
+  }
+  if (changed.length) save();
+  return changed;
+}
+
+export function send(tab: Tab, text: string, image?: string, file?: File, saved?: SavedSend): { sent: boolean; notes: string[] } {
   const notes: string[] = [];
   let sent = false;
   if (tab.bridge) return { sent, notes };
@@ -415,10 +444,14 @@ export function send(tab: Tab, text: string, image?: string, file?: File): { sen
       const img = mod === "vision" || mod === "ensemble" ? image : undefined;
       if (image && !img) notes.push(`${label(p)} doesn't read images, so it got the text only.`);
       if (!text && !img) continue;
+      // A saved prompt is recorded when it opens the conversation, with no
+      // image: then every model got the same request.
+      const fresh = !p.msgs.some((m) => m.role !== "system");
+      const rec = saved && fresh && !img ? { prompt: saved.prompt, target: saved.targets.find((t) => t.port === p.port) } : undefined;
       const um: Msg = { role: "user", content: text };
       if (img) um.image = img;
       p.msgs.push(um);
-      streamTo(tab, p);
+      streamTo(tab, p, rec?.target ? (rec as { prompt: SavedPrompt; target: Target }) : undefined);
       sent = true;
     }
   }
@@ -429,7 +462,7 @@ function measure(t0: number, first: number, now: number, n: number): Stats {
   return { ms: now - t0, ttft: first - t0, tokens: n, tps: n > 1 && now > first ? ((n - 1) * 1000) / (now - first) : null };
 }
 
-async function streamTo(tab: Tab, p: Pane) {
+async function streamTo(tab: Tab, p: Pane, rec?: { prompt: SavedPrompt; target: Target }) {
   const messages = buildMessages(tab, p);
   const opts = sampling(tab);
   p.last = { path: "/api/chat/stream", body: chatBody(p.port, messages, opts) };
@@ -473,6 +506,12 @@ async function streamTo(tab: Tab, p: Pane) {
     );
     a.pending = undefined;
     if (!a.content && !a.reasoning && !hasMedia(a)) a.err = `${label(p)} sent an empty reply. Try again, or raise the temperature.`;
+    if (rec && !a.err) {
+      const out: RunOutcome = { stats: a.stats ?? { ms: performance.now() - t0 }, output: a.content, reasoning: a.reasoning?.length ?? 0 };
+      recordResult(resultOf(rec.prompt, rec.target, opts, out, "playground"))
+        .then(() => (a.note = `Recorded as a result of “${rec.prompt.name}”.`))
+        .catch((e) => (a.note = `Not recorded as a result: ${(e as Error).message}`));
+    }
   } catch (e) {
     a.pending = undefined;
     if ((e as Error).name === "AbortError") a.stopped = true;
