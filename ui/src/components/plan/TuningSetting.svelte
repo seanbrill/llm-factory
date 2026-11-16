@@ -5,7 +5,7 @@
   // Tune page without a rebuild. Edits write into the plan item.
   import Icon from "../Icon.svelte";
   import { gb, engineName } from "../../lib/format";
-  import { PRESET_IDS, PRESET_LABEL, getPresets, tuningLine, type PresetOption, type Preset } from "../../lib/tuning";
+  import { PRESET_IDS, PRESET_LABEL, ctxText, estimate, getPresets, tuningLine, type Estimate, type PresetOption, type Preset, type Tuning } from "../../lib/tuning";
   import type { PlanItem } from "../../lib/plan.svelte";
   import type { Model } from "../../lib/types";
 
@@ -15,6 +15,8 @@
   let draftId = $state("");
   let memGB = $state(0);
   let failed = $state(false);
+  // The model's chat template reads reasoning_effort (gpt-oss): offer it here.
+  let effortModel = $state(false);
 
   $effect(() => {
     const id = it.model_id, eng = it.engine, c = compute;
@@ -25,6 +27,7 @@
           if (id !== it.model_id) return;
           presets = PRESET_IDS.map((p) => r.presets?.find((x) => x.id === p)).filter((x): x is PresetOption => !!x);
           draftId = r.model?.draft || "";
+          effortModel = !!r.model?.arch?.reasoning_effort;
           memGB = r.engine?.mem_gb || 0;
         })
         .catch(() => {
@@ -55,8 +58,32 @@
     it.tuning = v === "draft" ? { ...base, spec: "draft", draft_model: draftId } : { ...base, spec: "ngram", draft_model: undefined };
   }
 
-  const est = $derived(chosen?.estimate);
+  // The context set below (not "From the tuning") replaces the preset's at
+  // build time (buildBody), so show and price what will be built.
+  const ctxOver = $derived(/^\d+$/.test(it.ctx_tier) ? parseInt(it.ctx_tier, 10) : 0);
+  const eff = $derived<Tuning | undefined>(it.tuning && ctxOver ? { ...it.tuning, ctx_size: ctxOver } : it.tuning);
+  const differs = $derived(!!eff && !!chosen && (eff.ctx_size !== chosen.tuning.ctx_size || eff.spec !== chosen.tuning.spec || eff.reasoning_effort !== chosen.tuning.reasoning_effort));
+  let own = $state<{ estimate: Estimate; fits?: boolean; warning?: string } | null>(null);
+  $effect(() => {
+    const t = eff, id = it.model_id, eng = it.engine, c = compute;
+    own = null;
+    if (!t || !differs) return;
+    const h = setTimeout(() => {
+      estimate({ model: id, compute: c, engine: eng, tuning: t })
+        .then((r) => { if (id === it.model_id && r.estimate) own = { estimate: r.estimate, fits: r.fits, warning: r.warning }; })
+        .catch(() => {});
+    }, 250);
+    return () => clearTimeout(h);
+  });
+  const est = $derived(differs ? own?.estimate : chosen?.estimate);
+  const fits = $derived(differs ? own?.fits : chosen?.fits);
+  const warning = $derived(differs ? own?.warning : chosen?.warning);
   const pct = $derived(est && memGB ? Math.min(100, (est.total_gb / memGB) * 100) : 0);
+
+  function effort(v: string) {
+    if (!it.tuning) return;
+    it.tuning = { ...it.tuning, reasoning_effort: (v || undefined) as Tuning["reasoning_effort"] };
+  }
 </script>
 
 <div class="tun">
@@ -70,8 +97,9 @@
       </select>
     </label>
     <p class="why">
-      {#if chosen}{chosen.explain} <span class="mono">{tuningLine(it.tuning)}</span>
-      {:else if sel === "custom"}<span class="mono">{tuningLine(it.tuning)}</span>
+      {#if chosen && ctxOver && ctxOver !== chosen.tuning.ctx_size}{chosen.label || PRESET_LABEL[chosen.id]} settings with the {ctxText(ctxOver)} context set above. <span class="mono">{tuningLine(eff)}</span>
+      {:else if chosen}{chosen.explain} <span class="mono">{tuningLine(eff)}</span>
+      {:else if sel === "custom"}<span class="mono">{tuningLine(eff)}</span>
       {:else if failed}The factory couldn't suggest presets for this model.
       {:else}Context from the setting below; change speed and memory settings any time on the Tune page.{/if}
     </p>
@@ -95,12 +123,27 @@
     </div>
   {/if}
 
+  {#if sel && effortModel}
+    <div class="row">
+      <label class="f">
+        <span>Reasoning effort</span>
+        <select value={it.tuning?.reasoning_effort ?? ""} onchange={(e) => effort(e.currentTarget.value)}>
+          <option value="">Model default (medium)</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+      </label>
+      <p class="why">How long it thinks before answering. Low answers sooner; High helps with hard coding and debugging.</p>
+    </div>
+  {/if}
+
   {#if est}
     <div class="mem">
-      <span class="bar" class:wa={chosen?.fits === false || !!chosen?.warning}><i style="width:{pct}%"></i></span>
+      <span class="bar" class:wa={fits === false || !!warning}><i style="width:{pct}%"></i></span>
       <small>
         <b>{gb(est.total_gb)}{memGB ? ` of ${Math.floor(memGB)} GB` : ""}</b> on {engineName(it.engine)} when it runs · weights {gb(est.weights_gb)}, cache {gb(est.kv_gb)}
-        {#if chosen?.warning}· <span class="wa">{chosen.warning}</span>{/if}
+        {#if warning}· <span class="wa">{warning}</span>{/if}
       </small>
     </div>
   {/if}
