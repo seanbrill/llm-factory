@@ -1,5 +1,5 @@
 // Agent harness API (/api/harness/*): types and calls. See docs/HARNESS.md.
-import { api, post } from "./api";
+import { api, post, put, del } from "./api";
 
 export interface GatewayModel {
   id: string;
@@ -173,6 +173,111 @@ export const regenerateGatewayKey = () => post<{ key: string; note: string }>("/
 export const regenerateTerminalKey = () => post<{ key: string; note: string }>("/api/harness/terminal/key", {});
 export const checkOpenWebUI = (r: OpenWebUIRequest) => post<ConnectResult>("/api/harness/openwebui/check", r);
 export const connectOpenWebUI = (r: OpenWebUIRequest) => post<ConnectResult>("/api/harness/openwebui/connect", r);
+
+// ---- MCP servers (/api/harness/mcp) ---------------------------------------------
+// Tool servers a model can use when the factory runs it. The factory keeps each
+// server's URL and headers and only ever sends them back masked (the URL's path
+// and the header values are secrets). Every allowed tool's name, description and
+// input schema go with each request, so each one costs context.
+
+export interface McpTool {
+  name: string;
+  description: string;
+  /** Estimated schema cost: bytes of name + description + inputSchema / 4. */
+  tokens: number;
+}
+
+export interface McpServer {
+  /** [a-z0-9_-], 1–32 characters. */
+  name: string;
+  /** Masked for display, e.g. "http://127.0.0.1:64182/…" (the path is a secret). */
+  url: string;
+  /** Header names -> masked values ("••••••"). */
+  headers: Record<string, string>;
+  /** The allowlist: null = every tool the server offers; [] = none picked yet. */
+  tools: string[] | null;
+  /** The user has edited the allowlist. */
+  tools_chosen: boolean;
+  /** The server's tools as of the last successful test ([] = never tested). */
+  catalog: McpTool[];
+  catalog_tokens: number;
+  /** Tokens of the allowed tools. */
+  selected_tokens: number;
+  /** RFC3339 time of the last test. */
+  tested_at?: string;
+  /** The last test's error. */
+  error?: string;
+  /** The URL points at this computer (127.0.0.1 / localhost). */
+  loopback: boolean;
+}
+
+export interface McpTest {
+  ok: boolean;
+  tools: McpTool[];
+  total_tokens: number;
+  error?: string;
+  /** The server after the test (its catalog is refreshed). */
+  server?: McpServer;
+}
+
+export interface McpList {
+  servers: McpServer[];
+  /** A new server with more tools than this starts with none picked. */
+  many_tools: number;
+}
+
+export interface McpAdd {
+  name: string;
+  url: string;
+  headers?: Record<string, string>;
+}
+
+/** A change: leave a field out to keep it. `headers` replaces the map; MCP_MASK keeps a value. */
+export interface McpUpdate {
+  url?: string;
+  headers?: Record<string, string>;
+  /** null = every tool, [] = none, a list = those. */
+  tools?: string[] | null;
+}
+
+/** A stored header value as the factory shows it. Sent back, it keeps that value. */
+export const MCP_MASK = "••••••";
+/** A server name: lowercase letters, digits, - and _, up to 32. */
+export const MCP_NAME = /^[a-z0-9_-]{1,32}$/;
+/** Tool schemas above this (a quarter of a 32K context) get a warning. */
+export const MCP_TOKENS_WARN = 8192;
+
+const mcpPath = (name: string) => `/api/harness/mcp/${encodeURIComponent(name)}`;
+export const listMcp = () => api<McpList>("/api/harness/mcp");
+/** Adds a server and tests it right away. */
+export const addMcp = (s: McpAdd) => post<{ server: McpServer; test: McpTest }>("/api/harness/mcp", s);
+export const updateMcp = (name: string, u: McpUpdate) => put<{ server: McpServer }>(mcpPath(name), u);
+export const deleteMcp = (name: string) => del<{ status: string }>(mcpPath(name));
+/** Asks the server for its tools; refreshes the stored catalog. */
+export const testMcp = (name: string) => post<McpTest>(`${mcpPath(name)}/test`, {});
+
+/** The catalog tools a server gives a model now (its allowlist; null = all). */
+export function mcpAllowed(s: McpServer): McpTool[] {
+  const cat = s.catalog ?? [];
+  if (s.tools == null) return cat;
+  const on = new Set(s.tools);
+  return cat.filter((t) => on.has(t.name));
+}
+
+/** A server's last test for its chip: "12 tools", "Test failed" or "Not tested". */
+export function mcpState(s: McpServer): { label: string; cls: "ok" | "er" | "" } {
+  if (s.error) return { label: "Test failed", cls: "er" };
+  if (s.tested_at) {
+    const n = s.catalog?.length ?? 0;
+    return { label: `${n} tool${n === 1 ? "" : "s"}`, cls: "ok" };
+  }
+  return { label: "Not tested", cls: "" };
+}
+
+/** Estimated tokens as "≈1,240". */
+export function tokText(n: number): string {
+  return `≈${Math.round(n || 0).toLocaleString()}`;
+}
 
 export const AREA_LABEL: Record<string, string> = {
   openwebui: "Open WebUI",

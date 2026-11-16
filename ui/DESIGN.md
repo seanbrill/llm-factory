@@ -109,7 +109,8 @@ refresh plus x alert globe …). Add new ones to src/lib/icons.ts.
   `removeFromPlan`, `togglePlan`, `inPlan`, `updatePlanItem`, `setPlan`,
   `defaultsFor(model, sysinfo)`, `predictRoute(...)`, `queueItems(items, catalog)`,
   `quickBuild(model, sysinfo)`.
-- `harness.ts` — harness API types and calls.
+- `harness.ts` — harness API types and calls. MCP servers: `listMcp`, `addMcp`, `updateMcp`, `deleteMcp`,
+  `testMcp`, types `McpServer`/`McpTool`/`McpTest`, `mcpAllowed`, `mcpState`, `tokText`; `#harness/mcp` opens its card.
 - `baked.ts` — tools baked into an image (docs/HARNESS.md, "Baked harness"):
   `TOOLSETS`, `canHarness(model)`, the plan item's `harness` setting
   (`defaultHarness`, `harnessProblem`, `harnessBody` → the build's `harness`,
@@ -129,7 +130,7 @@ refresh plus x alert globe …). Add new ones to src/lib/icons.ts.
 Reads: `GET /api/sysinfo`, `/api/catalog`, `/api/models`, `/api/images`,
 `/api/containers`, `/api/resources`, `/api/personas`, `/api/ensembles`,
 `/api/version`, `/api/builds`, `/api/builds/state?id=&offset=`, `/api/storage`,
-`/api/harness/status`, `/api/container/logs?id=&engine=&tail=`.
+`/api/harness/status`, `/api/harness/mcp`, `/api/container/logs?id=&engine=&tail=`.
 
 Actions (POST JSON): `/api/build` (queues; `{status, id, position, engine}`),
 `/api/build/preflight {items:[{model_id, engine, compute}]}`,
@@ -141,6 +142,10 @@ Actions (POST JSON): `/api/build` (queues; `{status, id, position, engine}`),
 `/api/harness/*`, `/api/filefreak/*` (status, settings, key, key/remove,
 folder/check, queue/retry, queue/remove), `/api/native/*` (targets, source,
 package, jobs, state, cancel, packages, download, delete). Shapes are in src/lib/types.ts, src/lib/harness.ts and src/lib/filefreak.ts.
+
+MCP servers: `GET|POST /api/harness/mcp` (POST adds and tests), `PUT|DELETE /api/harness/mcp/{name}`,
+`POST /api/harness/mcp/{name}/test`. The harness API takes changes only as same-origin JSON, so PUT and
+DELETE send a JSON body too (`put()`, `del()` in api.ts).
 
 ## Writing
 

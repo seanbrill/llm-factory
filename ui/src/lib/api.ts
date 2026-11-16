@@ -36,12 +36,27 @@ export async function api<T = any>(path: string, init?: RequestInit): Promise<T>
   return data as T;
 }
 
-export function post<T = any>(path: string, body: unknown): Promise<T> {
+// A change sent as JSON. The factory's harness API only accepts state-changing
+// calls that are same-origin JSON, so PUT and DELETE carry a JSON body too.
+function send<T>(method: "POST" | "PUT" | "DELETE", path: string, body: unknown): Promise<T> {
   return api<T>(path, {
-    method: "POST",
+    method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+export function post<T = any>(path: string, body: unknown): Promise<T> {
+  return send<T>("POST", path, body);
+}
+
+export function put<T = any>(path: string, body: unknown): Promise<T> {
+  return send<T>("PUT", path, body);
+}
+
+/** DELETE with a JSON body ("{}" unless given one). */
+export function del<T = any>(path: string, body: unknown = {}): Promise<T> {
+  return send<T>("DELETE", path, body);
 }
 
 export interface StreamOpts {
