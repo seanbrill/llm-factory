@@ -154,8 +154,10 @@
     </div>
   </div>
   <p class="sub top">
-    Tools from MCP servers for the models you run. Every ticked tool's description and schema go with each request, so
-    tick only what a model needs.
+    The factory's list of MCP servers. None of this is built into an image: when you run a model, the Run dialog picks
+    which of these it connects to, and a running model can add more from any chat with <span class="mono">/mcp</span>.
+    Here you choose which of a server's tools a model gets, and whether their descriptions go with every request in full
+    or on demand.
   </p>
 
   {#if !loaded}
@@ -268,10 +270,12 @@
                   {#if !open[s.name]}<button class="small ghost" onclick={() => (open[s.name] = true)}>Pick tools</button>{/if}
                 </p>
               {:else}
-                <p class="picks" class:wa={s.selected_tokens > MCP_TOKENS_WARN}>
-                  {#if s.selected_tokens > MCP_TOKENS_WARN}<Icon name="warn" size={14} />{/if}
+                {@const req = s.request_tokens ?? s.selected_tokens}
+                <p class="picks" class:wa={req > MCP_TOKENS_WARN}>
+                  {#if req > MCP_TOKENS_WARN}<Icon name="warn" size={14} />{/if}
                   {s.tools == null ? `All ${plural(cat.length, "tool")}` : `${allowed} of ${plural(cat.length, "tool")}`} ·
-                  {tokText(s.selected_tokens)} tokens of context
+                  {tokText(req)} tokens per request
+                  {#if s.on_demand}<span class="chip pr" title="One line per tool; the model reads a tool's arguments when it needs them ({tokText(s.selected_tokens)} tokens in full)">On demand</span>{/if}
                 </p>
               {/if}
             {:else if !s.error}

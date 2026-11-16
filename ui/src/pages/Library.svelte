@@ -367,9 +367,14 @@
     <div class="callout wa">
       <Icon name="warn" />
       <span>
-        <b>{engineName(e.engine)} isn't running, so its images and containers aren't listed.</b>
-        <p>{e.engine === "podman" ? "Start the Podman machine, then restart the factory so it reconnects." : "Start Docker Desktop; the Library picks it up within a minute."}</p>
-        {#if e.engine === "podman"}<CodeLine cmd="podman machine start" />{/if}
+        {#if e.slow}
+          <b>{engineName(e.engine)} isn't answering, so its images and containers aren't listed right now.</b>
+          <p>It's probably running but overloaded: the computer may be short of memory (swapping), or a build is using every CPU. Models it runs can still be serving. Close what you don't need, or wait for the build; the Library catches up when it answers.</p>
+        {:else}
+          <b>{engineName(e.engine)} isn't running, so its images and containers aren't listed.</b>
+          <p>{e.engine === "podman" ? "Start the Podman machine, then restart the factory so it reconnects." : "Start Docker Desktop; the Library picks it up within a minute."}</p>
+          {#if e.engine === "podman"}<CodeLine cmd="podman machine start" />{/if}
+        {/if}
       </span>
     </div>
   {/each}

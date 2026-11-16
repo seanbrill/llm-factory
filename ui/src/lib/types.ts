@@ -62,6 +62,7 @@ export interface ImageHarness {
   searxng_url?: string;
   max_steps: number;
   workspace: boolean;    // files or shell are on: a run mounts a workspace folder at /workspace
+  on_demand?: boolean;   // takes MCP tools on demand (built with that harness)
 }
 
 // Build identity from /api/version (stamped by the start scripts).
@@ -75,6 +76,7 @@ export interface VersionInfo {
 export interface EngineResources {
   engine: string;       // "docker" | "podman"
   reachable: boolean;   // answered just now
+  slow?: boolean;       // didn't answer in time: running but overloaded (swapping, a big build)
   mem_gb: number;
   cpus: number;
   gpu: string;          // compute it gives containers: "" | "vulkan" | "cuda"

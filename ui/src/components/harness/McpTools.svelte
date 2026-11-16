@@ -1,13 +1,19 @@
 <script lang="ts">
-  // One MCP server's tool picker: tick the tools a model gets from it. Every
-  // ticked tool's schema goes with every request, so the running total says what
-  // they cost in context. Saving sends the ticked list (PUT tools: [...]).
+  // One MCP server's tool picker: tick the tools a model gets from it, and how
+  // they reach it: every ticked tool's whole schema in every request, or on
+  // demand (a one-line catalog; the model reads a tool's arguments when it needs
+  // them), with pinned tools always in full. The running total is what a
+  // request carries. Saving sends {tools, load, pinned}.
   import { untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import Icon from "../Icon.svelte";
   import { toast } from "../../lib/stores";
   import { plural } from "../../lib/format";
-  import { updateMcp, mcpAllowed, tokText, sentence, MCP_TOKENS_WARN, type McpServer } from "../../lib/harness";
+  import Seg from "../tune/Seg.svelte";
+  import {
+    updateMcp, mcpAllowed, mcpCost, tokText, sentence, MCP_TOKENS_WARN, MCP_ON_DEMAND_OVER, MCP_ON_DEMAND_BASE,
+    type McpLoad, type McpServer,
+  } from "../../lib/harness";
 
   let { server, id, onsaved }: { server: McpServer; id: string; onsaved: (s: McpServer) => void } = $props();
 
@@ -31,6 +37,10 @@
     });
   });
 
+  let load = $state<McpLoad>(untrack(() => server.load || "auto"));
+  const pins = new SvelteSet<string>(untrack(() => server.pinned ?? []));
+  const savedPins = $derived(new Set(server.pinned ?? []));
+
   let q = $state("");
   let saving = $state(false);
   let error = $state("");
@@ -41,9 +51,25 @@
     return catalog.filter((t) => t.name.toLowerCase().includes(s) || (t.description || "").toLowerCase().includes(s));
   });
   const count = $derived(catalog.filter((t) => picked.has(t.name)).length);
-  const total = $derived(catalog.reduce((n, t) => n + (picked.has(t.name) ? t.tokens || 0 : 0), 0));
-  const dirty = $derived(count !== saved.size || catalog.some((t) => picked.has(t.name) !== saved.has(t.name)));
+  const cost = $derived(mcpCost(server.name, catalog.filter((t) => picked.has(t.name)), load, pins));
+  const total = $derived(cost.request);
+  const dirty = $derived(
+    count !== saved.size || catalog.some((t) => picked.has(t.name) !== saved.has(t.name)) ||
+      load !== (server.load || "auto") || pins.size !== savedPins.size || [...pins].some((p) => !savedPins.has(p)),
+  );
   const heavy = $derived(total > MCP_TOKENS_WARN);
+  const loadOpts: { value: McpLoad; label: string }[] = [
+    { value: "auto", label: "Auto" },
+    { value: "full", label: "Always in full" },
+    { value: "on_demand", label: "On demand" },
+  ];
+  function pin(name: string) {
+    if (pins.has(name)) pins.delete(name);
+    else {
+      pins.add(name);
+      picked.add(name);
+    }
+  }
 
   const oneLine = (s: string) => (s || "").replace(/\s+/g, " ").trim();
 
@@ -57,6 +83,9 @@
   function undo() {
     picked.clear();
     for (const n of saved) picked.add(n);
+    load = server.load || "auto";
+    pins.clear();
+    for (const p of savedPins) pins.add(p);
   }
 
   async function save() {
@@ -64,7 +93,8 @@
     error = "";
     try {
       const tools = catalog.filter((t) => picked.has(t.name)).map((t) => t.name);
-      const r = await updateMcp(server.name, { tools });
+      const pinned = tools.filter((n) => pins.has(n));
+      const r = await updateMcp(server.name, { tools, load, pinned });
       onsaved(r.server);
       toast(tools.length ? `${server.name}: ${plural(tools.length, "tool")} picked.` : `${server.name}: no tools picked.`);
     } catch (e) {
@@ -101,21 +131,40 @@
 
     <ul class="tools" aria-label="{server.name} tools">
       {#each shown as t (t.name)}
-        <li>
+        <li class:od={cost.onDemand}>
           <label class="tool" title={oneLine(t.description)}>
             <input type="checkbox" checked={picked.has(t.name)} onchange={(e) => tick(t.name, e.currentTarget.checked)} />
             <span class="tn mono">{t.name}</span>
             <span class="tk">{tokText(t.tokens)} tok</span>
             <span class="td">{oneLine(t.description) || "No description"}</span>
           </label>
+          {#if cost.onDemand}
+            <button class="pin" class:on={pins.has(t.name)} type="button" onclick={() => pin(t.name)} aria-pressed={pins.has(t.name)}
+              title={pins.has(t.name) ? "Pinned: always sent in full. Click to unpin." : "Pin: always send this tool in full (for the ones the model uses most)"}
+              aria-label="Pin {t.name}"><Icon name="star" size={13} /></button>
+          {/if}
         </li>
       {:else}
         <li class="nomatch">No tool matches “{q.trim()}”.</li>
       {/each}
     </ul>
 
+    <div class="load">
+      <span class="lbl">How the model gets them</span>
+      <Seg label="How the model gets them" value={load} onchange={(v: McpLoad) => (load = v)} options={loadOpts} />
+      <p class="fine">
+        {#if load === "full"}Every ticked tool's whole description and arguments go with every request. Best for a few tools.
+        {:else if load === "on_demand"}The model sees one line per tool and reads a tool's arguments only when it needs them
+          (tool_info, then call_tool). Pin the few it uses most to send those in full.
+        {:else}In full while the ticked tools cost up to {tokText(MCP_ON_DEMAND_OVER)} tokens, on demand above that.
+          {cost.onDemand ? "These go on demand." : "These go in full."}{/if}
+        Images built before this option get every tool in full.
+      </p>
+    </div>
+
     <p class="sum" class:wa={heavy} aria-live="polite">
-      <b>{tokText(total)} tokens of context</b> · {count} of {plural(catalog.length, "tool")} ticked
+      <b>{tokText(total)} tokens per request</b> · {count} of {plural(catalog.length, "tool")} ticked
+      {#if cost.onDemand}· on demand ({tokText(cost.full)} in full; {pins.size ? `${pins.size} pinned; ` : ""}plus {tokText(MCP_ON_DEMAND_BASE)} for tool_info and call_tool){/if}
     </p>
 
     {#if heavy}
@@ -124,8 +173,8 @@
         <span>
           <b>These tools take more than a quarter of a 32K context.</b>
           <p>
-            Every request carries their schemas, and small local contexts (8–32K) fill up fast: there's less room for the
-            chat and the model's answer. Pick fewer tools.
+            Every request carries them, and small local contexts (8–32K) fill up fast: there's less room for the
+            chat and the model's answer. {cost.onDemand ? "Pin or tick fewer tools." : "Send them on demand, or pick fewer tools."}
           </p>
         </span>
       </div>
@@ -144,7 +193,7 @@
 
     <div class="btns">
       <button class="small primary" onclick={save} disabled={!dirty || saving}>
-        {#if saving}<span class="spin dark" aria-hidden="true"></span>{:else}<Icon name="check" size={14} />{/if}Save tools
+        {#if saving}<span class="spin dark" aria-hidden="true"></span>{:else}<Icon name="check" size={14} />{/if}Save
       </button>
       {#if dirty}<button class="small ghost" onclick={undo} disabled={saving}>Undo changes</button>{/if}
     </div>
@@ -201,6 +250,14 @@
     white-space: nowrap;
   }
   .nomatch { color: var(--mu); font-size: 12.5px; padding: 8px 0; }
+  .tools li.od { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; border-top: 1px solid var(--ln); }
+  .tools li.od .tool { border-top: 0; }
+  .pin { min-height: 26px; height: 26px; width: 26px; padding: 0; display: grid; place-items: center; background: none; border: 0; color: var(--fa); }
+  .pin.on { color: var(--pr); }
+  .pin.on :global(.ico) { fill: currentColor; }
+  .load { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+  .load .lbl { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+  .load .fine { margin-top: 0; }
 
   .sum { margin-top: 10px; font-size: 12.5px; color: var(--mu); }
   .sum b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }

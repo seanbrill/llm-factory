@@ -207,10 +207,14 @@ func parseEngineInfo(out []byte) (engineInfo, bool) {
 // readEngineInfo asks an engine for its info as JSON (one call: memory, CPUs
 // and the machine's identity).
 func readEngineInfo(ctx context.Context, engine string) (engineInfo, error) {
+	outer := ctx
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	out, err := engineCmd(ctx, engine, "info", "--format", "{{json .}}").Output()
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) && outer.Err() == nil {
+			return engineInfo{}, fmt.Errorf("%w: %v", errEngineSlow, err)
+		}
 		return engineInfo{}, err
 	}
 	in, ok := parseEngineInfo(out)
@@ -219,6 +223,10 @@ func readEngineInfo(ctx context.Context, engine string) (engineInfo, error) {
 	}
 	return in, nil
 }
+
+// errEngineSlow: the engine's CLI didn't answer in time. Its machine is
+// usually up but overloaded (swapping, or a build taking every CPU).
+var errEngineSlow = errors.New("the engine didn't answer in time")
 
 // firstLine is s's first line, trimmed and cut to 200 bytes, for error text.
 func firstLine(s string) string {

@@ -174,7 +174,11 @@
   const memPct = $derived(runEst?.estimate && memGB ? Math.min(100, (runEst.estimate.total_gb / memGB) * 100) : 0);
 
   // ---- MCP for this run ----
-  const mcpTokens = $derived(mcpServers.filter((m) => mcpOn.includes(m.name)).reduce((a, m) => a + (m.selected_tokens || 0), 0));
+  // What a server's tools cost this image per request: on demand only when
+  // its harness takes that (older images get every tool in full).
+  const mcpReq = (m: McpServer) => (image?.harness?.on_demand && m.on_demand ? m.request_tokens : m.selected_tokens) || 0;
+  const mcpTokens = $derived(mcpServers.filter((m) => mcpOn.includes(m.name)).reduce((a, m) => a + mcpReq(m), 0));
+  const mcpOldImage = $derived(!image?.harness?.on_demand && mcpServers.some((m) => mcpOn.includes(m.name) && m.on_demand));
   const runCtx = $derived(ctxNow || 0);
   function toggleMcp(name: string, on: boolean) {
     mcpOn = on ? [...mcpOn, name] : mcpOn.filter((n) => n !== name);
@@ -282,7 +286,7 @@
                 <b>{m.name}</b>
                 <small>{none ? "No tools chosen yet: pick some on the Harness page" : m.catalog?.length ? `${allowed.length} of its ${m.catalog.length} tools` : m.error ? "Its last test failed" : "Not tested yet"}</small>
               </span>
-              {#if !none && m.selected_tokens}<span class="chip" class:ok={mcpOn.includes(m.name)}>{tokText(m.selected_tokens)} tokens</span>{/if}
+              {#if !none && m.selected_tokens}<span class="chip" class:ok={mcpOn.includes(m.name)}>{tokText(mcpReq(m))} tokens{image?.harness?.on_demand && m.on_demand ? " · on demand" : ""}</span>{/if}
             </label>
           {/each}
         </div>
@@ -290,6 +294,9 @@
           <p class="hint" class:warnt={runCtx > 0 && mcpTokens > runCtx * 0.25}>
             Their tool descriptions take {tokText(mcpTokens)} tokens of every request{runCtx ? `, ${Math.round((mcpTokens / runCtx) * 100)}% of a ${ctxText(runCtx)} context` : ""}.
           </p>
+        {/if}
+        {#if mcpOldImage}
+          <p class="hint warnt">This image was built before tools on demand, so it gets every picked tool in full. Rebuild it to send them on demand.</p>
         {/if}
       {/if}
       <p class="hint">While it runs you can add more from any chat, Open WebUI included: type <span class="mono">/mcp help</span>.</p>

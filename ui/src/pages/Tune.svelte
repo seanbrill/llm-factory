@@ -16,7 +16,7 @@
   import {
     PRESET_IDS, PRESET_LABEL, clean, clearTuning, ctxOptions, ctxText, ctxWords, estimate, getTuning,
     parseTuneArg, sameTuning, saveTuning, tuningChips, tuningLine,
-    type EstimateResult, type KvCache, type Preset, type PresetOption, type Spec, type Switch, type Tuning, type TuningInfo,
+    LIMIT_KEYS, type EstimateResult, type KvCache, type Preset, type PresetOption, type Spec, type Switch, type Tuning, type TuningInfo,
   } from "../lib/tuning";
 
   $effect(() => watch("images", "containers"));
@@ -99,7 +99,10 @@
   );
 
   function choose(p: PresetOption) {
-    draft = { ...p.tuning, preset: p.id };
+    // A preset sets llama.cpp's side; the harness limits set here stay.
+    const keep: Partial<Tuning> = {};
+    for (const k of LIMIT_KEYS) if (draft[k] != null) keep[k] = draft[k];
+    draft = { ...p.tuning, ...keep, preset: p.id };
   }
   function set<K extends keyof Tuning>(k: K, v: Tuning[K]) {
     draft = { ...draft, [k]: v, preset: "custom" };
@@ -394,6 +397,36 @@
                   {/each}
                 </div>
               </details>
+              {#if info?.harness}
+                {@const hl = info.harness}
+                <details class="more" open={LIMIT_KEYS.some((k) => draft[k] != null)}>
+                  <summary>
+                    <span class="k"><b>Tool limits</b><small>{[
+                      `${draft.max_steps ?? hl.max_steps} steps`,
+                      `${draft.max_calls_per_step ?? hl.max_calls_per_step} calls each`,
+                      `${draft.tool_timeout_s ?? hl.tool_timeout_s} s per call`,
+                      `${draft.max_output_kb ?? hl.max_output_kb} KB per result`,
+                    ].join(", ")}{LIMIT_KEYS.some((k) => draft[k] != null) ? "" : " (the image's)"}</small></span>
+                    <Icon name="chevronDown" size={15} />
+                  </summary>
+                  <div class="adv">
+                    {#each [
+                      ["max_steps", "Tool steps per answer", 1, 50, "1", hl.max_steps, "Then it has to answer. Multi-step MCP work needs 20–30."],
+                      ["max_calls_per_step", "Tool calls per step", 1, 32, "1", hl.max_calls_per_step, hl.on_demand ? "" : "Needs a rebuild to change: this image reads it only from its build."],
+                      ["tool_timeout_s", "Seconds per tool call", 1, 1800, "1", hl.tool_timeout_s, "Shell commands like builds and tests may need 120 or more."],
+                      ["max_output_kb", "KB of text per tool result", 0.5, 1024, "0.5", hl.max_output_kb, "Longer results are cut. A design frame's code needs about 24."],
+                    ] as [k, label, min, max, step, baked, hint] (k)}
+                      {@const key = k as keyof Tuning}
+                      <label class="af">
+                        <span>{label}</span>
+                        <input type="number" min={min} max={max} step={step} placeholder={`${baked} (the image's)`} value={(draft[key] as number | undefined) ?? ""} onchange={(ev) => set(key, num(ev.currentTarget.value) as never)} />
+                        {#if hint}<small>{hint}</small>{/if}
+                      </label>
+                    {/each}
+                  </div>
+                  <p class="lnote">These change the tool limits built into the image, for every run, without a rebuild. Empty keeps the image's.</p>
+                </details>
+              {/if}
             </div>
             {#if est?.notes?.length}
               <ul class="notes">{#each est.notes as n (n)}<li><Icon name="info" size={13} />{n}</li>{/each}</ul>
@@ -530,4 +563,5 @@
     .row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
     .adv { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
+  .lnote { margin: 8px 0 0; font-size: 12px; color: var(--fa); line-height: 1.45; }
 </style>

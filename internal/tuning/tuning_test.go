@@ -438,3 +438,27 @@ func TestEstimate(t *testing.T) {
 		t.Errorf("fit: %v %q", fits, w)
 	}
 }
+
+func TestHarnessLimits(t *testing.T) {
+	m := gemmaModel(t, 4<<30)
+	got, _, err := Normalize(Tuning{MaxSteps: 30, MaxCalls: 8, ToolTimeoutS: 120, MaxOutputKB: 24}, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := got.EnvMap("")
+	if env[EnvHarnessMaxSteps] != "30" || env[EnvHarnessMaxCalls] != "8" || env[EnvHarnessTimeout] != "120" || env[EnvHarnessMaxOutputB] != "24576" {
+		t.Errorf("env = %v", env)
+	}
+	if m := Overlay(Tuning{MaxSteps: 20}, Tuning{MaxOutputKB: 24}); m.MaxSteps != 20 || m.MaxOutputKB != 24 {
+		t.Errorf("merge = %+v", m)
+	}
+	for _, bad := range []Tuning{{MaxSteps: 51}, {MaxCalls: 33}, {ToolTimeoutS: 1801}, {MaxOutputKB: 0.1}, {MaxOutputKB: 2048}} {
+		if _, _, err := Normalize(bad, m); err == nil {
+			t.Errorf("%+v should be refused", bad)
+		}
+	}
+	// Clearing a saved limit puts the image's back.
+	if ch := EnvChange(Tuning{}, Tuning{MaxSteps: 30}, ""); len(ch) != 1 || ch[0] != "HARNESS_MAX_STEPS=30" {
+		t.Errorf("EnvChange = %v", ch)
+	}
+}

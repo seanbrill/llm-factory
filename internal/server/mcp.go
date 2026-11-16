@@ -13,7 +13,7 @@ package server
 //
 //	GET    /api/containers/mcp?id=&engine=           the model's MCP servers
 //	POST   /api/containers/mcp/add  {id, engine, server: "<name>" | {name, url, headers}, tools?}
-//	PATCH  /api/containers/mcp      {id, engine, name, tools? | enabled?}
+//	PATCH  /api/containers/mcp      {id, engine, name, tools? | enabled? | load? | pinned?}
 //	DELETE /api/containers/mcp      {id, engine, name}
 //	POST   /api/containers/mcp/test {id, engine, name}
 
@@ -337,6 +337,25 @@ func (h *harnessAPI) handleMCPItem(w http.ResponseWriter, r *http.Request) {
 			}
 			next.ToolsChosen = true
 		}
+		if v, ok := raw["load"]; ok {
+			var l string
+			if json.Unmarshal(v, &l) != nil || !agent.ValidLoad(l) {
+				jsonErr(w, http.StatusBadRequest, "load must be auto, full or on_demand")
+				return
+			}
+			if l == agent.MCPLoadAuto {
+				l = ""
+			}
+			next.Load = l
+		}
+		if v, ok := raw["pinned"]; ok {
+			var ps []string
+			if string(v) != "null" && json.Unmarshal(v, &ps) != nil {
+				jsonErr(w, http.StatusBadRequest, "pinned must be a list of tool names")
+				return
+			}
+			next.Pinned = ps
+		}
 		if err := harness.ValidateMCPServer(next); err != nil {
 			jsonErr(w, http.StatusBadRequest, redactMCP(err.Error(), next))
 			return
@@ -420,7 +439,16 @@ func (s *Server) runHarness(labels map[string]string, names []string, engine str
 			notes = append(notes, fmt.Sprintf("MCP server %s has no tools picked, so it was left out; pick its tools on the Harness page", n))
 			continue
 		}
-		rh.MCP = append(rh.MCP, m.Agent(builder.HostAlias(engine)))
+		am := m.Agent(builder.HostAlias(engine))
+		if !builder.HarnessHas(labels, builder.HarnessOnDemand) && (am.Load != "" || am.Pinned != nil) {
+			// An older harness refuses fields it doesn't know: it gets every
+			// tool in full.
+			am.Load, am.Pinned = "", nil
+			if agent.LoadOnDemand(m.Load, m.View().SelectedTokens) {
+				notes = append(notes, fmt.Sprintf("MCP server %s: this image was built before tools on demand, so it gets the whole schema of every picked tool; rebuild it to send them on demand", n))
+			}
+		}
+		rh.MCP = append(rh.MCP, am)
 		if note := harness.LoopbackNote(m.URL, engine); note != "" {
 			notes = append(notes, note)
 		}
@@ -526,6 +554,8 @@ type containerMCPReq struct {
 	Server  json.RawMessage `json:"server"`
 	Tools   json.RawMessage `json:"tools"`
 	Enabled *bool           `json:"enabled"`
+	Load    *string         `json:"load"`
+	Pinned  json.RawMessage `json:"pinned"`
 }
 
 func (h *harnessAPI) handleContainerMCP(w http.ResponseWriter, r *http.Request) {
@@ -554,6 +584,12 @@ func (h *harnessAPI) handleContainerMCP(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.Enabled != nil {
 		patch["enabled"] = *req.Enabled
+	}
+	if req.Load != nil {
+		patch["load"] = *req.Load
+	}
+	if len(req.Pinned) > 0 {
+		patch["pinned"] = req.Pinned
 	}
 	st, b, err := h.gateCall(ctx, req.ID, req.Engine, http.MethodPatch, suffix, patch)
 	relay(w, st, b, err)
@@ -616,6 +652,12 @@ func (h *harnessAPI) handleContainerMCPAdd(w http.ResponseWriter, r *http.Reques
 	if a.ConnectVia != "" {
 		body["connect_via"] = a.ConnectVia
 	}
+	if a.Load != "" {
+		body["load"] = a.Load
+	}
+	if len(a.Pinned) > 0 {
+		body["pinned"] = a.Pinned
+	}
 	switch {
 	case len(req.Tools) > 0:
 		body["tools"] = req.Tools
@@ -625,6 +667,12 @@ func (h *harnessAPI) handleContainerMCPAdd(w http.ResponseWriter, r *http.Reques
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	st, b, err := h.gateCall(ctx, req.ID, engine, http.MethodPost, "", body)
+	if err == nil && st == http.StatusBadRequest && strings.Contains(string(b), "unknown field") && (body["load"] != nil || body["pinned"] != nil) {
+		// A harness from before tools on demand: add it with every tool in full.
+		delete(body, "load")
+		delete(body, "pinned")
+		st, b, err = h.gateCall(ctx, req.ID, engine, http.MethodPost, "", body)
+	}
 	if err == nil && st < 300 {
 		log.Printf("harness: MCP server %s connected to a running model (%s)", s.Name, agent.RedactURL(s.URL))
 	}

@@ -107,6 +107,26 @@ func TestMCPRegistry(t *testing.T) {
 		t.Error("an image without a harness took MCP servers")
 	}
 
+	// Tools on demand: saved, shown with their per-request cost, passed to
+	// an image that reads them and left out for one that doesn't.
+	code, body = th.call(t, "PUT", "/api/harness/mcp/knit", `{"load":"on_demand","pinned":["t1"]}`)
+	if code != 200 || !strings.Contains(body, `"load":"on_demand"`) || !strings.Contains(body, `"pinned":["t1"]`) || !strings.Contains(body, `"on_demand":true`) {
+		t.Fatalf("put load: %d %s", code, body)
+	}
+	if code, _ := th.call(t, "PUT", "/api/harness/mcp/knit", `{"load":"sometimes"}`); code != 400 {
+		t.Errorf("a bad load mode: %d", code)
+	}
+	labels := map[string]string{builder.LabelHarness: "1", builder.LabelHarnessConfig: `{"tools":[]}`}
+	rh, _, _ = s.runHarness(labels, []string{"knit"}, "podman")
+	if rh.MCP[0].Load != "" || rh.MCP[0].Pinned != nil {
+		t.Errorf("an older image must not get load/pinned (it refuses unknown fields): %+v", rh.MCP[0])
+	}
+	labels[builder.LabelHarnessFeatures] = builder.HarnessOnDemand
+	rh, _, _ = s.runHarness(labels, []string{"knit"}, "podman")
+	if rh.MCP[0].Load != "on_demand" || strings.Join(rh.MCP[0].Pinned, ",") != "t1" {
+		t.Errorf("a new image gets load/pinned: %+v", rh.MCP[0])
+	}
+
 	if code, _ := th.call(t, "DELETE", "/api/harness/mcp/knit", `{}`); code != 200 || len(th.h.store.Get().MCP) != 0 {
 		t.Errorf("delete: %d", code)
 	}

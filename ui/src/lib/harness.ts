@@ -201,8 +201,16 @@ export interface McpServer {
   /** The server's tools as of the last successful test ([] = never tested). */
   catalog: McpTool[];
   catalog_tokens: number;
-  /** Tokens of the allowed tools. */
+  /** Tokens of the allowed tools, sent in full. */
   selected_tokens: number;
+  /** How the tools reach the model: auto (on demand above MCP_ON_DEMAND_OVER tokens), full or on_demand. */
+  load: McpLoad;
+  /** Tools always sent in full, even on demand. */
+  pinned: string[];
+  /** The ticked tools reach the model as a one-line catalog (tool_info, call_tool). */
+  on_demand: boolean;
+  /** What the ticked tools cost each request (catalog lines and pinned schemas when on demand). */
+  request_tokens: number;
   /** RFC3339 time of the last test. */
   tested_at?: string;
   /** The last test's error. */
@@ -238,6 +246,33 @@ export interface McpUpdate {
   headers?: Record<string, string>;
   /** null = every tool, [] = none, a list = those. */
   tools?: string[] | null;
+  load?: McpLoad;
+  pinned?: string[];
+}
+
+export type McpLoad = "auto" | "full" | "on_demand";
+/** An "auto" server goes on demand when its ticked tools' schemas cost more than this (internal/agent OnDemandOver). */
+export const MCP_ON_DEMAND_OVER = 3000;
+/** tool_info's and call_tool's schemas and the catalog heading (internal/agent OnDemandBaseTokens). */
+export const MCP_ON_DEMAND_BASE = 227;
+
+/** A tool's catalog line in tokens, as internal/agent CatalogLineTokens estimates it. */
+export function catalogLineTokens(server: string, tool: string, desc: string): number {
+  let d = (desc || "").split(/\s+/).filter(Boolean).join(" ");
+  const i = d.indexOf(". ");
+  if (i > 0 && i < 110) d = d.slice(0, i + 1);
+  else if (new TextEncoder().encode(d).length > 110) d = d.slice(0, 110) + "…";
+  const line = `- ${server}__${tool}${d ? ": " + d : ""}`;
+  return Math.ceil((new TextEncoder().encode(line).length + 1) / 3);
+}
+
+/** What a server's ticked tools cost per request under a load mode and pins. */
+export function mcpCost(server: string, tools: McpTool[], load: McpLoad, pinned: Set<string>): { onDemand: boolean; full: number; request: number } {
+  const full = tools.reduce((n, t) => n + (t.tokens || 0), 0);
+  const onDemand = load === "on_demand" || (load !== "full" && full > MCP_ON_DEMAND_OVER);
+  if (!onDemand) return { onDemand, full, request: full };
+  const request = tools.reduce((n, t) => n + (pinned.has(t.name) ? t.tokens || 0 : catalogLineTokens(server, t.name, t.description)), 0);
+  return { onDemand, full, request };
 }
 
 /** A stored header value as the factory shows it. Sent back, it keeps that value. */

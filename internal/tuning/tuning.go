@@ -100,7 +100,24 @@ type Tuning struct {
 	TopK          *int     `json:"top_k,omitempty"`
 	MinP          *float64 `json:"min_p,omitempty"`
 	RepeatPenalty *float64 `json:"repeat_penalty,omitempty"`
+
+	// The agent harness's limits (images with a baked harness), overriding
+	// the ones baked in: tool steps per answer, tool calls per step, seconds
+	// per tool call, and KB of text per tool result.
+	MaxSteps     int     `json:"max_steps,omitempty"`
+	MaxCalls     int     `json:"max_calls_per_step,omitempty"`
+	ToolTimeoutS int     `json:"tool_timeout_s,omitempty"`
+	MaxOutputKB  float64 `json:"max_output_kb,omitempty"`
 }
+
+// Harness limit ranges (they match internal/agent's).
+const (
+	MaxHarnessSteps    = 50
+	MaxHarnessCalls    = 32
+	MaxHarnessTimeoutS = 1800
+	MinHarnessOutputKB = 0.5
+	MaxHarnessOutputKB = 1024
+)
 
 // IntPtr, FloatPtr and BoolPtr make optional values.
 func IntPtr(v int) *int           { return &v }
@@ -218,6 +235,12 @@ func Overlay(base, over Tuning) Tuning {
 	}
 	if over.RepeatPenalty != nil {
 		out.RepeatPenalty = FloatPtr(*over.RepeatPenalty)
+	}
+	setI(&out.MaxSteps, over.MaxSteps)
+	setI(&out.MaxCalls, over.MaxCalls)
+	setI(&out.ToolTimeoutS, over.ToolTimeoutS)
+	if over.MaxOutputKB != 0 {
+		out.MaxOutputKB = over.MaxOutputKB
 	}
 	return out
 }
@@ -423,6 +446,20 @@ func Normalize(t Tuning, m Model) (Tuning, []string, error) {
 		bad("threads %d is out of range (1 to %d)", t.Threads, MaxThreads)
 	}
 
+	// Harness limits.
+	if t.MaxSteps < 0 || t.MaxSteps > MaxHarnessSteps {
+		bad("max_steps %d is out of range (1 to %d)", t.MaxSteps, MaxHarnessSteps)
+	}
+	if t.MaxCalls < 0 || t.MaxCalls > MaxHarnessCalls {
+		bad("max_calls_per_step %d is out of range (1 to %d)", t.MaxCalls, MaxHarnessCalls)
+	}
+	if t.ToolTimeoutS < 0 || t.ToolTimeoutS > MaxHarnessTimeoutS {
+		bad("tool_timeout_s %d is out of range (1 to %d seconds)", t.ToolTimeoutS, MaxHarnessTimeoutS)
+	}
+	if t.MaxOutputKB != 0 && (math.IsNaN(t.MaxOutputKB) || t.MaxOutputKB < MinHarnessOutputKB || t.MaxOutputKB > MaxHarnessOutputKB) {
+		bad("max_output_kb %g is out of range (%g to %g)", t.MaxOutputKB, MinHarnessOutputKB, float64(MaxHarnessOutputKB))
+	}
+
 	// Sampling defaults (a request's own values still win).
 	checkF := func(name string, v *float64, lo, hi float64) {
 		if v != nil && (math.IsNaN(*v) || *v < lo || *v > hi) {
@@ -499,6 +536,12 @@ const (
 	EnvTopK            = "TOP_K"
 	EnvMinP            = "MIN_P"
 	EnvRepeatPenalty   = "REPEAT_PENALTY"
+
+	// The harness's (internal/agent Config.WithEnv).
+	EnvHarnessMaxSteps   = "HARNESS_MAX_STEPS"
+	EnvHarnessMaxCalls   = "HARNESS_MAX_CALLS_PER_STEP"
+	EnvHarnessTimeout    = "HARNESS_TOOL_TIMEOUT"
+	EnvHarnessMaxOutputB = "HARNESS_MAX_OUTPUT_BYTES"
 )
 
 // EnvNames lists every tuning variable (sorted).
@@ -506,7 +549,8 @@ func EnvNames() []string {
 	n := []string{EnvCtxSize, EnvParallel, EnvThreads, EnvFlashAttn, EnvKVCacheType, EnvKVUnified,
 		EnvBatchSize, EnvUBatchSize, EnvSpecType, EnvDraftModelPath, EnvDraftMax, EnvDraftMin,
 		EnvReasoning, EnvReasoningEffort, EnvReasoningBudget, EnvCacheRAMMB, EnvCtxCheckpoints,
-		EnvTemperature, EnvTopP, EnvTopK, EnvMinP, EnvRepeatPenalty}
+		EnvTemperature, EnvTopP, EnvTopK, EnvMinP, EnvRepeatPenalty,
+		EnvHarnessMaxSteps, EnvHarnessMaxCalls, EnvHarnessTimeout, EnvHarnessMaxOutputB}
 	sort.Strings(n)
 	return n
 }
@@ -566,6 +610,12 @@ func (t Tuning) EnvMap(draftPath string) map[string]string {
 	ip(EnvTopK, t.TopK)
 	f(EnvMinP, t.MinP)
 	f(EnvRepeatPenalty, t.RepeatPenalty)
+	i(EnvHarnessMaxSteps, t.MaxSteps)
+	i(EnvHarnessMaxCalls, t.MaxCalls)
+	i(EnvHarnessTimeout, t.ToolTimeoutS)
+	if t.MaxOutputKB != 0 {
+		e[EnvHarnessMaxOutputB] = strconv.Itoa(int(math.Round(t.MaxOutputKB * 1024)))
+	}
 	return e
 }
 

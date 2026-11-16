@@ -26,6 +26,10 @@ type MCPServer struct {
 	Tools []string `json:"tools"`
 	// ToolsChosen: the user edited the allowlist (a test then keeps it).
 	ToolsChosen bool `json:"tools_chosen,omitempty"`
+	// Load is how the tools reach the model (agent.MCPServer.Load): "auto"
+	// (""), "full" or "on_demand". Pinned tools are always sent in full.
+	Load   string   `json:"load,omitempty"`
+	Pinned []string `json:"pinned,omitempty"`
 	// Catalog is the server's tools as of the last successful test.
 	Catalog  []MCPTool `json:"catalog,omitempty"`
 	TestedAt string    `json:"tested_at,omitempty"`
@@ -49,9 +53,15 @@ type MCPView struct {
 	Catalog        []MCPTool         `json:"catalog"`
 	CatalogTokens  int               `json:"catalog_tokens"`
 	SelectedTokens int               `json:"selected_tokens"`
-	TestedAt       string            `json:"tested_at,omitempty"`
-	Error          string            `json:"error,omitempty"`
-	Loopback       bool              `json:"loopback"`
+	Load           string            `json:"load"`
+	Pinned         []string          `json:"pinned"`
+	// OnDemand: the selected tools reach the model as a catalog (tool_info,
+	// call_tool). RequestTokens: what they cost each request.
+	OnDemand      bool   `json:"on_demand"`
+	RequestTokens int    `json:"request_tokens"`
+	TestedAt      string `json:"tested_at,omitempty"`
+	Error         string `json:"error,omitempty"`
+	Loopback      bool   `json:"loopback"`
 }
 
 // MaskURL shows scheme://host:port, with "/…" when the URL has a path or
@@ -85,10 +95,36 @@ func (s MCPServer) View() MCPView {
 	for _, t := range s.Tools {
 		allow[t] = true
 	}
+	pinned := map[string]bool{}
+	for _, t := range s.Pinned {
+		pinned[t] = true
+	}
 	for _, t := range s.Catalog {
 		v.CatalogTokens += t.Tokens
 		if s.Tools == nil || allow[t.Name] {
 			v.SelectedTokens += t.Tokens
+		}
+	}
+	v.Load, v.Pinned = s.Load, s.Pinned
+	if v.Load == "" {
+		v.Load = agent.MCPLoadAuto
+	}
+	if v.Pinned == nil {
+		v.Pinned = []string{}
+	}
+	v.OnDemand = agent.LoadOnDemand(s.Load, v.SelectedTokens)
+	v.RequestTokens = v.SelectedTokens
+	if v.OnDemand {
+		v.RequestTokens = 0
+		for _, t := range s.Catalog {
+			if s.Tools != nil && !allow[t.Name] {
+				continue
+			}
+			if pinned[t.Name] {
+				v.RequestTokens += t.Tokens
+			} else {
+				v.RequestTokens += agent.CatalogLineTokens(s.Name, t.Name, t.Description)
+			}
 		}
 	}
 	return v
@@ -97,7 +133,7 @@ func (s MCPServer) View() MCPView {
 // Agent is the server as a harness gets it (HARNESS_MCP, the admin API).
 // via is the connect_via for a loopback URL ("" = none).
 func (s MCPServer) Agent(via string) agent.MCPServer {
-	a := agent.MCPServer{Name: s.Name, URL: s.URL, Headers: s.Headers, Tools: s.Tools}
+	a := agent.MCPServer{Name: s.Name, URL: s.URL, Headers: s.Headers, Tools: s.Tools, Load: s.Load, Pinned: s.Pinned}
 	if via != "" && agent.IsLoopbackURL(s.URL) {
 		a.ConnectVia = via
 	}

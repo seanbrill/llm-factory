@@ -32,6 +32,13 @@ const (
 	LabelHarness       = "local-llm.harness"        // "1" when baked
 	LabelHarnessTools  = "local-llm.harness_tools"  // enabled toolsets, comma-separated
 	LabelHarnessConfig = "local-llm.harness_config" // the baked harness.json (compact), for cloning
+	// LabelHarnessFeatures lists what the baked harness understands beyond
+	// the first version, so a run sends an older image only what it reads
+	// (its HARNESS_MCP parser refuses unknown fields).
+	LabelHarnessFeatures = "local-llm.harness_features"
+	// HarnessOnDemand: MCP load modes and pinned tools; HARNESS_CHECKS and
+	// HARNESS_MAX_CALLS_PER_STEP.
+	HarnessOnDemand = "on_demand"
 )
 
 const (
@@ -115,6 +122,8 @@ type ImageHarness struct {
 	SearXNGURL string   `json:"searxng_url,omitempty"` // with the searxng backend
 	MaxSteps   int      `json:"max_steps"`
 	Workspace  bool     `json:"workspace"` // a run mounts a workspace folder at /workspace
+	// OnDemand: it takes MCP tools on demand (LabelHarnessFeatures).
+	OnDemand bool `json:"on_demand,omitempty"`
 }
 
 // HarnessInfo summarizes c for the Library (nil for no harness).
@@ -146,7 +155,19 @@ func harnessLabels(c *agent.Config) []string {
 		"--label", LabelHarness + "=1",
 		"--label", LabelHarnessTools + "=" + strings.Join(c.EnabledToolsets(), ","),
 		"--label", LabelHarnessConfig + "=" + string(compact),
+		"--label", LabelHarnessFeatures + "=" + HarnessOnDemand,
 	}
+}
+
+// HarnessHas reports whether an image's baked harness has a feature
+// (LabelHarnessFeatures).
+func HarnessHas(labels map[string]string, feature string) bool {
+	for _, f := range strings.Split(labels[LabelHarnessFeatures], ",") {
+		if strings.TrimSpace(f) == feature {
+			return true
+		}
+	}
+	return false
 }
 
 // stageHarness writes <work>/harness/harness.json and <work>/harness/skills/,

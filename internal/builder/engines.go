@@ -152,11 +152,14 @@ func EngineMemory(ctx context.Context, engine string) (memGB float64, cpus int, 
 
 // EngineResources is one engine's machine as its containers see it.
 type EngineResources struct {
-	Engine    string  `json:"engine"`
-	Reachable bool    `json:"reachable"` // answered `info` just now
-	MemGB     float64 `json:"mem_gb"`
-	CPUs      int     `json:"cpus"`
-	GPU       string  `json:"gpu"` // compute it gives containers: "" | "vulkan" | "cuda"
+	Engine    string `json:"engine"`
+	Reachable bool   `json:"reachable"` // answered `info` just now
+	// Slow: it didn't answer in time; its machine is probably running but
+	// overloaded (not reachable, but not off either).
+	Slow  bool    `json:"slow,omitempty"`
+	MemGB float64 `json:"mem_gb"`
+	CPUs  int     `json:"cpus"`
+	GPU   string  `json:"gpu"` // compute it gives containers: "" | "vulkan" | "cuda"
 	// GPUFrom is how the factory knows about GPU: "host" (the start script saw
 	// it: a libkrun Podman machine, an NVIDIA card) or "probe" (the last GPU
 	// check got a usable render node into a container on this engine).
@@ -254,6 +257,8 @@ func (b *Builder) SysInfo(ctx context.Context) SysInfo {
 				r.Reachable, r.MemGB, r.CPUs = true, float64(in.MemBytes)/1e9, in.CPUs
 				id = in.Identity
 				r.System = id.describe()
+			} else if errors.Is(err, errEngineSlow) {
+				r.Slow = true
 			} else if err != nil && !transientEngineErr(err) && ctx.Err() == nil {
 				// It answered, but not with JSON we could read: its memory the old way.
 				if mem, cpus, err := EngineMemory(ctx, e); err == nil {

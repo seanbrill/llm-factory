@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -465,7 +466,30 @@ func (s *Server) handleTuningGet(w http.ResponseWriter, r *http.Request) {
 	}
 	p := price(eff, notes, it.facts, it.target)
 	resp["estimate"], resp["fits"], resp["warning"], resp["notes"] = p.Estimate, p.Fits, p.Warning, p.Notes
+	if h := harnessLimitsOf(it.labels); h != nil {
+		resp["harness"] = h
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// harnessLimits are an image's baked harness limits, in the Tune page's
+// units, and whether it reads the newer settings (checks, calls per step).
+type harnessLimits struct {
+	MaxSteps     int     `json:"max_steps"`
+	MaxCalls     int     `json:"max_calls_per_step"`
+	ToolTimeoutS int     `json:"tool_timeout_s"`
+	MaxOutputKB  float64 `json:"max_output_kb"`
+	OnDemand     bool    `json:"on_demand"` // tools on demand and the loop's checks
+}
+
+func harnessLimitsOf(labels map[string]string) *harnessLimits {
+	c := builder.BakedHarness(labels)
+	if c == nil {
+		return nil
+	}
+	l := c.WithDefaults().Limits
+	return &harnessLimits{MaxSteps: l.MaxSteps, MaxCalls: l.MaxCallsPerStep, ToolTimeoutS: int(l.ToolTimeout.D().Seconds()),
+		MaxOutputKB: math.Round(float64(l.MaxOutputBytes)/1024*100) / 100, OnDemand: builder.HarnessHas(labels, builder.HarnessOnDemand)}
 }
 
 // handleTuningPut saves PUT /api/tuning {ref, engine, tuning} for the image:

@@ -36,6 +36,7 @@
 
   function engTitle(e: EngineResources): string {
     const name = e.engine === "podman" ? "Podman machine" : "Docker";
+    if (!e.reachable && e.slow) return `${name} didn't answer in time. It's probably running but overloaded: the Mac may be short of memory, or a build is using every CPU. Its models can still be serving.`;
     if (!e.reachable) return `${name} isn't running. Start it, then restart the factory so it reconnects.`;
     let t = `${name}: ${gb(e.mem_gb)} memory, ${e.cpus} CPUs, ${e.gpu ? e.gpu + " GPU" : "no GPU"}.`;
     if (e.low_memory) {
@@ -84,7 +85,7 @@
     {#each engines as e (e.engine)}
       <a class="eng" class:warn={e.low_memory} class:down={!e.reachable} href={href("system")} title={engTitle(e)}>
         {#if !e.reachable}
-          <span class="dot off"></span>{engineName(e.engine)} <b>off</b>
+          <span class="dot off"></span>{engineName(e.engine)} <b>{e.slow ? "not answering" : "off"}</b>
         {:else if e.low_memory}
           <Icon name="warn" size={15} />{engineName(e.engine)} <b>{memGB(e.mem_gb)}</b>
         {:else}

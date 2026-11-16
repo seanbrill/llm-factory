@@ -140,7 +140,17 @@
           <small>Longer results are cut, with a note</small>
         </label>
       </div>
+      <p class="hint">These are the image's defaults. The Tune page can change them later for every run, without a rebuild.</p>
     </details>
+
+    <div class="bk" role="note">
+      <b>What's built in, and what's chosen when it runs</b>
+      <ul>
+        <li><b>Built into the image:</b> the tools ticked above (search, pages, files, skills, shell), the search engine, and the limits' defaults.</li>
+        <li><b>Chosen when it runs:</b> MCP servers. The Run dialog picks which servers from the <a href={href("harness")}>Harness</a> page it connects to (and which of their tools), and a running model can add more from any chat with <span class="mono">/mcp</span>. None are built in, so changing them never needs a rebuild.</li>
+        <li><b>Changeable later without a rebuild:</b> context, memory and speed settings, reasoning effort, sampling and the tool limits, on the Tune page.</li>
+      </ul>
+    </div>
 
     {#if problem}
       <p class="err" role="alert"><Icon name="errc" size={14} /><span>{problem}</span></p>
@@ -231,4 +241,8 @@
     .g2, .g4 { grid-template-columns: minmax(0, 1fr); }
     .sets { grid-template-columns: minmax(0, 1fr); }
   }
+  .bk { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--p2); font-size: 12.5px; line-height: 1.5; color: var(--mu); }
+  .bk > b { color: var(--ink); font-weight: 600; }
+  .bk ul { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+  .bk li b { color: var(--ink); font-weight: 600; }
 </style>

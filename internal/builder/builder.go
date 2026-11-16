@@ -1507,6 +1507,7 @@ func (b *Builder) Images(ctx context.Context) ([]map[string]any, error) {
 				// A baked harness, read here: its tools and config labels hold
 				// commas, which the joined string above can't carry.
 				if h := HarnessInfo(BakedHarness(labels)); h != nil {
+					h.OnDemand = HarnessHas(labels, HarnessOnDemand)
 					im["Harness"] = h
 				}
 				if c := labels["local-llm.compute"]; c != "" {

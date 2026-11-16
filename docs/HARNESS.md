@@ -506,7 +506,8 @@ container starts. A bad value stops the container with an error in its log.
 | `HARNESS_SEARXNG_URL` | A SearXNG instance. Also selects the `searxng` backend, unless `HARNESS_SEARCH_BACKEND` is set. |
 | `HARNESS_BRAVE_API_KEY` | A Brave Search API key. Also selects `brave`, unless a backend or a SearXNG URL is set. |
 | `HARNESS_WORKSPACE`, `HARNESS_SKILLS_DIR` | Other folders inside the container. |
-| `HARNESS_MAX_STEPS`, `HARNESS_TOOL_TIMEOUT`, `HARNESS_MAX_OUTPUT_BYTES` | Override the limits. |
+| `HARNESS_MAX_STEPS`, `HARNESS_MAX_CALLS_PER_STEP`, `HARNESS_TOOL_TIMEOUT`, `HARNESS_MAX_OUTPUT_BYTES` | Override the limits. The Tune page's Tool limits set these for every run, without a rebuild. |
+| `HARNESS_CHECKS` | `off` turns off the loop's notes about repeated failures and unchecked changes (see [Tools on demand and the loop's checks](#tools-on-demand-and-the-loops-checks)). |
 | `HARNESS_MCP` | MCP servers, a JSON array (see [MCP servers](#mcp-servers)). Merged by name into the config's `mcp` list. |
 | `HARNESS_HOST_ALIAS` | The host's name inside the container (`host.docker.internal`, `host.containers.internal`). A loopback MCP URL is dialed through it. |
 | `HARNESS_ADMIN_TOKEN` | Turns on the admin API (`/v1/harness/mcp`) for bearers of this token. Without it the API is off. |
@@ -686,6 +687,39 @@ headers stored in `config/harness.json`, 0600, shown masked) with a per-server
 tool pick and its token cost, and `POST /api/run` takes `"mcp": ["knitted"]`:
 it passes the picked servers as `HARNESS_MCP` with `connect_via` set to the
 engine's host alias.
+
+### Tools on demand and the loop's checks
+
+Every tool's schema rides along in every request. knitted's 72 tools come to
+about 15.5K tokens, a third of a 64K context, before the conversation starts.
+A server's `load` decides how its tools reach the model:
+
+| `load` | What the model gets |
+|---|---|
+| `auto` (default) | `full` while the allowed tools cost up to 3000 tokens, `on_demand` above that. |
+| `full` | Every allowed tool's schema in every request. |
+| `on_demand` | One line per tool in the system note, plus two harness tools: `tool_info(names)` returns tools' full descriptions and arguments, `call_tool(name, arguments)` runs one. Tools in `pinned` are still sent in full. |
+
+The tools array stays the same for the whole conversation, so llama-server's
+prompt cache keeps working; schemas the model asks for arrive at the end of
+the conversation. A `call_tool` that fails returns the tool's arguments with
+the error. Set `load` and `pinned` on the Harness page (the tool picker) or
+with `PATCH /v1/harness/mcp/{name}`. Images built before this get every tool
+in full: the factory leaves the fields out for them (their label
+`local-llm.harness_features` lacks `on_demand`).
+
+The loop also keeps habits a small model lacks:
+
+- The same failing call twice (same arguments, or the same error): the result
+  says so and asks it to read the error and change course.
+- A reply that hit `max_tokens` in the middle of a tool call: the call's
+  result says why its arguments were cut and to make one call at a time.
+- An answer right after changing things (a `set_`, `create_`, `write_`… tool)
+  without reading them back (a `get_`, `list_`, `read_`… tool): the model is
+  asked once to check its work before finishing.
+- The system note asks for a short plan on multi-step tasks.
+
+`HARNESS_CHECKS=off` turns the first three off.
 
 ### Add MCP servers while it runs
 

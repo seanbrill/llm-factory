@@ -33,6 +33,24 @@ export interface Tuning {
   top_k?: number;
   min_p?: number;
   repeat_penalty?: number;
+  // The agent harness's limits (images with tools), over the baked ones.
+  max_steps?: number;
+  max_calls_per_step?: number;
+  tool_timeout_s?: number;
+  max_output_kb?: number;
+}
+
+/** The tuning fields that are harness limits (kept when a preset is picked). */
+export const LIMIT_KEYS = ["max_steps", "max_calls_per_step", "tool_timeout_s", "max_output_kb"] as const;
+
+/** An image's baked harness limits (GET /api/tuning "harness"). */
+export interface HarnessLimits {
+  max_steps: number;
+  max_calls_per_step: number;
+  tool_timeout_s: number;
+  max_output_kb: number;
+  /** Built with tools on demand and the loop's checks (and reads calls per step at run time). */
+  on_demand: boolean;
 }
 
 export interface Estimate {
@@ -68,6 +86,7 @@ export interface TuningInfo {
   fits?: boolean;
   warning?: string;
   notes?: string[];
+  harness?: HarnessLimits;
   error?: string;
 }
 
