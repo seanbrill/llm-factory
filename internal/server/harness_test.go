@@ -393,7 +393,9 @@ func TestCheckLocalRequest(t *testing.T) {
 		{"POST", "localhost:8799", "application/json", "null", "", false},
 		{"POST", "localhost:8799", "application/json", "", "cross-site", false},
 		{"POST", "localhost:8799", "application/json", "", "same-site", false},
-		{"PUT", "localhost:8799", "application/json", "", "", false},
+		{"PUT", "localhost:8799", "application/json", "", "", true}, // same-origin JSON PUT/PATCH/DELETE (the MCP registry)
+		{"PUT", "localhost:8799", "text/plain", "", "", false},
+		{"OPTIONS", "localhost:8799", "application/json", "", "", false},
 	}
 	for _, c := range cases {
 		r := httptest.NewRequest(c.method, "http://x/api/harness/status", nil)

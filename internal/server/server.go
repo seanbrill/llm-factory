@@ -39,8 +39,9 @@ type Server struct {
 	b         *builder.Builder
 	cat       *catalog.Catalog
 	mux       *routeMux
-	auth      *Auth  // the access token every protected route needs (auth.go)
-	modelHost string // host where launched model containers are reachable
+	auth      *Auth       // the access token every protected route needs (auth.go)
+	modelHost string      // host where launched model containers are reachable
+	hapi      *harnessAPI // the harness API (harness.go); its store holds the MCP registry
 
 	q *buildQueue // queued/running/recent builds, buffered so the UI can reconnect after a refresh
 
@@ -552,6 +553,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		// Workspace is the host folder an image with a baked harness gets at
 		// /workspace ("" = the factory's workspace/ folder). See runWorkspace.
 		Workspace string `json:"workspace"`
+		// MCP names registered MCP servers (Harness page) the model's
+		// harness gets (HARNESS_MCP). See mcp.go.
+		MCP []string `json:"mcp"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -575,6 +579,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	autostart := labels["local-llm.autostart"] == "true"
 	orchestrator := labels["local-llm.kind"] == "ensemble" // mounts the docker socket
 	workspace, err := s.runWorkspace(labels, req.Workspace)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	runHarness, mcpNotes, err := s.runHarness(labels, req.MCP, engine)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -607,11 +616,13 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		Ref: req.Ref, HostPort: req.Port, Engine: engine, Compute: compute,
 		MemoryGB: memGB, Route: route, Autostart: autostart, Orchestrator: orchestrator,
 		SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode, Workspace: workspace,
+		Harness: runHarness,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
 		return
 	}
+	s.rememberRun(req.Port, runHarness)
 	if err := s.b.RegenProxy(r.Context()); err != nil {
 		log.Printf("regen proxy after run: %v", err) // non-fatal
 	}
@@ -622,6 +633,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if workspace != "" {
 		resp["workspace"] = workspace
+	}
+	if names := mcpNames(runHarness); len(names) > 0 || len(mcpNotes) > 0 {
+		resp["mcp"], resp["mcp_notes"] = names, mcpNotes
 	}
 	if route != "" {
 		resp["url"] = "http://" + route + ".localhost" + proxyURLSuffix(s.b.ProxyPort())

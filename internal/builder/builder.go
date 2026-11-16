@@ -967,6 +967,9 @@ type RunOptions struct {
 	// baked harness's file and shell tools work ("" = none). The caller checks
 	// it (harness.ValidateWorkspace).
 	Workspace string
+	// Harness gives the image's harness MCP servers and an admin token
+	// (harnessrun.go); nil = none.
+	Harness *RunHarness
 }
 
 // Run starts a container detached and returns its id.
@@ -1084,6 +1087,7 @@ func runArgs(engine, name string, o RunOptions, group int) []string {
 			args = append(args, "--label", "local-llm.persona="+p)
 		}
 	}
+	args = append(args, harnessRunArgs(engine, o)...)
 	return append(args, o.Ref)
 }
 
