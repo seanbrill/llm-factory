@@ -79,8 +79,12 @@ func (u *Usage) add(o *Usage) {
 // streamed chunk, and in the "harness.events" list of a non-streamed response.
 type Event struct {
 	// Type is "tool_call" (the model asked for a tool), "tool_result" (the
-	// tool finished), "limit" (the step limit stopped the loop) or "done"
-	// (on the final chunk of a stream).
+	// tool finished), "limit" (the step limit stopped the loop), "retry"
+	// (the model stopped without answering and is asked again), "empty" (it
+	// still didn't answer; the client gets a message instead), "compact"
+	// (older tool outputs were shortened to fit the context), "error" (the
+	// reply failed after it started) or "done" (on the final chunk of a
+	// stream).
 	Type string `json:"type"`
 	// Step is the model turn the call came from, starting at 1.
 	Step int `json:"step"`

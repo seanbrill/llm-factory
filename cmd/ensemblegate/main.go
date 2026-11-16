@@ -80,6 +80,15 @@ func main() {
 	} else if ok {
 		harness = &cfg
 	}
+	if harness == nil {
+		// No baked harness: the brain can still get MCP servers (HARNESS_MCP,
+		// the admin API, /mcp chat commands).
+		if cfg, err := (agent.Config{Tools: []string{}}).WithEnv(os.Getenv); err != nil {
+			log.Printf("harness: %v", err)
+		} else {
+			harness = &cfg
+		}
+	}
 	eng := cliEngine{bin: env("ENGINE", "docker")}
 	g := newGate(mani, eng, harness, log.Printf)
 	g.persona.envPrompt = strings.TrimSpace(os.Getenv("SYSTEM_PROMPT"))

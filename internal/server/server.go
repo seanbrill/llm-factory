@@ -39,8 +39,9 @@ type Server struct {
 	b         *builder.Builder
 	cat       *catalog.Catalog
 	mux       *routeMux
-	auth      *Auth  // the access token every protected route needs (auth.go)
-	modelHost string // host where launched model containers are reachable
+	auth      *Auth       // the access token every protected route needs (auth.go)
+	modelHost string      // host where launched model containers are reachable
+	hapi      *harnessAPI // the harness API (harness.go); its store holds the MCP registry
 
 	q *buildQueue // queued/running/recent builds, buffered so the UI can reconnect after a refresh
 
@@ -573,6 +574,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		// < tuning) or "baked" (baked < tuning). See docs/TUNING.md.
 		Tuning     json.RawMessage `json:"tuning"`
 		TuningBase string          `json:"tuning_base"`
+		// MCP names registered MCP servers (Harness page) the model's
+		// harness gets (HARNESS_MCP). See mcp.go.
+		MCP []string `json:"mcp"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -603,6 +607,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	// Runtime tuning (tuning.go): nil when neither the image, the saved
 	// settings nor the request set one, so an untuned run is unchanged.
 	tuned, err := s.runTuningFor(r.Context(), req.Ref, engine, req.Tuning, req.TuningBase)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	runHarness, mcpNotes, err := s.runHarness(labels, req.MCP, engine)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -640,6 +649,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		Ref: req.Ref, HostPort: req.Port, Engine: engine, Compute: compute,
 		MemoryGB: memGB, Route: route, Autostart: autostart, Orchestrator: orchestrator,
 		SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode, Workspace: workspace,
+		Harness: runHarness,
 	}
 	if tuned != nil {
 		runOpts.Env = append(runOpts.Env, tuned.env...)
@@ -650,6 +660,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
 		return
 	}
+	s.rememberRun(req.Port, runHarness)
 	if err := s.b.RegenProxy(r.Context()); err != nil {
 		log.Printf("regen proxy after run: %v", err) // non-fatal
 	}
@@ -663,6 +674,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if tuned != nil {
 		resp["tuning"], resp["estimate"] = tuned.effective, tuned.priced.Estimate
+	}
+	if names := mcpNames(runHarness); len(names) > 0 || len(mcpNotes) > 0 {
+		resp["mcp"], resp["mcp_notes"] = names, mcpNotes
 	}
 	if route != "" {
 		resp["url"] = "http://" + route + ".localhost" + proxyURLSuffix(s.b.ProxyPort())

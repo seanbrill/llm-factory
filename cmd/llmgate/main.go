@@ -58,6 +58,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("harness: %v", err)
 	}
+	h.SetContextSize(harnessContext(cfg.ctxSize, cfg.parallel))
 
 	// 1. Start llama-server as a child bound to the internal upstream port.
 	child := exec.Command(cfg.llamaBin, cfg.llamaArgs()...)
@@ -193,6 +194,15 @@ func newGate(c config, h *agent.Agent) http.Handler {
 // builds the agent. It returns nil when the image has no harness.
 func loadHarness(path string, getenv func(string) string) (*agent.Agent, error) {
 	return gate.LoadHarness(path, getenv, "llmgate", log.Printf)
+}
+
+// harnessContext is the context one request gets: llama-server splits
+// --ctx-size between its --parallel slots.
+func harnessContext(ctxSize, parallel int) int {
+	if parallel < 1 {
+		parallel = 1
+	}
+	return ctxSize / parallel
 }
 
 // ---------------------------------------------------------------------------

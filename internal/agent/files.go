@@ -28,7 +28,7 @@ const (
 )
 
 // skipDirs are not descended into by glob_search and grep_search.
-var skipDirs = map[string]bool{".git": true, "node_modules": true, ".venv": true, "venv": true, "__pycache__": true, ".cache": true}
+var skipDirs = map[string]bool{StateDirName: true, ".git": true, "node_modules": true, ".venv": true, "venv": true, "__pycache__": true, ".cache": true}
 
 // Workspace confines file paths to one folder. Paths may be relative to it,
 // absolute inside it, or start with ~/workspace (the name the starter skills
@@ -116,8 +116,16 @@ func (w *Workspace) Resolve(p string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%q: %v", orig, err)
 	}
-	if _, ok := within(w.real, real); !ok {
+	inner, ok := within(w.real, real)
+	if !ok {
 		return "", fmt.Errorf("%q leads outside the workspace through a symbolic link", orig)
+	}
+	for _, part := range strings.Split(inner, string(filepath.Separator)) {
+		if strings.EqualFold(part, StateDirName) {
+			// The harness's own state (MCP servers and their headers) is
+			// never the model's to read or change.
+			return "", fmt.Errorf("%q is the harness's private folder; the files tools don't go there", orig)
+		}
 	}
 	return real, nil
 }

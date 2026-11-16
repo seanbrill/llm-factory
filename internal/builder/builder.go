@@ -1033,6 +1033,9 @@ type RunOptions struct {
 	// (read it back with PublishedPort).
 	Name string
 	Tool string
+	// Harness gives the image's harness MCP servers and an admin token
+	// (harnessrun.go); nil = none.
+	Harness *RunHarness
 }
 
 // Run starts a container detached and returns its id.
@@ -1168,6 +1171,7 @@ func runArgs(engine, name string, o RunOptions, group int) []string {
 	for _, l := range o.Labels {
 		args = append(args, "--label", l)
 	}
+	args = append(args, harnessRunArgs(engine, o)...)
 	return append(args, o.Ref)
 }
 

@@ -1,8 +1,8 @@
 <script lang="ts">
   // Harness (sheet frame f12): tools for local models in Open WebUI. The model
   // gateway, the workspace terminal, Open WebUI setup, what a model can do in a
-  // chat, skills, tools baked into an image, and the manual steps. Status comes
-  // from live.harness.
+  // chat, skills, MCP servers, tools baked into an image, and the manual steps.
+  // Status comes from live.harness; the MCP card loads its own list.
   import Icon from "../components/Icon.svelte";
   import Hero from "../components/harness/Hero.svelte";
   import GatewayCard from "../components/harness/GatewayCard.svelte";
@@ -10,6 +10,7 @@
   import OpenWebUICard from "../components/harness/OpenWebUICard.svelte";
   import ToolsCard from "../components/harness/ToolsCard.svelte";
   import SkillsCard from "../components/harness/SkillsCard.svelte";
+  import McpCard from "../components/harness/McpCard.svelte";
   import BakedCard from "../components/harness/BakedCard.svelte";
   import ManualSetup from "../components/harness/ManualSetup.svelte";
   import { live, watch, refresh } from "../lib/live.svelte";
@@ -34,13 +35,16 @@
   const noStore = $derived(!!st?.config_error && !st.terminal?.variant);
 
   // "#harness/connect" opens on the Open WebUI setup, "#harness/baked" on the
-  // tools inside an image.
+  // tools inside an image, "#harness/mcp" on the MCP servers.
   let jumped = false;
   $effect(() => {
     if (jumped || !st) return;
     if ($routeArg === "baked" || $routeArg === "tools") {
       jumped = true;
       queueMicrotask(() => jump("h-baked"));
+    } else if ($routeArg === "mcp") {
+      jumped = true;
+      queueMicrotask(() => jump("h-mcp"));
     } else if (!noStore && ($routeArg === "connect" || $routeArg === "openwebui")) {
       jumped = true;
       queueMicrotask(() => jump("h-owui", "input[type=password]"));
@@ -106,6 +110,7 @@
 
     {#if noStore}
       <SkillsCard {st} />
+      <McpCard />
       <BakedCard />
     {:else}
       <Hero {st} />
@@ -120,6 +125,8 @@
         <ToolsCard {st} />
         <SkillsCard {st} />
       </div>
+
+      <McpCard />
 
       <BakedCard />
 

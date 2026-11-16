@@ -109,6 +109,8 @@ func (g *Gate) Handler() http.Handler {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/v1/models", g.handleModels)
 	mux.HandleFunc("/v1/harness", g.handleHarness)
+	mux.HandleFunc(agent.AdminPath, g.handleHarnessAdmin)
+	mux.HandleFunc(agent.AdminPath+"/", g.handleHarnessAdmin)
 	mux.HandleFunc("/v1/chat/completions", post(g.handleChat))
 	mux.HandleFunc("/v1/audio/transcriptions", post(g.handleTranscriptions))
 	mux.HandleFunc("/inference", post(g.handleTranscriptions)) // whisper.cpp's path, for clients that know it
@@ -202,6 +204,15 @@ func (g *Gate) handleHarness(w http.ResponseWriter, r *http.Request) {
 		info = g.brain.ag.Info()
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// handleHarnessAdmin serves the brain's MCP admin API (agent.AdminHandler).
+func (g *Gate) handleHarnessAdmin(w http.ResponseWriter, r *http.Request) {
+	if g.brain == nil {
+		writeErr(w, http.StatusNotFound, "this ensemble has no brain to give MCP tools to")
+		return
+	}
+	g.brain.ag.AdminHandler().ServeHTTP(w, r)
 }
 
 func (g *Gate) handleStatus(w http.ResponseWriter, r *http.Request) {

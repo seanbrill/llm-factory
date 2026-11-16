@@ -72,6 +72,8 @@ type Config struct {
 	GatewayKey string         `json:"gateway_key"`
 	Terminal   TerminalConfig `json:"terminal"`
 	OpenWebUI  OpenWebUIPrefs `json:"openwebui"`
+	// MCP is the MCP server registry (mcp.go); headers are secrets too.
+	MCP []MCPServer `json:"mcp,omitempty"`
 }
 
 // TerminalConfig configures the managed Open Terminal container.

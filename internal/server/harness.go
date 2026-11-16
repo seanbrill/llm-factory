@@ -75,7 +75,8 @@ type helperEngine interface {
 
 // registerHarness mounts the model gateway and the harness API.
 func (s *Server) registerHarness() {
-	newHarnessAPI(s, filepath.Join(s.b.ConfigDir, "harness.json")).mount(s.mux)
+	s.hapi = newHarnessAPI(s, filepath.Join(s.b.ConfigDir, "harness.json"))
+	s.hapi.mount(s.mux)
 }
 
 func (h *harnessAPI) mount(mux interface {
@@ -91,6 +92,7 @@ func (h *harnessAPI) mount(mux interface {
 	mux.HandleFunc("/api/harness/terminal/logs", guarded(http.MethodGet, h.handleTerminalLogs))
 	mux.HandleFunc("/api/harness/openwebui/check", guarded(http.MethodPost, h.handleOpenWebUI(false)))
 	mux.HandleFunc("/api/harness/openwebui/connect", guarded(http.MethodPost, h.handleOpenWebUI(true)))
+	h.mountMCP(mux)
 }
 
 func newHarnessAPI(s *Server, configPath string) *harnessAPI {
@@ -194,7 +196,9 @@ func checkLocalRequest(r *http.Request) error {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		return nil
 	}
-	if r.Method != http.MethodPost {
+	switch r.Method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+	default:
 		return fmt.Errorf("%s is not allowed here", r.Method)
 	}
 	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {

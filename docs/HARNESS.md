@@ -507,6 +507,29 @@ container starts. A bad value stops the container with an error in its log.
 | `HARNESS_BRAVE_API_KEY` | A Brave Search API key. Also selects `brave`, unless a backend or a SearXNG URL is set. |
 | `HARNESS_WORKSPACE`, `HARNESS_SKILLS_DIR` | Other folders inside the container. |
 | `HARNESS_MAX_STEPS`, `HARNESS_TOOL_TIMEOUT`, `HARNESS_MAX_OUTPUT_BYTES` | Override the limits. |
+| `HARNESS_MCP` | MCP servers, a JSON array (see [MCP servers](#mcp-servers)). Merged by name into the config's `mcp` list. |
+| `HARNESS_HOST_ALIAS` | The host's name inside the container (`host.docker.internal`, `host.containers.internal`). A loopback MCP URL is dialed through it. |
+| `HARNESS_ADMIN_TOKEN` | Turns on the admin API (`/v1/harness/mcp`) for bearers of this token. Without it the API is off. |
+| `HARNESS_STATE_DIR` | Where run-time MCP changes are saved (`mcp.json`, 0600). Default: `/workspace/.llm-harness` when the workspace exists; otherwise changes last until the container stops and `/v1/harness` says `"mcp_state": "not saved"`. |
+| `HARNESS_MCP_CHAT` | `off` turns the `/mcp` chat commands off (they are on by default). |
+
+llmgate also tells the harness the model's context per request (`CTX_SIZE`
+divided by `PARALLEL`). With it the loop keeps a conversation inside the
+window: before each step it estimates the prompt (from the last step's
+`usage.prompt_tokens`, or bytes/3), shortens the oldest tool outputs to a
+400-byte stub once the estimate passes 80% of the window (never the latest
+result), and caps each new tool output at 35% of the window (or
+`max_output_bytes`, whichever is smaller). If llama-server still says the
+request exceeds the context, the step is retried once with every older output
+shortened, and then the client gets "The conversation is too long for this
+model's context window (N tokens). Raise Context in the Run dialog or start a
+new chat." A step that ends with neither an answer nor a tool call (a model
+that only reasoned) is asked once more with a short nudge; if it is still
+empty the client gets a visible message instead of a blank reply. All of this
+shows as harness events (`compact`, `retry`, `empty`, `error`) and in the log,
+which has one line per model step (finish reason, tool names, content and
+reasoning sizes, token usage) and one per tool call that wasn't run, and no
+user content.
 
 A tool that can't run, for example `brave` without a key, a skills folder that
 is missing, or a shell that isn't installed, is left out and logged, and the
@@ -611,6 +634,104 @@ usage chunk adds up all the model turns.
 adds up all the turns, `message.reasoning_content` holds the tool trace, and an
 extra `harness` object lists the same events:
 `{"version": "1", "steps": 2, "events": [...]}`.
+
+### MCP servers
+
+The `mcp` toolset gives the model the tools of MCP servers. Each one is a
+Streamable HTTP endpoint (`url`) or a stdio program in the container
+(`command`, `args`, `env`; reported unavailable when the program isn't
+there). Its tools reach the model as `<server>__<tool>`.
+
+```json
+[{"name": "knitted",
+  "url": "http://127.0.0.1:64182/<secret>/mcp",
+  "connect_via": "host.docker.internal",
+  "headers": {"Authorization": "Bearer ..."},
+  "tools": ["list_projects", "get_project"],
+  "timeout_s": 60}]
+```
+
+| Field | Meaning |
+|---|---|
+| `name` | Required, 1 to 32 of `a-z 0-9 _ -`. |
+| `url` / `command`+`args`+`env` | Streamable HTTP endpoint, or a stdio program. |
+| `headers` | Sent with every request (keys). |
+| `connect_via` | `host[:port]` dialed instead of the URL's host; the request keeps the URL's `Host` header. How a container reaches a server listening on its host's 127.0.0.1 (knitted refuses foreign Host headers). With `HARNESS_HOST_ALIAS` set, a loopback URL gets it automatically. |
+| `tools` | Allowlist of the server's tool names. `null` (or missing) = all, `[]` = none. |
+| `timeout_s` | Connect and per-call timeout (defaults: 10 s to connect, `limits.tool_timeout` per call). |
+
+Put servers in `harness.json`'s `mcp` list or pass them at run time:
+`docker run -e HARNESS_MCP='[...]' --add-host host.docker.internal:host-gateway ...`.
+Headers with secrets belong in `HARNESS_MCP` (or the admin API), not in a baked
+`harness.json`. Servers connect on the first chat request (10 s timeout). One
+that fails is logged once, reported `unavailable` in `GET /v1/harness`, and
+tried again on a later request after a backoff (30 s, doubling to 5 min); the
+other tools keep working. `GET /v1/harness` lists each server by name and
+`scheme://host:port` with its status and tool counts, and `schema_tokens`, the
+estimated context all offered tool schemas take in every request. URL paths and
+header values never appear there or in the log.
+
+Every offered tool's description and schema ride along in every request.
+knitted has about 72 tools, which fills most of a small model's 8-32K context
+before the chat starts, so pick a handful (`tools`). A server with more than 15
+tools that is added without a pick starts with none selected.
+
+On Docker Desktop and Podman on a Mac, `host.docker.internal` /
+`host.containers.internal` reach services on the Mac's 127.0.0.1. On Linux,
+`host-gateway` is the bridge address, so a server must listen there (or on
+0.0.0.0) to be reachable from a container.
+
+The factory keeps a registry of MCP servers (Harness page, `/api/harness/mcp`,
+headers stored in `config/harness.json`, 0600, shown masked) with a per-server
+tool pick and its token cost, and `POST /api/run` takes `"mcp": ["knitted"]`:
+it passes the picked servers as `HARNESS_MCP` with `connect_via` set to the
+engine's host alias.
+
+### Add MCP servers while it runs
+
+The server list can change while the model runs; changes apply to the next
+request. They are saved to `HARNESS_STATE_DIR/mcp.json` (0600; the files tools
+refuse that folder), so they survive a restart when the workspace is mounted.
+
+**Chat commands.** From Open WebUI or any client, a message that starts with
+`/mcp` is answered by the harness, not the model:
+
+| Command | |
+|---|---|
+| `/mcp`, `/mcp list` | Servers, status, tools chosen of offered, ≈tokens |
+| `/mcp add <name> <url> [header:Name=Value ...]` | Connect a server. A loopback URL uses `HARNESS_HOST_ALIAS`. With 15 tools or fewer all are on, otherwise none until you choose. |
+| `/mcp remove <name>` | |
+| `/mcp tools <name>` | Its tools with their cost |
+| `/mcp tools <name> +tool -tool` / `all` / `none` | Choose |
+| `/mcp test <name>` | Reconnect now |
+| `/mcp enable <name>`, `/mcp disable <name>`, `/mcp help` | |
+
+Only the latest message counts, and only when it is the user's: an earlier
+turn, a system message or a tool output (a fetched page) can never run a
+command. Earlier `/mcp` turns and their replies (which start with
+`[harness /mcp]`) are left out of what the model sees. A header value typed in
+chat is masked in the reply and the log, but it stays in the chat history, so
+the reply warns about it: add servers with secrets on the factory's Harness
+page instead. `HARNESS_MCP_CHAT=off` turns the commands off.
+
+**Admin API.** With `HARNESS_ADMIN_TOKEN` set (the factory sets a random one
+per run and keeps it in `config/run-tokens.json`, 0600), these take
+`Authorization: Bearer <token>`; without a token they answer 404:
+
+| | |
+|---|---|
+| `GET /v1/harness/mcp` | `{servers: [{name, transport, endpoint, connect_via, headers: [names], source, enabled, status, error, retry_at, tools_offered, tools_allowed, tool_count, schema_tokens, tools: [{name, registered_as, description, tokens, allowed}]}], state, many_tools, tool_count, schema_tokens, context_size}` |
+| `POST /v1/harness/mcp` | `{name, url \| command+args+env, headers, tools, connect_via, timeout_s}`: 201 `{server, ok}`, 409 when the name exists |
+| `PATCH /v1/harness/mcp/{name}` | `{tools: [...] \| null}` and/or `{enabled: bool}` |
+| `DELETE /v1/harness/mcp/{name}` | |
+| `POST /v1/harness/mcp/{name}/test` | Reconnect now: `{server, ok}` |
+
+Anyone who can send chat requests to the model can also use the `/mcp`
+commands, and an MCP server may be any address, the host's loopback included
+(the web tools' private-address guard doesn't apply). The model's port is
+bound to 127.0.0.1 and the factory gateway needs its key, so that is you;
+turn the commands off with `HARNESS_MCP_CHAT=off` when the port is shared.
+MCP tool output reaches the model as untrusted data, like web pages.
 
 ### Security
 

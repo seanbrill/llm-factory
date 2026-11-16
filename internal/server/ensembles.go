@@ -557,6 +557,8 @@ func (s *Server) handleEnsembleRun(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID   string `json:"id"`
 		Port int    `json:"port"`
+		// MCP names registered MCP servers the brain gets (see mcp.go).
+		MCP []string `json:"mcp"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		errorJSON(w, http.StatusBadRequest, err.Error())
@@ -585,11 +587,18 @@ func (s *Server) handleEnsembleRun(w http.ResponseWriter, r *http.Request) {
 		port = s.freeEnsemblePort(r.Context())
 	}
 	compute := labels["local-llm.compute"]
-	id, err := s.b.Run(r.Context(), builder.RunOptions{Ref: ref, HostPort: port, Engine: engine, Compute: compute, Orchestrator: true})
+	labels["local-llm.kind"] = "ensemble" // the brain runs the agent loop
+	runHarness, mcpNotes, err := s.runHarness(labels, req.MCP, engine)
+	if err != nil {
+		errorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id, err := s.b.Run(r.Context(), builder.RunOptions{Ref: ref, HostPort: port, Engine: engine, Compute: compute, Orchestrator: true, Harness: runHarness})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
 		return
 	}
+	s.rememberRun(port, runHarness)
 	if err := s.b.RegenProxy(r.Context()); err != nil {
 		log.Printf("regen proxy after ensemble run: %v", err)
 	}
@@ -611,7 +620,7 @@ func (s *Server) handleEnsembleRun(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "port": port, "engine": engine})
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "port": port, "engine": engine, "mcp": mcpNames(runHarness), "mcp_notes": mcpNotes})
 }
 
 // handleEnsembleStop stops an ensemble's Conductor and removes its members.

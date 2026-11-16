@@ -32,6 +32,8 @@ const (
 	ToolsetFiles     = "files"
 	ToolsetShell     = "shell"
 	ToolsetSkills    = "skills"
+	// ToolsetMCP holds the tools of MCP servers (see Config.MCP).
+	ToolsetMCP = "mcp"
 )
 
 // Tool function names, as the model sees them. They match the names Open WebUI
@@ -131,6 +133,26 @@ type Config struct {
 	SkillsDir string `json:"skills_dir,omitempty"`
 	// Instructions is extra text added to the harness note in the system prompt.
 	Instructions string `json:"instructions,omitempty"`
+	// MCP lists MCP servers whose tools the model gets (the "mcp" toolset).
+	// HARNESS_MCP (a JSON array of the same objects) is merged in by name, and
+	// servers added at run time (the admin API, /mcp chat commands) join them.
+	MCP []MCPServer `json:"mcp,omitempty"`
+
+	// Run-time settings, only ever from the environment (see WithEnv).
+
+	// StateDir is where the harness saves its run-time changes (mcp.json):
+	// HARNESS_STATE_DIR, else <workspace>/.llm-harness when the workspace
+	// folder exists. "" = changes are kept in memory only.
+	StateDir string `json:"-"`
+	// HostAlias is the name a container reaches its host by
+	// (HARNESS_HOST_ALIAS, e.g. host.docker.internal). A loopback MCP URL is
+	// dialed through it, keeping the URL's Host header.
+	HostAlias string `json:"-"`
+	// AdminToken turns on the admin API (/v1/harness/mcp) for bearers of it
+	// (HARNESS_ADMIN_TOKEN). "" = the admin API is off.
+	AdminToken string `json:"-"`
+	// MCPChatOff turns the /mcp chat commands off (HARNESS_MCP_CHAT=off).
+	MCPChatOff bool `json:"-"`
 }
 
 // Limits bound the tool loop.
@@ -293,8 +315,30 @@ func off(v string) bool {
 //	HARNESS_MAX_STEPS         limits.max_steps
 //	HARNESS_TOOL_TIMEOUT      limits.tool_timeout ("90s" or seconds)
 //	HARNESS_MAX_OUTPUT_BYTES  limits.max_output_bytes
+//	HARNESS_MCP               MCP servers (a JSON array), merged by name into "mcp"
+//	HARNESS_MCP_CHAT          "off" turns the /mcp chat commands off
+//	HARNESS_STATE_DIR         where run-time changes are saved
+//	HARNESS_HOST_ALIAS        the host's name inside the container
+//	HARNESS_ADMIN_TOKEN       bearer token of the admin API (off without one)
 func (c Config) WithEnv(getenv func(string) string) (Config, error) {
 	get := func(k string) string { return strings.TrimSpace(getenv(k)) }
+	if v := get("HARNESS_MCP"); v != "" {
+		servers, err := ParseMCPServers(v)
+		if err != nil {
+			return c, fmt.Errorf("HARNESS_MCP: %v", err)
+		}
+		c.MCP = MergeMCP(c.MCP, servers)
+	}
+	c.MCPChatOff = off(get("HARNESS_MCP_CHAT"))
+	if v := get("HARNESS_STATE_DIR"); v != "" {
+		c.StateDir = v
+	}
+	if v := get("HARNESS_HOST_ALIAS"); v != "" {
+		c.HostAlias = v
+	}
+	if v := get("HARNESS_ADMIN_TOKEN"); v != "" {
+		c.AdminToken = v
+	}
 	if v := get("HARNESS_TOOLS"); v != "" {
 		c.Tools = editTools(c.Tools, v)
 	}
@@ -430,6 +474,9 @@ func (c Config) Validate() error {
 	}
 	var unknown []string
 	for _, t := range c.Tools {
+		if t == ToolsetMCP {
+			continue // the MCP servers turn it on; naming it is harmless
+		}
 		if _, ok := toolsetTools[t]; !ok && ToolsetOf(t) == "" {
 			unknown = append(unknown, strconv.Quote(t))
 		}
@@ -502,6 +549,12 @@ func (c Config) Validate() error {
 	}
 	if len(c.Instructions) > maxInstructions {
 		add("instructions is longer than %d bytes", maxInstructions)
+	}
+	if err := ValidateMCP(c.MCP); err != nil {
+		add("%v", err)
+	}
+	if c.HostAlias != "" && !validHostPort(c.HostAlias) {
+		add("HARNESS_HOST_ALIAS %q is not a host name", c.HostAlias)
 	}
 	if len(errs) > 0 {
 		return errors.New("harness config: " + strings.Join(errs, "; "))

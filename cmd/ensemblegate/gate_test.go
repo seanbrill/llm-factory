@@ -245,7 +245,7 @@ func TestAgentErrorBeforeStream(t *testing.T) {
 		t.Fatalf("stream = %s", b)
 	}
 	e, _ := events[len(events)-1]["error"].(map[string]any)
-	if e == nil || !strings.Contains(e["message"].(string), "context size") {
+	if e == nil || !strings.Contains(e["message"].(string), "context window") {
 		t.Errorf("last event = %v", events[len(events)-1])
 	}
 	if !te.g.agentOn() {

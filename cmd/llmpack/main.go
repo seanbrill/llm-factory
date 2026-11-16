@@ -329,6 +329,7 @@ func prepare(root string, m *native.Manifest, o options, getenv func(string) str
 		if l.harness, err = loadHarness(root, m, ws, getenv, logger.Printf); err != nil {
 			return nil, fmt.Errorf("harness: %w", err)
 		}
+		l.harnessAgent().SetContextSize(l.llama.CtxSize) // keeps conversations inside the window
 	}
 	return l, nil
 }
