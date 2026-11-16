@@ -26,6 +26,7 @@ import (
 	"github.com/seanbrill/local-llm/internal/agent"
 	"github.com/seanbrill/local-llm/internal/catalog"
 	"github.com/seanbrill/local-llm/internal/native"
+	"github.com/seanbrill/local-llm/internal/tuning"
 	"github.com/seanbrill/local-llm/internal/version"
 )
 
@@ -46,6 +47,11 @@ type NativeOptions struct {
 	Harness *agent.Config
 	// FromImage is the image whose settings these are ("" = the catalog entry).
 	FromImage string
+	// Tuning is llama-server's runtime tuning, resolved and normalized by the
+	// caller (nil = the launcher's defaults); its ctx_size wins over CtxSize.
+	// Draft is the draft model included for spec "draft".
+	Tuning *tuning.Tuning
+	Draft  *catalog.Model
 }
 
 // NativePackage describes a finished package: packages/<name>.json, next to
@@ -191,6 +197,16 @@ func (b *Builder) BuildNativePackage(ctx context.Context, o NativeOptions, log L
 		return nil, err
 	}
 	ctxSize := o.CtxSize
+	var tune tuning.Tuning
+	if o.Tuning != nil {
+		tune = *o.Tuning
+	}
+	if tune.CtxSize > 0 {
+		ctxSize = tune.CtxSize
+	}
+	if tune.Spec == tuning.SpecDraft && o.Draft == nil {
+		return nil, fmt.Errorf(`spec "draft" needs a draft model, and %s has none paired in the catalog: use spec "ngram"`, m.Name)
+	}
 	if ctxSize <= 0 {
 		ctxSize = DefaultNativeCtx
 	}
@@ -256,6 +272,20 @@ func (b *Builder) BuildNativePackage(ctx context.Context, o NativeOptions, log L
 			eng.MMProj = "model/mmproj-" + filepath.Base(m.MMProjFile)
 		}
 		files = append(files, pkgFile{rel: eng.MMProj, path: mmPath, mode: 0o644, big: true})
+	}
+	if !tune.IsZero() {
+		t := tune
+		eng.Tuning = &t
+		if tune.Spec == tuning.SpecDraft {
+			draftPath, err := b.EnsureModel(ctx, *o.Draft, log)
+			if err != nil {
+				return nil, fmt.Errorf("draft model %s: %w", o.Draft.Name, err)
+			}
+			eng.DraftModel = "model/draft-" + filepath.Base(o.Draft.File)
+			files = append(files, pkgFile{rel: eng.DraftModel, path: draftPath, mode: 0o644, big: true})
+			log("Including the draft model " + o.Draft.Name + " for speculative decoding.")
+		}
+		log("Runtime tuning: " + strings.Join(tune.Env(eng.DraftModel), " "))
 	}
 	manifest.Engines = []native.Engine{eng}
 	for _, f := range rt.Files {

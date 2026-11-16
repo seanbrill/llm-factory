@@ -20,3 +20,16 @@ func TestLlamaArgsFromEnvConfig(t *testing.T) {
 		t.Errorf("GPU embedding image:\n got %s\nwant %s", got, want)
 	}
 }
+
+// The image's tuning variables reach llama-server's command line.
+func TestLlamaArgsWithTuningEnv(t *testing.T) {
+	c := config{modelPath: "/models/model.gguf", upstreamPort: 8081, ctxSize: 32768, threads: 4, parallel: 2, modality: "text"}
+	env := map[string]string{"FLASH_ATTN": "on", "KV_CACHE_TYPE": "q8_0", "KV_UNIFIED": "1", "SPEC_TYPE": "ngram", "CACHE_RAM_MB": "1024"}
+	if err := c.tune.ApplyEnv(func(k string) string { return env[k] }); err != nil {
+		t.Fatal(err)
+	}
+	want := "--model /models/model.gguf --host 127.0.0.1 --port 8081 --ctx-size 32768 --threads 4 --threads-batch 4 --parallel 2 --cont-batching --jinja --metrics --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --kv-unified --spec-type ngram-mod --cache-ram 1024"
+	if got := strings.Join(c.llamaArgs(), " "); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
+	}
+}

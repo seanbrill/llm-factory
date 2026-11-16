@@ -278,6 +278,7 @@
       "min_vram_gb": 20,
       "recommended": false,
       "description": "MoE coder (3B active); near-flagship coding at fast token rates.",
+      "draft": "qwen3-0.6b",
       "modality": "code",
       "license": "Apache-2.0"
     },
@@ -1238,6 +1239,7 @@
       "min_vram_gb": 4,
       "recommended": false,
       "description": "Best small all-rounder; strong reasoning with optional thinking mode.",
+      "draft": "qwen3-0.6b",
       "modality": "text",
       "legacy": true,
       "license": "Apache-2.0"
@@ -1255,6 +1257,7 @@
       "min_vram_gb": 6,
       "recommended": false,
       "description": "Recommended mid-tier generalist; excellent on Apple Silicon GPU.",
+      "draft": "qwen3-0.6b",
       "modality": "text",
       "legacy": true,
       "license": "Apache-2.0"
@@ -1272,6 +1275,7 @@
       "min_vram_gb": 12,
       "recommended": false,
       "description": "Top single-GPU Qwen3; best quality before the 24B/32B class.",
+      "draft": "qwen3-0.6b",
       "modality": "text",
       "legacy": true,
       "license": "Apache-2.0"
@@ -1323,6 +1327,7 @@
       "min_vram_gb": 10,
       "recommended": false,
       "description": "Strong mid/large Gemma 3; great single-GPU general model.",
+      "draft": "gemma-3-1b-it",
       "modality": "text",
       "legacy": true,
       "license": "Gemma"

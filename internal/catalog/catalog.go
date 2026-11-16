@@ -70,6 +70,12 @@ type Model struct {
 	// CommercialUse says whether the license allows commercial use. Nil means
 	// the catalog doesn't say; every TTS entry states it.
 	CommercialUse *bool `json:"commercial_use,omitempty"`
+	// Draft is the catalog id of a small model that drafts tokens for this
+	// one in speculative decoding (tuning spec "draft", docs/TUNING.md). The
+	// pair must share a tokenizer (llama.cpp compares the vocabularies and
+	// runs without a draft when they differ), so only same-family pairs are
+	// listed, e.g. Qwen3 models drafted by Qwen3 0.6B.
+	Draft string `json:"draft,omitempty"`
 }
 
 // WeightFile is one extra weight a model needs, with the Role the runtime uses to

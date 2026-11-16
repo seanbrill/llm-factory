@@ -36,6 +36,7 @@ import (
 
 	"github.com/seanbrill/local-llm/internal/agent"
 	"github.com/seanbrill/local-llm/internal/catalog"
+	"github.com/seanbrill/local-llm/internal/tuning"
 )
 
 // Builder owns the project directories. New ensures they exist — this is the
@@ -627,6 +628,15 @@ type BuildOptions struct {
 	// (see NormalizeHarness). nil builds a plain model image.
 	Harness *agent.Config
 
+	// Tuning is llama-server's runtime tuning (docs/TUNING.md), already
+	// resolved and normalized by the caller: baked as ENV (llmgate reads it)
+	// and as the label local-llm.tuning. A set ctx_size wins over CtxSize.
+	// nil (or zero) keeps the image's defaults. llama.cpp chat images only.
+	Tuning *tuning.Tuning
+	// Draft is the draft model baked at /models/draft.gguf when Tuning's spec
+	// is "draft" (the catalog's pairing for Model).
+	Draft *catalog.Model
+
 	// OnPlan, when set, learns which engine runs the build once the memory
 	// preflight has chosen: the target, or the other engine when the target is
 	// too small to compile (the image is transferred afterwards).
@@ -683,6 +693,27 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	dfData, err := os.ReadFile(dockerfileSrc)
 	if err != nil {
 		return fmt.Errorf("read %s (modality %q): %w", dockerfileSrc, o.Model.Mod(), err)
+	}
+
+	// Runtime tuning: llama.cpp chat images only, appended to the runtime stage.
+	var tune tuning.Tuning
+	if o.Tuning != nil {
+		tune = *o.Tuning
+	}
+	bakeDraft := tune.Spec == tuning.SpecDraft
+	if !tune.IsZero() {
+		if family != "llama" {
+			return fmt.Errorf("runtime tuning is for llama.cpp chat models; %s runs another server", o.Model.Name)
+		}
+		if bakeDraft && o.Draft == nil {
+			return fmt.Errorf("spec \"draft\" needs a draft model, and %s has none paired in the catalog: use spec \"ngram\"", o.Model.Name)
+		}
+		if dfData, err = tuningDockerfile(dfData, tune, bakeDraft); err != nil {
+			return err
+		}
+		if tune.CtxSize > 0 {
+			o.CtxSize = tune.CtxSize
+		}
 	}
 
 	// Memory preflight, before downloading anything: compiling llama.cpp & co.
@@ -827,6 +858,21 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 			return err
 		}
 
+		// The draft model for speculative decoding (tuning spec "draft").
+		if bakeDraft {
+			draftPath, err := b.EnsureModel(ctx, *o.Draft, log)
+			if err != nil {
+				return fmt.Errorf("draft model %s: %w", o.Draft.Name, err)
+			}
+			if _, _, err := linkOrCopyReport(draftPath, filepath.Join(work, "draft.gguf")); err != nil {
+				return fmt.Errorf("stage draft model into build context: %w", err)
+			}
+			log(fmt.Sprintf("Staged draft model %s (draft.gguf) for speculative decoding", o.Draft.Name))
+		}
+		if !tune.IsZero() {
+			log("Baking runtime tuning: " + strings.Join(tune.Env(tuning.ImageDraftPath), " "))
+		}
+
 		// Stage the llmgate shim source so the Docker `gate` stage can compile it.
 		if err := stageGate(b.BaseDir, work); err != nil {
 			return err
@@ -877,6 +923,13 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	}
 	if o.CtxSize > 0 {
 		buildArgs = append(buildArgs, "--build-arg", fmt.Sprintf("CTX_SIZE=%d", o.CtxSize))
+	}
+	// The tuning as built, so the run handler can merge overrides onto it.
+	if l := tune.Label(); l != "" {
+		buildArgs = append(buildArgs, "--label", LabelTuning+"="+l)
+	}
+	if bakeDraft {
+		buildArgs = append(buildArgs, "--label", LabelDraft+"="+o.Draft.ID)
 	}
 	// A baked harness is labeled so the factory can tell the model runs its own
 	// tool loop (and clone the build with the same harness).
@@ -967,6 +1020,19 @@ type RunOptions struct {
 	// baked harness's file and shell tools work ("" = none). The caller checks
 	// it (harness.ValidateWorkspace).
 	Workspace string
+
+	// Env are extra KEY=VALUE variables (-e), e.g. the runtime tuning's
+	// overrides of the image's baked ENV (tuning.EnvChange); "KEY=" sets a
+	// variable empty, which llmgate reads as unset.
+	Env []string
+	// Labels are extra container labels (key=value).
+	Labels []string
+	// Name replaces the container name localllm-<port>; Tool replaces the
+	// local-llm.tool label ("runtime"). The benchmark runs localllm-tune-<id>
+	// with tool "tune". HostPort -1 publishes on an ephemeral loopback port
+	// (read it back with PublishedPort).
+	Name string
+	Tool string
 }
 
 // Run starts a container detached and returns its id.
@@ -976,6 +1042,9 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 	}
 	engine := resolveEngine(o.Engine)
 	name := fmt.Sprintf("localllm-%d", o.HostPort)
+	if o.Name != "" {
+		name = o.Name
+	}
 	// Best-effort removal of a stale container occupying the same name/port.
 	_ = engineCmd(ctx, engine, "rm", "-f", name).Run()
 
@@ -1010,14 +1079,22 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 // is the render node's group a Vulkan container joins (-1 = none, see
 // vulkanGroup).
 func runArgs(engine, name string, o RunOptions, group int) []string {
+	publish := fmt.Sprintf("127.0.0.1:%d:8080", o.HostPort)
+	if o.HostPort < 0 {
+		publish = "127.0.0.1::8080" // the engine picks a free port
+	}
+	tool := "runtime"
+	if o.Tool != "" {
+		tool = o.Tool
+	}
 	args := []string{
 		"run", "-d", "--name", name,
 		// Bind the published port to loopback only so the model isn't reachable
 		// from the local network (no auth sits in front of it). The managed Caddy
 		// proxy still reaches it via host.docker.internal, which Docker Desktop
 		// routes to the host's loopback.
-		"-p", fmt.Sprintf("127.0.0.1:%d:8080", o.HostPort),
-		"--label", "local-llm.tool=runtime",
+		"-p", publish,
+		"--label", "local-llm.tool=" + tool,
 		"--label", "local-llm.ref=" + o.Ref,
 		"--label", "local-llm.route=" + o.Route,
 		"--label", "local-llm.engine=" + engine,
@@ -1083,6 +1160,13 @@ func runArgs(engine, name string, o RunOptions, group int) []string {
 		if p := personaName(o.SystemPrompt); p != "" {
 			args = append(args, "--label", "local-llm.persona="+p)
 		}
+	}
+	// Runtime tuning overrides and extra labels (each one arg: no shell).
+	for _, e := range o.Env {
+		args = append(args, "-e", e)
+	}
+	for _, l := range o.Labels {
+		args = append(args, "--label", l)
 	}
 	return append(args, o.Ref)
 }
@@ -1221,10 +1305,19 @@ func (b *Builder) RecoverOnStartup(ctx context.Context, log LogFunc) {
 		return
 	}
 	for _, c := range conts {
+		labels, _ := c["Labels"].(string)
+		// A benchmark candidate left by a factory that stopped mid-benchmark.
+		if labelValue(labels, "local-llm.tool") == "tune" {
+			name, _ := c["Names"].(string)
+			engine, _ := c["Engine"].(string)
+			if name != "" && engineCmd(ctx, engine, "rm", "-f", name).Run() == nil {
+				log("removed a leftover benchmark container: " + name)
+			}
+			continue
+		}
 		if s, _ := c["State"].(string); s == "running" {
 			continue
 		}
-		labels, _ := c["Labels"].(string)
 		if labelValue(labels, "local-llm.autostart") != "true" {
 			continue
 		}
