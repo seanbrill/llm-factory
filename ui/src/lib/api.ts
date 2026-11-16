@@ -87,7 +87,9 @@ export async function streamChat(
   opts?: StreamOpts,
   extra?: StreamExtra,
 ): Promise<void> {
-  const body = { port, messages, max_tokens: 1024, temperature: 0.4, ...(opts ?? {}) };
+  // No max_tokens unless the caller sets one: a 1024 cap cut harness steps off
+  // mid tool call (a design frame's HTML and CSS is longer than that).
+  const body = { port, messages, temperature: 0.4, ...(opts ?? {}) };
   const res = await fetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

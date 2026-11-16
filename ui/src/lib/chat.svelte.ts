@@ -361,9 +361,11 @@ function buildMessages(t: Tab, p: Pane, draft?: string): unknown[] {
   return out;
 }
 
-/** The body streamChat (lib/api.ts) sends to /api/chat/stream, built the same way. */
+/** The body streamChat (lib/api.ts) sends to /api/chat/stream, built the same way.
+ *  No max_tokens: a reply (and each harness step, which writes whole tool calls)
+ *  may run as long as the model's context allows. */
 function chatBody(port: number, messages: unknown[], opts: StreamOpts): Record<string, unknown> {
-  return { port, messages, max_tokens: 1024, temperature: 0.4, ...opts };
+  return { port, messages, temperature: 0.4, ...opts };
 }
 
 function failText(p: Pane, e: unknown): string {
