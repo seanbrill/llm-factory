@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -47,6 +48,10 @@ type Options struct {
 	Host string
 	// Logf logs tool calls (name, duration, outcome; never arguments).
 	Logf func(format string, args ...any)
+	// ContextSize is the model's context window per request in tokens (0 =
+	// unknown). With it the loop keeps a conversation inside the window: it
+	// shortens older tool outputs and caps each new one. See SetContextSize.
+	ContextSize int
 }
 
 // Agent runs the tool loop for chat-completions requests. It is safe for
@@ -57,6 +62,8 @@ type Agent struct {
 	unavailable []Unavailable
 	host        string
 	logf        func(string, ...any)
+	ctxSize     atomic.Int64
+	mcp         *mcpHub
 }
 
 // New builds an Agent. cfg gets its defaults and is validated.
@@ -76,8 +83,50 @@ func New(cfg Config, opts Options) (*Agent, error) {
 	if a.logf == nil {
 		a.logf = func(string, ...any) {}
 	}
+	a.ctxSize.Store(int64(opts.ContextSize))
+	a.mcp = newMCPHub(cfg, a.reg, a.logf)
+	a.mcp.onConnect = func() {
+		n, tok := a.ToolCost()
+		a.logf("tools now: %d, ≈%d tokens of schemas in every request%s", n, tok, a.contextShare(tok))
+	}
 	return a, nil
 }
+
+// SetContextSize tells the agent the model's context window per request in
+// tokens (0 = unknown). Safe to call while serving; a nil agent ignores it.
+func (a *Agent) SetContextSize(n int) {
+	if a == nil {
+		return
+	}
+	if n < 0 {
+		n = 0
+	}
+	a.ctxSize.Store(int64(n))
+}
+
+// ContextSize is the model's context window per request (0 = unknown).
+func (a *Agent) ContextSize() int { return int(a.ctxSize.Load()) }
+
+// ToolCost counts the registered tools and estimates the context their
+// schemas take in every request (EstimateSchemaTokens).
+func (a *Agent) ToolCost() (tools, tokens int) {
+	for _, t := range a.reg.Tools() {
+		tools++
+		tokens += ToolTokens(t)
+	}
+	return tools, tokens
+}
+
+// contextShare is ", N% of the 8192-token context" when the context is known.
+func (a *Agent) contextShare(tokens int) string {
+	if n := a.ContextSize(); n > 0 {
+		return fmt.Sprintf(", %d%% of the %d-token context", tokens*100/n, n)
+	}
+	return ""
+}
+
+// HasMCP reports whether any MCP server is configured (connected or not).
+func (a *Agent) HasMCP() bool { return a.mcp.count() > 0 }
 
 // Config returns the config the agent runs with (defaults applied).
 func (a *Agent) Config() Config { return a.cfg }
@@ -100,6 +149,18 @@ type Info struct {
 	Workspace   string        `json:"workspace,omitempty"`
 	SkillsDir   string        `json:"skills_dir,omitempty"`
 	Skills      []string      `json:"skills,omitempty"`
+	// SchemaTokens estimates the context the offered tools' schemas take in
+	// every request; ContextSize is the model's window (0 = unknown).
+	SchemaTokens int `json:"schema_tokens"`
+	ContextSize  int `json:"context_size,omitempty"`
+	// MCP lists the MCP servers (no secrets: names, scheme://host:port,
+	// header names). MCPState says whether run-time changes are "saved" or
+	// "not saved" (kept in memory until the harness stops).
+	MCP      []MCPStatus `json:"mcp,omitempty"`
+	MCPState string      `json:"mcp_state,omitempty"`
+	MCPError string      `json:"mcp_error,omitempty"`
+	// Admin says whether the admin API (/v1/harness/mcp) is on.
+	Admin bool `json:"admin"`
 }
 
 // DisabledInfo is the info document of a host without a harness.
@@ -137,6 +198,18 @@ func (a *Agent) Info() Info {
 			}
 		}
 	}
+	_, info.SchemaTokens = a.ToolCost()
+	info.ContextSize = a.ContextSize()
+	info.Admin = a.cfg.AdminToken != ""
+	if a.mcp.count() > 0 || info.Admin || !a.cfg.MCPChatOff {
+		info.MCP = a.mcp.list(false)
+		saved, why := a.mcp.saved()
+		info.MCPState = "not saved"
+		if saved {
+			info.MCPState = "saved"
+		}
+		info.MCPError = why
+	}
 	return info
 }
 
@@ -170,6 +243,7 @@ func writeError(w http.ResponseWriter, status int, msg, typ string) {
 // chatReq is a parsed chat-completions request. Fields the loop doesn't
 // touch are kept byte for byte.
 type chatReq struct {
+	command      string // a /mcp chat command to answer instead of the model
 	fields       map[string]json.RawMessage
 	messages     []json.RawMessage
 	clientTools  []json.RawMessage
@@ -197,7 +271,7 @@ func (e *requestError) Error() string { return e.msg }
 
 // prepare parses a request. It returns nil and the body to forward unchanged
 // when the loop doesn't apply.
-func (a *Agent) prepare(body []byte) (*chatReq, []byte, error) {
+func (a *Agent) prepare(ctx context.Context, body []byte) (*chatReq, []byte, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil || fields == nil {
 		return nil, body, nil // let the model server report it
@@ -223,6 +297,17 @@ func (a *Agent) prepare(body []byte) (*chatReq, []byte, error) {
 	req := &chatReq{fields: fields, clientNames: map[string]bool{}, offeredNames: map[string]bool{}, maxSteps: a.cfg.Limits.MaxSteps}
 	if err := json.Unmarshal(fields["messages"], &req.messages); err != nil || len(req.messages) == 0 {
 		return nil, pass, nil
+	}
+	if !a.cfg.MCPChatOff {
+		if cmd, ok := latestMCPCommand(req.messages); ok {
+			req.command = cmd
+			_ = json.Unmarshal(fields["stream"], &req.stream)
+			_ = json.Unmarshal(fields["model"], &req.model)
+			return req, pass, nil
+		}
+		// Earlier /mcp turns and their replies are for the user, not the model.
+		req.messages = stripMCPTurns(req.messages)
+		fields["messages"], _ = json.Marshal(req.messages)
 	}
 	if raw, ok := fields["n"]; ok {
 		var n int
@@ -270,6 +355,9 @@ func (a *Agent) prepare(body []byte) (*chatReq, []byte, error) {
 	if hf.MaxSteps > 0 && hf.MaxSteps < req.maxSteps {
 		req.maxSteps = hf.MaxSteps
 	}
+	if a.mcp.count() > 0 {
+		a.mcp.ensure(ctx) // connect the servers not connected yet
+	}
 	for _, t := range a.reg.Tools() {
 		name := t.Name()
 		if req.clientNames[name] {
@@ -295,7 +383,7 @@ func (a *Agent) prepare(body []byte) (*chatReq, []byte, error) {
 // ("harness": false, tool_choice "none", n > 1, no tools to offer, or a body
 // that isn't a chat request) are forwarded to up unchanged.
 func (a *Agent) ServeChat(w http.ResponseWriter, r *http.Request, body []byte, up Upstream) {
-	req, pass, err := a.prepare(body)
+	req, pass, err := a.prepare(r.Context(), body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
@@ -305,6 +393,10 @@ func (a *Agent) ServeChat(w http.ResponseWriter, r *http.Request, body []byte, u
 		return
 	}
 	rn := &run{a: a, ctx: r.Context(), req: req, up: up, out: newOutput(w, req.stream, req.model)}
+	if req.command != "" {
+		rn.answerCommand()
+		return
+	}
 	rn.loop()
 }
 
@@ -367,6 +459,7 @@ type upstreamError struct {
 	body   []byte
 	ctype  string
 	msg    string
+	typ    string // the OpenAI error type when the harness wrote msg ("" = server_error)
 }
 
 func (e *upstreamError) Error() string {
@@ -385,20 +478,65 @@ type run struct {
 	usage Usage
 	steps int
 	ids   map[string]bool
+
+	// The prompt size the model reported for the last step, and the size of
+	// that step's request (promptBytes): the base of the next estimate.
+	lastPrompt int
+	lastBytes  int
 }
+
+// nudgeNote is added to the conversation when a step ends with neither an
+// answer nor a tool call.
+const nudgeNote = "[harness] Your last turn ended without an answer or a tool call. Call one of the tools or answer now."
 
 func (rn *run) loop() {
 	msgs := withSystemNote(rn.req.messages, rn.systemNote())
 	limit := rn.req.maxSteps
+	nudged, ctxRetried := false, false
 	for step := 1; ; step++ {
 		final := step > limit
-		t, err := rn.call(rn.body(msgs, step, final))
+		body := rn.body(msgs, step, final)
+		if n := rn.a.ContextSize(); n > 0 {
+			msgs, body = rn.fit(msgs, body, step, final, n)
+		}
+		t, err := rn.call(body)
 		if err != nil {
+			if ue := (*upstreamError)(nil); errors.As(err, &ue) && isContextError(ue) {
+				// The estimate was off: shorten every older tool output once
+				// and try the step again before giving up.
+				if !ctxRetried {
+					if m2, n, _ := compactToolOutputs(msgs, 1<<62, true); n > 0 {
+						ctxRetried = true
+						rn.compacted(step, n, "the model said the conversation doesn't fit its context")
+						msgs = m2
+						step--
+						continue
+					}
+				}
+				err = rn.contextError(ue)
+			}
 			rn.fail(err)
 			return
 		}
 		rn.usage.add(t.usage)
+		if t.usage != nil && t.usage.PromptTokens > 0 {
+			rn.lastPrompt, rn.lastBytes = t.usage.PromptTokens, promptBytes(body)
+		}
+		rn.logStep(step, t)
 		if len(t.calls) == 0 {
+			if strings.TrimSpace(t.content) == "" {
+				if !nudged && t.finish != "length" {
+					// It only reasoned (or said nothing): ask once more.
+					nudged = true
+					msg := "The model stopped without answering; asking it again."
+					rn.a.logf("step %d: no answer and no tool call (finish %s); asking the model again", step, orDash(t.finish))
+					rn.out.event(Event{Type: "retry", Step: step, Message: msg}, "\n[harness] "+msg+"\n")
+					msgs = withNudge(msgs, nudgeNote)
+					step--
+					continue
+				}
+				rn.emptyAnswer(step, t)
+			}
 			rn.finish(t, nil)
 			return
 		}
@@ -413,6 +551,7 @@ func (rn *run) loop() {
 			}
 		}
 		if final && len(client) == 0 {
+			rn.a.logf("step %d: %d tool calls not run: the step limit (%d) was reached", step, len(t.calls), limit)
 			rn.finishLimit(t, step)
 			return
 		}
@@ -421,7 +560,7 @@ func (rn *run) loop() {
 		for i, c := range server {
 			if i >= rn.a.cfg.Limits.MaxCallsPerStep {
 				msg := fmt.Sprintf("not run: at most %d tool calls run per step", rn.a.cfg.Limits.MaxCallsPerStep)
-				results = append(results, rn.skipCall(step, c, msg))
+				results = append(results, rn.skipCall(step, c, msg, fmt.Sprintf("over the limit of %d calls per step", rn.a.cfg.Limits.MaxCallsPerStep)))
 			} else {
 				results = append(results, rn.runCall(step, c))
 			}
@@ -853,8 +992,10 @@ func (rn *run) announce(step int, c toolCall) {
 	rn.out.event(ev, fmt.Sprintf("\n[tool] %s %s\n", c.Name, short(c.Args, 300)))
 }
 
-// skipCall answers a call that isn't run.
-func (rn *run) skipCall(step int, c toolCall, msg string) json.RawMessage {
+// skipCall answers a call that isn't run. msg goes to the model, why to the
+// log.
+func (rn *run) skipCall(step int, c toolCall, msg, why string) json.RawMessage {
+	rn.a.logf("step %d: tool call %s not run: %s", step, logName(c.Name), why)
 	rn.announce(step, c)
 	no := false
 	rn.out.event(Event{Type: "tool_result", Step: step, ID: c.ID, Name: c.Name, OK: &no, Error: msg},
@@ -878,21 +1019,21 @@ func (rn *run) runCall(step int, c toolCall) json.RawMessage {
 		for n := range rn.req.clientNames {
 			names = append(names, n)
 		}
-		return rn.skipCall(step, c, fmt.Sprintf("there is no tool %q. Available tools: %s", c.Name, strings.Join(names, ", ")))
+		return rn.skipCall(step, c, fmt.Sprintf("there is no tool %q. Available tools: %s", c.Name, strings.Join(names, ", ")), "unknown tool")
 	}
 	args := strings.TrimSpace(c.Args)
 	if args == "" {
 		args = "{}"
 	}
 	if !json.Valid([]byte(args)) {
-		return rn.skipCall(step, c, "the arguments are not valid JSON; call the tool again with a JSON object")
+		return rn.skipCall(step, c, "the arguments are not valid JSON; call the tool again with a JSON object", "invalid JSON arguments")
 	}
 	rn.announce(step, c)
 
 	start := time.Now()
 	text, err := rn.execute(tool, json.RawMessage(args))
 	took := time.Since(start)
-	max := rn.a.cfg.Limits.MaxOutputBytes
+	max := rn.maxOutput()
 	truncated := false
 	if len(text) > max {
 		text = truncateUTF8(text, max) + fmt.Sprintf("\n[output cut at %d bytes]", max)
@@ -1075,13 +1216,22 @@ func (rn *run) fail(err error) {
 			return
 		}
 		status := http.StatusBadGateway
+		typ := "server_error"
 		if isUp && ue.status != 0 {
 			status = ue.status
 		}
-		writeError(o.w, status, err.Error(), "server_error")
+		if isUp && ue.typ != "" {
+			typ = ue.typ
+		}
+		writeError(o.w, status, err.Error(), typ)
 		return
 	}
-	b, _ := json.Marshal(map[string]any{"error": map[string]any{"message": err.Error(), "type": "server_error"}})
+	typ := "server_error"
+	if isUp && ue.typ != "" {
+		typ = ue.typ
+		rn.out.event(Event{Type: "error", Message: err.Error()}, "\n[harness] "+err.Error()+"\n")
+	}
+	b, _ := json.Marshal(map[string]any{"error": map[string]any{"message": err.Error(), "type": typ}})
 	o.writeRaw("data: " + string(b) + "\n\n")
 	o.writeRaw("data: [DONE]\n\n")
 }

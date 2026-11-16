@@ -114,6 +114,16 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.serveHarnessInfo(w)
 		return
 	}
+	if agent.IsAdminPath(r.URL.Path) {
+		if g.harness == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":"this model has no harness"}`+"\n")
+			return
+		}
+		g.harness.AdminHandler().ServeHTTP(w, r)
+		return
+	}
 	if r.Method == http.MethodPost && IsChatPath(r.URL.Path) && (g.systemPrompt != "" || g.harness != nil) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxChatBody))
 		r.Body.Close()
@@ -231,12 +241,21 @@ func NewHarness(cfg agent.Config, host string, logf func(string, ...any)) (*agen
 	for _, t := range info.Tools {
 		names = append(names, t.Name)
 	}
-	if len(names) == 0 {
+	// MCP servers connect on the first request, and the admin API or a /mcp
+	// chat command may add some, so their tools aren't counted here.
+	extensible := h.HasMCP() || cfg.AdminToken != ""
+	if len(names) == 0 && !extensible {
 		logf("harness: none of the tools %v can run here; serving without the harness", cfg.Tools)
 		return nil, nil
 	}
 	c := h.Config()
-	logf("harness on: %d tools (%s), max %d steps, %s per tool", len(names), strings.Join(names, ", "),
-		c.Limits.MaxSteps, c.Limits.ToolTimeout.D())
+	logf("harness on: %d tools (%s), ≈%d tokens of tool schemas per request, max %d steps, %s per tool", len(names), strings.Join(names, ", "),
+		info.SchemaTokens, c.Limits.MaxSteps, c.Limits.ToolTimeout.D())
+	for _, s := range info.MCP {
+		logf("harness: MCP server %s (%s) connects on the first request", s.Name, s.Endpoint)
+	}
+	if cfg.AdminToken != "" {
+		logf("harness: the admin API is on (%s)", agent.AdminPath)
+	}
 	return h, nil
 }

@@ -34,6 +34,8 @@ type fakeModel struct {
 	turns []fakeTurn
 	reqs  []map[string]any
 	raw   [][]byte
+	// realUsage reports a prompt size that grows with the request (bytes/4).
+	realUsage bool
 	// argsAsObject sends tool arguments as a JSON object instead of a string.
 	argsAsObject bool
 }
@@ -56,6 +58,9 @@ func (f *fakeModel) upstream(ctx context.Context, body []byte) (*http.Response, 
 	f.mu.Unlock()
 	if turn.status != 0 && turn.status != 200 {
 		return jsonResp(turn.status, turn.body), nil
+	}
+	if turn.usage == (Usage{}) && f.realUsage {
+		turn.usage = Usage{PromptTokens: len(body) / 4, CompletionTokens: 5, TotalTokens: len(body)/4 + 5}
 	}
 	if turn.usage == (Usage{}) {
 		turn.usage = Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}
