@@ -73,7 +73,7 @@ func (f *fakeMCP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Unlock()
 		w.Header().Set("Mcp-Session-Id", sid)
 		f.respond(w, m, map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{"tools": map[string]any{}},
-			"serverInfo": map[string]any{"name": "fake", "version": "1"}})
+			"serverInfo": map[string]any{"name": "fake", "version": "1"}, "instructions": "Read get_guide before your first task."})
 		return
 	}
 	if r.Header.Get("Mcp-Session-Id") != sid || expire {
@@ -234,6 +234,10 @@ func TestMCPToolsThroughTheLoop(t *testing.T) {
 			names := toolNames(f.request(0))
 			if len(names) != 5 || !contains(names, "fake__echo") || !contains(names, "fake__tool_4") {
 				t.Errorf("tools offered = %v; want all 5 across the pages", names)
+			}
+			if sys := messagesOf(t, f.request(0))[0]; sys["role"] != "system" ||
+				!strings.Contains(fmt.Sprint(sys["content"]), `The MCP server "fake" explains how to use its tools (named fake__<tool> here):`+"\nRead get_guide before your first task.") {
+				t.Errorf("the server's instructions aren't in the system note: %v", sys)
 			}
 			msgs := messagesOf(t, f.request(1))
 			echo, fail := msgs[len(msgs)-2]["content"].(string), msgs[len(msgs)-1]["content"].(string)

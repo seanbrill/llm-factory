@@ -18,6 +18,11 @@ import (
 
 const (
 	contextBudget = 0.80 // compact older tool outputs above this share of the window
+	// contextTarget is where a compaction brings the prompt down to. Each
+	// compaction changes text the server has cached, so it re-reads the
+	// prompt from there: shortening well below the budget in one go makes
+	// that happen rarely instead of on every step.
+	contextTarget = 0.60
 	toolShare     = 0.35 // one tool output may take at most this share
 	bytesPerToken = 3    // a conservative bytes-to-tokens ratio for estimates
 	stubBytes     = 400  // what is kept of a shortened tool output
@@ -68,15 +73,16 @@ func (rn *run) maxOutput() int {
 	return max
 }
 
-// fit shortens older tool outputs until the step's estimated prompt is
-// within contextBudget of the window (or nothing is left to shorten).
+// fit shortens older tool outputs, when the step's estimated prompt is over
+// contextBudget of the window, until it is within contextTarget (or nothing
+// is left to shorten).
 func (rn *run) fit(msgs []json.RawMessage, body []byte, step int, final bool, window int) ([]json.RawMessage, []byte) {
 	budget := int(float64(window) * contextBudget)
 	before := rn.estimate(body)
 	if before <= budget {
 		return msgs, body
 	}
-	need := (before - budget) * bytesPerToken
+	need := (before - int(float64(window)*contextTarget)) * bytesPerToken
 	// First the outputs of earlier steps; then, if that isn't enough, the
 	// latest step's too, except its very last result.
 	out, n, saved := compactToolOutputs(msgs, need, false)

@@ -58,7 +58,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("harness: %v", err)
 	}
-	h.SetContextSize(harnessContext(cfg.ctxSize, cfg.parallel))
+	h.SetContextSize(harnessContext(cfg.ctxSize, cfg.parallel, cfg.tune.KVUnified))
 
 	// 1. Start llama-server as a child bound to the internal upstream port.
 	child := exec.Command(cfg.llamaBin, cfg.llamaArgs()...)
@@ -197,8 +197,12 @@ func loadHarness(path string, getenv func(string) string) (*agent.Agent, error) 
 }
 
 // harnessContext is the context one request gets: llama-server splits
-// --ctx-size between its --parallel slots.
-func harnessContext(ctxSize, parallel int) int {
+// --ctx-size between its --parallel slots, unless they share one cache
+// (--kv-unified), when each request can use all of it.
+func harnessContext(ctxSize, parallel int, unified bool) int {
+	if unified {
+		return ctxSize
+	}
 	if parallel < 1 {
 		parallel = 1
 	}

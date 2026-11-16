@@ -33,3 +33,15 @@ func TestLlamaArgsWithTuningEnv(t *testing.T) {
 		t.Errorf("\n got %s\nwant %s", got, want)
 	}
 }
+
+func TestHarnessContextWithSharedCache(t *testing.T) {
+	for _, c := range []struct {
+		ctx, parallel int
+		unified       bool
+		want          int
+	}{{32768, 1, false, 32768}, {65536, 2, false, 32768}, {65536, 2, true, 65536}, {8192, 0, false, 8192}} {
+		if got := harnessContext(c.ctx, c.parallel, c.unified); got != c.want {
+			t.Errorf("harnessContext(%d, %d, %v) = %d, want %d", c.ctx, c.parallel, c.unified, got, c.want)
+		}
+	}
+}

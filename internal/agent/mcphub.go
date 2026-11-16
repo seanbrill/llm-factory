@@ -572,6 +572,21 @@ func (c *mcpConn) reregister() {
 	}
 }
 
+// mcpNoteMax caps a server's instructions in the system note (bytes).
+const mcpNoteMax = 4000
+
+// note is the server's instructions for the system note, "" when it gave none.
+func (c *mcpConn) note() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client == nil || c.client.instructions == "" {
+		return ""
+	}
+	name := c.srv.Name
+	return fmt.Sprintf("The MCP server %q explains how to use its tools (named %s__<tool> here):\n%s",
+		name, name, truncateUTF8(c.client.instructions, mcpNoteMax))
+}
+
 func (c *mcpConn) unregister() {
 	c.mu.Lock()
 	names := c.names

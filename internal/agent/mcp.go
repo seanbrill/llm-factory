@@ -810,6 +810,9 @@ type mcpToolDef struct {
 type mcpClient struct {
 	srv MCPServer
 	t   mcpTransport
+	// instructions is what the server's initialize result says about using
+	// it (MCP "instructions"), added to the system note with its tools.
+	instructions string
 }
 
 // connectMCP opens a session: initialize, notifications/initialized, then
@@ -849,8 +852,10 @@ func (c *mcpClient) initialize(ctx context.Context) error {
 	}
 	var r struct {
 		ProtocolVersion string `json:"protocolVersion"`
+		Instructions    string `json:"instructions"`
 	}
 	_ = json.Unmarshal(res, &r)
+	c.instructions = strings.TrimSpace(r.Instructions)
 	v := r.ProtocolVersion
 	if v == "" {
 		v = mcpProtocolVersion
@@ -1017,6 +1022,11 @@ type mcpTool struct {
 func (t *mcpTool) Name() string                { return t.name }
 func (t *mcpTool) Description() string         { return t.desc }
 func (t *mcpTool) Parameters() json.RawMessage { return t.params }
+
+// SystemNote is the server's own instructions (the same for each of its
+// tools, so the system note has them once): how to use its tools well, which
+// a client like Claude Code also shows its model.
+func (t *mcpTool) SystemNote() string { return t.conn.note() }
 func (t *mcpTool) Run(ctx context.Context, args json.RawMessage) (string, error) {
 	return t.conn.call(ctx, t.remote, args)
 }
