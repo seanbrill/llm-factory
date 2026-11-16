@@ -33,6 +33,8 @@ you've never touched a container before.
 ### Reference
 8. [Running the factory itself in a container](CONTAINER.md) — the existing deep-dive
    on the Docker-out-of-Docker setup.
+8a. [Runtime tuning](TUNING.md) — context, KV cache, look-ahead (speculative
+   decoding), slots and caches: presets, the memory estimate, the benchmark and the API.
 9. [Agent harness: tools for Open WebUI](HARNESS.md) — give your models web search,
    a sandboxed workspace terminal and skills in Open WebUI; security model and
    troubleshooting.

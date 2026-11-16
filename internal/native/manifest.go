@@ -9,6 +9,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/seanbrill/local-llm/internal/tuning"
 )
 
 // File and folder names inside a package (relative to its root folder).
@@ -48,6 +50,11 @@ type Engine struct {
 	CtxSize int `json:"ctx_size"`
 	// Modality is the catalog modality (text, code, reasoning, vision).
 	Modality string `json:"modality,omitempty"`
+	// Tuning is llama-server's runtime tuning (docs/TUNING.md); nil = the
+	// launcher's defaults. DraftModel is the draft model's path for
+	// speculative decoding with spec "draft".
+	Tuning     *tuning.Tuning `json:"tuning,omitempty"`
+	DraftModel string         `json:"draft_model,omitempty"`
 }
 
 // Manifest describes a package: written by the factory, read by the launcher.
@@ -114,6 +121,7 @@ func (m *Manifest) Validate() error {
 		checkPath(fmt.Sprintf("engines[%d].server", i), e.Server, true)
 		checkPath(fmt.Sprintf("engines[%d].model", i), e.Model, true)
 		checkPath(fmt.Sprintf("engines[%d].mmproj", i), e.MMProj, false)
+		checkPath(fmt.Sprintf("engines[%d].draft_model", i), e.DraftModel, false)
 		if e.CtxSize < 0 {
 			add("engines[%d].ctx_size is negative", i)
 		}

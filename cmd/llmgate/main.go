@@ -43,6 +43,14 @@ func main() {
 	log.SetPrefix("[llmgate] ")
 
 	cfg := loadConfig()
+	// Runtime tuning (FLASH_ATTN, KV_CACHE_TYPE, SPEC_TYPE, ...): a bad value
+	// stops the container with the variable's name.
+	if err := cfg.tune.ApplyEnv(os.Getenv); err != nil {
+		log.Fatalf("%v", err)
+	}
+	if cfg.tune.SpecType == "draft" && !cfg.tune.DraftReady() {
+		log.Printf("SPEC_TYPE=draft but there's no draft model at %q: running without look-ahead", cfg.tune.DraftModel)
+	}
 
 	// The harness is loaded first, so a bad HARNESS_* setting stops the
 	// container with a clear message instead of serving without tools.
@@ -116,6 +124,9 @@ type config struct {
 	systemPrompt    string
 	injectMode      string // "missing" | "always"
 	harnessFile     string // baked harness.json; "" or an empty file = no harness
+	// tune carries the runtime tuning read from the environment
+	// (gate.Llama.ApplyEnv); its other fields are ignored.
+	tune gate.Llama
 }
 
 func loadConfig() config {
@@ -148,17 +159,10 @@ func loadConfig() config {
 }
 
 func (c config) llamaArgs() []string {
-	l := gate.Llama{
-		Model:           c.modelPath,
-		Port:            c.upstreamPort,
-		CtxSize:         c.ctxSize,
-		Threads:         c.threads,
-		Parallel:        c.parallel,
-		MMProj:          c.mmprojPath,
-		MMProjNoOffload: c.mmprojNoOffload,
-		Modality:        c.modality,
-		Extra:           strings.Fields(c.extraArgs),
-	}
+	l := c.tune
+	l.Model, l.Port, l.CtxSize, l.Threads, l.Parallel = c.modelPath, c.upstreamPort, c.ctxSize, c.threads, c.parallel
+	l.MMProj, l.MMProjNoOffload, l.Modality = c.mmprojPath, c.mmprojNoOffload, c.modality
+	l.Extra = strings.Fields(c.extraArgs)
 	if c.ngl > 0 {
 		l.GPULayers = strconv.Itoa(c.ngl)
 	}

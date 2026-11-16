@@ -290,6 +290,28 @@ func prepare(root string, m *native.Manifest, o options, getenv func(string) str
 		Model: model, CtxSize: ctx, Threads: o.threads, GPULayers: gpu, MMProj: mmproj,
 		Modality: e.Modality, NoWebUI: true, Extra: o.llamaArgs,
 	}
+	// The package's tuning; the command line's --ctx-size and --threads win.
+	if e.Tuning != nil {
+		var draft string
+		if e.DraftModel != "" {
+			if draft, err = native.Resolve(root, e.DraftModel); err != nil {
+				return nil, err
+			}
+		}
+		env := e.Tuning.EnvMap(draft)
+		if err := l.llama.ApplyEnv(func(k string) string { return env[k] }); err != nil {
+			return nil, fmt.Errorf("the package's tuning: %w", err)
+		}
+		if o.ctxSize > 0 {
+			l.llama.CtxSize = o.ctxSize
+		}
+		if o.threads > 0 {
+			l.llama.Threads = o.threads
+		}
+		if l.llama.SpecType == "draft" && !l.llama.DraftReady() {
+			logger.Printf("the package's tuning asks for a draft model, but %s is missing: running without look-ahead", e.DraftModel)
+		}
+	}
 	if m.SystemPromptFile != "" {
 		p, err := native.Resolve(root, m.SystemPromptFile)
 		if err != nil {

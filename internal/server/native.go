@@ -189,6 +189,9 @@ func (n *nativeAPI) handlePackage(w http.ResponseWriter, r *http.Request) {
 		InjectMode   string          `json:"inject_mode"`
 		CtxSize      int             `json:"ctx_size"`
 		Harness      json.RawMessage `json:"harness"`
+		// Tuning is the package's runtime tuning (docs/TUNING.md); left
+		// out, a package made from an image keeps the image's.
+		Tuning json.RawMessage `json:"tuning"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request: " + err.Error()})
@@ -233,6 +236,10 @@ func (n *nativeAPI) handlePackage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if o.Tuning, o.Draft, err = n.packageTuning(r.Context(), req.Tuning, m, req.Ref, req.Engine, t.Accel, o.CtxSize); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tuning: " + err.Error()})
+		return
+	}
 	if _, _, err := builder.NormalizeNativeHarness(o.Harness); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "harness: " + err.Error()})
 		return
@@ -254,7 +261,7 @@ func (n *nativeAPI) handlePackage(w http.ResponseWriter, r *http.Request) {
 	}
 	job := &buildJob{
 		kind: "native", lane: nativeLane, ref: o.Name, name: m.Name,
-		cfg: buildConfig{ModelID: m.ID, ImageName: o.Name, SystemPrompt: o.SystemPrompt, InjectMode: o.InjectMode, CtxSize: o.CtxSize, Harness: o.Harness},
+		cfg: buildConfig{ModelID: m.ID, ImageName: o.Name, SystemPrompt: o.SystemPrompt, InjectMode: o.InjectMode, CtxSize: o.CtxSize, Harness: o.Harness, Tuning: o.Tuning},
 		run: func(ctx context.Context, log builder.LogFunc) error {
 			if _, err := n.build(ctx, o, log); err != nil {
 				// Said as it is: the image-build hints (engine down, …) don't apply here.
