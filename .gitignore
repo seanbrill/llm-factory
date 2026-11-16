@@ -53,3 +53,9 @@
 /config/.filefreak-queue.json-*
 # The archive helper's SDK (npm ci in tools/filefreak; the image installs its own).
 /tools/filefreak/node_modules/
+# Runtime state written by the factory (tuning, MCP runs, archive scans).
+/config/tuning.json
+/config/gguf-info.json
+/config/run-tokens.json
+/config/filefreak-scan.json
+/config/*.tmp
