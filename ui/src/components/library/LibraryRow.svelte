@@ -15,6 +15,7 @@
   import { live } from "../../lib/live.svelte";
   import type { ImageHarness } from "../../lib/types";
   import { nativeWhy } from "../../lib/native";
+  import { tuneArg } from "../../lib/tuning";
 
   let {
     row,
@@ -85,6 +86,8 @@
   const home = $derived(homeOf(live.harness?.terminal));
   // A native package: the model on its own, for macOS (or Linux, Windows).
   const canPack = $derived(!!row.model && !nativeWhy(row.model));
+  // Runtime tuning is for llama.cpp chat models (text, vision), not ensembles or other runtimes.
+  const canTune = $derived(!!row.model && (row.model.runtime ?? "cpp") === "cpp" && /^(text|vision|code|reasoning)?$/.test(row.model.modality ?? ""));
   const packTitle = "One download that runs this model without Docker or Podman, on macOS (Metal GPU), Linux or Windows";
 </script>
 
@@ -197,6 +200,7 @@
               </div>
               <div class="ia">
                 <button class="small" type="button" onclick={() => act.run(row, im)}><Icon name="play" size={13} />Run</button>
+                {#if canTune && !im.ensemble}<a class="btn sm" href={href("tune", tuneArg(im.engine, im.ref))} title="Context, speed and memory settings, and a benchmark"><Icon name="gauge" size={14} />Tune</a>{/if}
                 <button class="small" type="button" onclick={() => act.config(im)}><Icon name="system" size={14} />Build settings</button>
                 <button class="small" type="button" onclick={() => act.template(im)} title="Start a new build with this image's settings"><Icon name="copy" size={14} />Use as template</button>
                 <button class="small" type="button" onclick={() => act.download(im)} title="Download the image as a .tar (docker save)"><Icon name="download" size={14} />Download .tar</button>

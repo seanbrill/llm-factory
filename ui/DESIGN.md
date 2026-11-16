@@ -17,6 +17,10 @@ HTML/CSS with the knitted MCP `get_design` (`frameId`), look at it with
 | System | `#system`, `#system/gpu`, `#system/memory`, `#system/archive` | f13 |
 | Playground | `#playground`, `#playground/<port>` | f14 |
 | ⌘K palette | anywhere | f15 |
+| Tune (runtime settings, benchmark) | `#tune/<engine>/<image ref>` | f20 (desktop), f24 (benchmark running), f25 (phone) |
+| Run dialog: settings for this run, MCP | Library → Run | f21 |
+| Harness: MCP servers card | `#harness` | f22, f26 (MCP while a model runs, `/mcp` chat commands) |
+| Build plan: tuning per model | `#plan` | f23 |
 
 Old page ids still work: `#build`→catalog, `#images|#containers|#models`→library,
 `#chat`→playground, `#settings`→system.
@@ -115,6 +119,11 @@ refresh plus x alert globe …). Add new ones to src/lib/icons.ts.
   (`defaultHarness`, `harnessProblem`, `harnessBody` → the build's `harness`,
   `harnessFromConfig` for clones) and `imageHarness(image)` for the Library.
   `#harness/baked` opens its card on the Harness page.
+- `tuning.ts` — runtime tuning (docs/TUNING.md): the `Tuning` shape, presets,
+  `getTuning` / `saveTuning` / `clearTuning` / `estimate` / `getPresets`, the
+  benchmark (`startBench`, `benchState`, `cancelBench`, `applyBench`), and words
+  for settings (`tuningChips`, `tuningLine`, `ctxText`). `tuneArg(engine, ref)`
+  is the Tune page's route argument. Layers merge baked < saved < this run.
 - `filefreak.ts` — FileFreak archive (System page) types and calls; see docs/FILEFREAK.md.
 - `native.ts` — native packages (docs/NATIVE.md): `/api/native/*` types and calls,
   `nativeWhy(model)` (which models can be packaged), `packPercent(lines)`. The
@@ -138,7 +147,8 @@ Actions (POST JSON): `/api/build` (queues; `{status, id, position, engine}`),
 `/api/image/download`, `/api/model/delete {model_id}`, `/api/storage/cleanup`,
 `/api/system/reclaim`, `/api/gpu/probe`, `/api/chat/stream` (SSE),
 `/api/image/generate`, `/api/video/generate`, `/api/transcribe`, `/api/tts`,
-`/api/harness/*`, `/api/filefreak/*` (status, settings, key, key/remove,
+`/api/harness/*`, `/api/tuning` (GET, PUT, DELETE), `/api/tuning/presets`,
+`/api/tuning/estimate`, `/api/tuning/benchmark[/<id>[/cancel|/apply]]`, `/api/filefreak/*` (status, settings, key, key/remove,
 folder/check, queue/retry, queue/remove), `/api/native/*` (targets, source,
 package, jobs, state, cancel, packages, download, delete). Shapes are in src/lib/types.ts, src/lib/harness.ts and src/lib/filefreak.ts.
 

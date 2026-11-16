@@ -1,3 +1,4 @@
+import type { Tuning } from "./tuning";
 // Catalog helpers (sheet frames f8, f9): what a model needs, where it can run
 // on this machine right now and why not, what the library already has of it,
 // the quick picks, and how a build plan lines up in the engines' queues.
@@ -735,6 +736,7 @@ export interface ImageConfig {
   route: string;
   autostart: boolean;
   harness?: HarnessConfig | null; // the baked agent harness (null = none)
+  tuning?: Tuning | null;          // baked runtime tuning (label local-llm.tuning)
 }
 
 export const CTX_TIERS = ["2048", "4096", "8192", "16384", "32768"];

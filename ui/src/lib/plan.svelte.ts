@@ -15,6 +15,7 @@ import { engineName } from "./format";
 import { CTX_TIERS, defaultPath, effectiveCompute, predictRoute, type ImageConfig } from "./catalog";
 import { defaultHarness, harnessBody, harnessFromConfig, normHarness, type PlanHarness } from "./baked";
 import type { Model, PreflightItem, PreflightResult, SysInfo } from "./types";
+import { clean, type Tuning } from "./tuning";
 
 export { effectiveCompute, predictRoute, type RoutePrediction } from "./catalog";
 
@@ -31,6 +32,7 @@ export interface PlanItem {
   route: string;         // local URL alias ("" = none)
   autostart: boolean;
   harness: PlanHarness;  // tools baked into the image (lib/baked.ts); only chat models take them
+  tuning?: Tuning;       // runtime settings baked as the image's defaults (lib/tuning.ts); unset = llama.cpp's
 }
 
 const KEY = "llmfactory.plan.v1";
@@ -173,11 +175,14 @@ export function buildBody(it: PlanItem, m: Model | undefined) {
     compute: m ? effectiveCompute(m, it.compute) : it.compute,
     system_prompt: it.system_prompt,
     inject_mode: it.inject_mode,
-    ctx_size: ctxSize(it, m),
+    ctx_size: it.ctx_tier === "auto" && it.tuning?.ctx_size ? it.tuning.ctx_size : ctxSize(it, m),
     memory_gb: it.memory_gb || 0,
     route: it.route,
     autostart: it.autostart,
     harness: harnessBody(it.harness, m),
+    ...(it.tuning && Object.keys(clean(it.tuning)).length
+      ? { tuning: clean({ ...it.tuning, ctx_size: it.ctx_tier === "auto" ? it.tuning.ctx_size : ctxSize(it, m) || undefined }) }
+      : {}),
   };
 }
 
@@ -358,7 +363,7 @@ function ctxTierOf(label: string, compute: string): string {
  * the plan as that model's item (added, or updated when it's already planned).
  * Returns the model id.
  */
-export async function cloneImage(t: { ref: string; engine: string }, catalog: Model[], si: SysInfo | null): Promise<string> {
+export async function cloneImage(t: { ref: string; engine: string; tuning?: Tuning }, catalog: Model[], si: SysInfo | null): Promise<string> {
   const cfg = await api<ImageConfig>(
     `/api/image/config?ref=${encodeURIComponent(t.ref)}&engine=${encodeURIComponent(t.engine)}`,
   );
@@ -383,7 +388,10 @@ export async function cloneImage(t: { ref: string; engine: string }, catalog: Mo
     route: cfg.route || "",
     autostart: !!cfg.autostart,
     harness: harnessFromConfig(cfg.harness),
+    tuning: t.tuning ?? cfg.tuning ?? undefined,
   };
+  // Settings from the Tune page carry their own context.
+  if (t.tuning?.ctx_size) patch.ctx_tier = "auto";
   if (inPlan(m.id)) updatePlanItem(m.id, patch);
   else addToPlan(m, si, patch);
   return m.id;

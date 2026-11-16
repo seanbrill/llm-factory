@@ -14,7 +14,14 @@
   import { live, refresh } from "../../lib/live.svelte";
   import { nextFreePort, type LibImage } from "../../lib/library";
   import { containerPort, isRunning } from "../../lib/util";
-  import { engineName, computeName } from "../../lib/format";
+  import { engineName, computeName, gb } from "../../lib/format";
+  import { labelVal } from "../../lib/api";
+  import { catalog } from "../../lib/stores";
+  import { href } from "../../lib/router";
+  import {
+    PRESET_LABEL, clean, ctxOptions, ctxText, estimate, getTuning, tuneArg, tuningLine,
+    type EstimateResult, type Tuning, type TuningInfo,
+  } from "../../lib/tuning";
 
   let {
     open = $bindable(false),
@@ -32,6 +39,11 @@
   let error = $state("");
   let guard = $state(""); // the guardrail's warning, awaiting "Start anyway"
   let workspace = $state(""); // host folder for /workspace ("" = the factory's workspace/)
+  // Settings for this run (sheet frame f21): the saved tuning, the image's own,
+  // or a preset, and the context window, without a rebuild.
+  let tinfo = $state<TuningInfo | null>(null);
+  let choice = $state("saved"); // "saved" | "baked" | a preset id
+  let ctx = $state<number | undefined>(undefined); // context override for this run
 
   // Reset each time it opens for an image.
   let openedFor = "";
@@ -51,7 +63,19 @@
     guard = "";
     baked = "";
     workspace = "";
+    tinfo = null;
+    choice = "saved";
+    ctx = undefined;
     const ref = image.ref, engine = image.engine;
+    if (tunable) {
+      getTuning(ref, engine)
+        .then((t) => {
+          if (openedFor !== engine + ref) return;
+          tinfo = t;
+          choice = t.saved ? "saved" : "baked";
+        })
+        .catch(() => { /* runs with what the image has */ });
+    }
     api<{ system_prompt?: string }>(`/api/image/config?ref=${encodeURIComponent(ref)}&engine=${encodeURIComponent(engine)}`)
       .then((c) => { if (openedFor === engine + ref) baked = c.system_prompt ?? ""; })
       .catch(() => { /* the field still works without the hint */ });
@@ -77,6 +101,9 @@
     if (prompt.trim() && always) body.inject_mode = "always";
     if (force) body.force = true;
     if (h?.workspace && workspace.trim()) body.workspace = workspace.trim();
+    const tun = runTuning();
+    if (tun) body.tuning = tun;
+    if (tinfo && choice === "baked" && tinfo.saved) body.tuning_base = "baked";
     busy = true;
     error = "";
     try {
@@ -96,6 +123,44 @@
       busy = false;
     }
   }
+
+  // ---- settings for this run ----
+  const tunable = $derived.by(() => {
+    if (!image || image.ensemble) return false;
+    const m = $catalog.find((x) => x.id === labelVal(image.info.Labels, "local-llm.model"));
+    return !!m && (m.runtime ?? "cpp") === "cpp" && /^(text|vision|code|reasoning)?$/.test(m.modality ?? "");
+  });
+  const runPresets = $derived((tinfo?.presets ?? []).filter((p) => p.id === "speed" || p.id === "balanced" || p.id === "long_context"));
+  const base = $derived<Tuning>(
+    choice === "saved" ? (tinfo?.effective ?? tinfo?.saved ?? {}) :
+    choice === "baked" ? (tinfo?.baked ?? {}) :
+    (runPresets.find((p) => p.id === choice)?.tuning ?? {}),
+  );
+  const ctxNow = $derived(ctx ?? base.ctx_size);
+  const ctxList = $derived(ctxOptions(tinfo?.model?.trained_ctx ?? 0, ctxNow ?? 0));
+  // What this run sends: nothing when it's the default (saved, else baked) as is.
+  function runTuning(): Tuning | null {
+    if (!tinfo) return null;
+    const t: Tuning = choice === "saved" || choice === "baked" ? {} : { ...base, preset: choice as Tuning["preset"] };
+    if (ctx && ctx !== base.ctx_size) t.ctx_size = ctx;
+    const c = clean(t);
+    return Object.keys(c).length ? c : null;
+  }
+  let runEst = $state<EstimateResult | null>(null);
+  $effect(() => {
+    if (!open || !image || !tinfo) { runEst = null; return; }
+    const t = clean({ ...base, ...(ctx ? { ctx_size: ctx } : {}) });
+    const ref = image.ref, engine = image.engine;
+    const hd = setTimeout(() => {
+      estimate({ ref, engine, tuning: t }).then((r) => (runEst = r)).catch(() => {
+        const p = (tinfo?.presets ?? []).find((x) => x.id === choice);
+        runEst = p && !ctx ? { tuning: t, estimate: p.estimate, fits: p.fits, warning: p.warning } : null;
+      });
+    }, 200);
+    return () => clearTimeout(hd);
+  });
+  const memGB = $derived(tinfo?.engine?.mem_gb || 0);
+  const memPct = $derived(runEst?.estimate && memGB ? Math.min(100, (runEst.estimate.total_gb / memGB) * 100) : 0);
 
   // ---- baked tools ----
   const h = $derived(image?.harness ?? null);
@@ -130,6 +195,44 @@
       <Icon name="warn" />
       <span><b>:{port} is in use by a running model.</b><p>Starting this one stops {clash.Names || "it"}. Pick another port to keep both.</p></span>
     </div>
+  {/if}
+  {#if tunable && tinfo}
+    <section class="tun" aria-labelledby="run-tun">
+      <div class="th"><h3 class="lbl" id="run-tun">Settings for this run</h3><a class="lk" href={href("tune", tuneArg(image!.engine, image!.ref))} onclick={() => (open = false)}>Tune…</a></div>
+      <div class="seg" role="radiogroup" aria-label="Settings for this run">
+        {#if tinfo.saved}
+          <button type="button" role="radio" aria-checked={choice === "saved"} class:on={choice === "saved"} onclick={() => { choice = "saved"; ctx = undefined; }}>
+            <b>Saved</b><small>{tinfo.saved.preset && tinfo.saved.preset !== "custom" ? PRESET_LABEL[tinfo.saved.preset] : ctxText(tinfo.effective?.ctx_size)}</small>
+          </button>
+        {/if}
+        <button type="button" role="radio" aria-checked={choice === "baked"} class:on={choice === "baked"} onclick={() => { choice = "baked"; ctx = undefined; }}>
+          <b>Image's</b><small>{tinfo.baked?.ctx_size ? ctxText(tinfo.baked.ctx_size) : "as built"}</small>
+        </button>
+        {#each runPresets as p (p.id)}
+          <button type="button" role="radio" aria-checked={choice === p.id} class:on={choice === p.id} disabled={p.fits === false} title={p.fits === false ? "Doesn't fit in the engine's memory" : p.explain}
+            onclick={() => { choice = p.id; ctx = undefined; }}>
+            <b>{p.label || PRESET_LABEL[p.id]}</b><small>{ctxText(p.tuning.ctx_size)}</small>
+          </button>
+        {/each}
+      </div>
+      <div class="ctx">
+        <label>
+          <span class="lbl">Context window</span>
+          <select value={ctxNow ?? ""} onchange={(e) => (ctx = parseInt(e.currentTarget.value, 10) || undefined)}>
+            {#if !ctxNow}<option value="">The image's default</option>{/if}
+            {#each ctxList as n (n)}<option value={n}>{ctxText(n)} tokens</option>{/each}
+          </select>
+        </label>
+        {#if runEst?.estimate}
+          <div class="memb">
+            <span class="bar" class:wa={runEst.fits === false || !!runEst.warning}><i style="width:{memPct}%"></i></span>
+            <small><b>{gb(runEst.estimate.total_gb)}{memGB ? ` of ${Math.floor(memGB)} GB` : ""}</b> on {engineName(image!.engine)}{tuningLine({ ...base, ctx_size: undefined }) ? ` with ${tuningLine({ ...base, ctx_size: undefined })}` : ""}{runEst.fits === false ? ". It doesn't fit." : runEst.warning ? `. ${runEst.warning}` : ""}</small>
+          </div>
+        {:else}
+          <p class="hint">{tuningLine({ ...base, ctx_size: undefined }) || "The image's own settings."}</p>
+        {/if}
+      </div>
+    </section>
   {/if}
   <label class="full">
     <span class="lbl">System prompt for this instance</span>
@@ -202,6 +305,22 @@
   .check { flex-direction: row; align-items: flex-start; gap: 9px; margin-top: 12px; color: var(--mu); }
   .check input { margin-top: 2px; }
   .callout { margin-top: 12px; }
+  .tun { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--ln); display: flex; flex-direction: column; gap: 10px; }
+  .th { display: flex; align-items: center; gap: 10px; }
+  .th h3 { margin: 0; }
+  .lk { margin-left: auto; font-size: 12.5px; color: var(--pr); font-weight: 600; }
+  .seg { display: flex; gap: 3px; padding: 3px; background: var(--p2); border: 1px solid var(--ln2); border-radius: var(--r); }
+  .seg button { flex: 1; height: auto; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 7px 8px; border: 0; border-radius: var(--rs); background: transparent; color: var(--mu); }
+  .seg button b { font-size: 13px; font-weight: 600; }
+  .seg button small { font-size: 11.5px; color: var(--fa); font-family: var(--font-mono); }
+  .seg button.on { background: var(--p3); color: var(--ink); box-shadow: inset 0 0 0 1px var(--pr); }
+  .seg button.on small { color: var(--pr); }
+  .seg button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .ctx { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 16px; align-items: end; }
+  .ctx select { min-width: 180px; }
+  .memb { display: flex; flex-direction: column; gap: 6px; padding-bottom: 3px; }
+  .memb small { font-size: 12px; color: var(--mu); }
+  .memb b { color: var(--ink); font-family: var(--font-mono); font-weight: 500; }
   .tools { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--ln); display: flex; flex-direction: column; gap: 8px; }
   .tools h3 { margin: 0; display: flex; align-items: center; gap: 6px; }
   .tools .sub { line-height: 1.5; }
@@ -219,5 +338,7 @@
   .self :global(.code > span) { white-space: normal; overflow-wrap: anywhere; }
   @media (max-width: 520px) {
     .grid { grid-template-columns: 1fr; }
+    .ctx { grid-template-columns: 1fr; }
+    .seg { flex-wrap: wrap; }
   }
 </style>

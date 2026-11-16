@@ -27,6 +27,8 @@ export const PAGES: PageDef[] = [
     blurb: "The build queue: one lane per engine, live logs, failures explained." },
   { id: "library", label: "Library", title: "Library", icon: "library", group: "main", key: "l",
     blurb: "Every model on this machine: weights, images, running containers, and cleanup." },
+  { id: "tune", label: "Tune", title: "Tune", icon: "gauge", group: "hidden",
+    blurb: "Speed, context and memory settings for one model, and a benchmark on this machine." },
   { id: "harness", label: "Harness", title: "Harness", icon: "harness", group: "main",
     blurb: "Tools for Open WebUI: the gateway, a workspace terminal, skills and web search." },
   { id: "playground", label: "Playground", title: "Playground", icon: "playground", group: "main", key: "p",
@@ -52,7 +54,7 @@ export const ALIASES: Record<string, string> = {
 };
 
 // The nav item to highlight for a page that isn't in the nav itself.
-const NAV_PARENT: Record<string, string> = { plan: "catalog", help: "" };
+const NAV_PARENT: Record<string, string> = { plan: "catalog", tune: "library", help: "" };
 
 const ids = new Set(PAGES.map((p) => p.id));
 const DEFAULT = "overview";

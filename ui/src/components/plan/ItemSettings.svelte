@@ -7,6 +7,8 @@
   import { tick } from "svelte";
   import Icon from "../Icon.svelte";
   import ToolsSetting from "./ToolsSetting.svelte";
+  import TuningSetting from "./TuningSetting.svelte";
+  import { ctxText } from "../../lib/tuning";
   import { canHarness } from "../../lib/baked";
   import { ctxDefaultFor, fmtTokens } from "../../lib/util";
   import { contextFor } from "../../lib/meta";
@@ -51,7 +53,11 @@
     const parts = [x.mem_gb ? `${Math.max(1, Math.floor(x.mem_gb))} GB` : "", gpu].filter(Boolean);
     return parts.length ? ` (${parts.join(", ")})` : "";
   };
-  const ctxAuto = $derived(`Auto (${fmtTokens(ctxDefaultFor(compute))})`);
+  const ctxAuto = $derived(
+    it.tuning?.ctx_size ? `From the tuning (${ctxText(it.tuning.ctx_size)})` : `Auto (${fmtTokens(ctxDefaultFor(compute))})`,
+  );
+  // Runtime tuning is for llama.cpp chat models.
+  const canTune = $derived(!!m && (m.runtime ?? "cpp") === "cpp" && /^(text|vision|code|reasoning)?$/.test(m.modality ?? ""));
   const ctxMax = $derived(m && contextFor(m.id) ? `Max (${contextFor(m.id)})` : "Max for this model");
   const MEM = [0, 4, 8, 12, 16];
   const memOptions = $derived(MEM.includes(it.memory_gb) ? MEM : [...MEM, it.memory_gb].sort((a, b) => a - b));
@@ -150,6 +156,10 @@
       <span class="tgl"><input type="checkbox" class="tg" bind:checked={it.autostart} /><small>{it.autostart ? "On: once running, it comes back after a restart" : "Off"}</small></span>
     </label>
   </div>
+
+  {#if canTune}
+    <TuningSetting {it} {m} {compute} />
+  {/if}
 
   {#if canHarness(m)}
     <ToolsSetting {it} {m} />

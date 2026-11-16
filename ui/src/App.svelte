@@ -13,6 +13,7 @@
   import Builds from "./pages/Builds.svelte";
   import Library from "./pages/Library.svelte";
   import Harness from "./pages/Harness.svelte";
+  import Tune from "./pages/Tune.svelte";
   import Playground from "./pages/Playground.svelte";
   import Ensembles from "./pages/Ensembles.svelte";
   import Personas from "./pages/Personas.svelte";
@@ -101,6 +102,8 @@
           <Builds />
         {:else if $route === "library"}
           <Library />
+        {:else if $route === "tune"}
+          <Tune />
         {:else if $route === "harness"}
           <Harness />
         {:else if $route === "playground"}

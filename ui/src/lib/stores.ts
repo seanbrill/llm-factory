@@ -3,6 +3,7 @@
 import { writable } from "svelte/store";
 import type { Model, SysInfo, Persona, Ensemble, ResourceBudget, VersionInfo, VoiceClip } from "./types";
 import { api } from "./api";
+import type { Tuning } from "./tuning";
 
 export const sysinfo = writable<SysInfo | null>(null);
 // The factory build this page was loaded from (see Sidebar for the update check).
@@ -15,7 +16,8 @@ export const voices = writable<VoiceClip[]>([]);
 export const resources = writable<ResourceBudget | null>(null);
 
 // Set by Images "use as template"; consumed by the Build page to clone an image.
-export const buildTemplate = writable<{ ref: string; engine: string } | null>(null);
+// tuning: settings from the Tune page to bake into the new build (overrides the image's).
+export const buildTemplate = writable<{ ref: string; engine: string; tuning?: Tuning } | null>(null);
 
 export async function loadSysInfo() {
   try {
