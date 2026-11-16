@@ -28,7 +28,7 @@ type preflightItemResp struct {
 	builder.PreflightPlan
 	WeightsGB  float64 `json:"weights_gb"`  // weights the image bakes
 	DownloadGB float64 `json:"download_gb"` // still to download (0 = on disk or self-contained)
-	EtaSeconds int     `json:"eta_seconds"` // last build time for this compute (0 = unknown)
+	EtaSeconds int     `json:"eta_seconds"` // expected build time from recent builds (0 = unknown)
 	RunBlock   bool    `json:"run_block"`   // too big to run on its engine at all
 	RunNote    string  `json:"run_note,omitempty"`
 }
@@ -81,7 +81,7 @@ func (s *Server) handleBuildPreflight(w http.ResponseWriter, r *http.Request) {
 		}
 		m, p := items[k].Model, plans[k]
 		k++
-		resp := preflightItemResp{ModelID: m.ID, Name: m.Name, PreflightPlan: p, WeightsGB: s.b.WeightsGB(m), EtaSeconds: int(s.etaFor(p.Compute))}
+		resp := preflightItemResp{ModelID: m.ID, Name: m.Name, PreflightPlan: p, WeightsGB: s.b.WeightsGB(m), EtaSeconds: int(s.etaFor(p.Compute, s.b.WeightsGB(m)))}
 		if dl, _ := s.b.ModelOnDisk(m); !dl && m.File != "" {
 			resp.DownloadGB = m.SizeGB
 			downloads[m.ID] = m.SizeGB

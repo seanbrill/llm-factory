@@ -205,7 +205,7 @@
       </div>
       {#if !compact}
         <div class="row fine">
-          <span>{clock(job.elapsed_ms)} elapsed{job.eta_seconds > 0 ? ` · the last ${computeName(job.compute)} build took about ${dur(job.eta_seconds)}` : ""}</span>
+          <span>{clock(job.elapsed_ms)} elapsed{job.eta_seconds > 0 ? ` · recent ${computeName(job.compute)} builds, at this model's size, take about ${dur(job.eta_seconds)}` : ""}</span>
           {#if route.transfer}<span>Compiles on {engineName(route.build)}, then loads into {engineName(route.target)}</span>{/if}
         </div>
       {:else}

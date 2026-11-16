@@ -13,9 +13,11 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,8 +48,8 @@ type Server struct {
 	q *buildQueue // queued/running/recent builds, buffered so the UI can reconnect after a refresh
 
 	statsMu   sync.Mutex
-	buildSecs map[string]float64 // compute -> last successful build duration (s)
-	statsPath string             // where buildSecs is persisted
+	buildSecs map[string][]buildSample // compute -> recent successful builds, oldest first
+	statsPath string                   // where buildSecs is persisted
 
 	personasMu sync.Mutex // guards reads/writes of config/personas.json
 
@@ -508,7 +510,7 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 	// refresh/disconnect can't cancel it; POST /api/builds/cancel can.
 	job := &buildJob{
 		kind: "model", lane: engine, ref: opts.Ref(), name: model.Name, cfg: cfg,
-		eta: int(s.etaFor(compute)),
+		eta: int(s.etaFor(compute, s.b.WeightsGB(model))),
 		run: func(ctx context.Context, log builder.LogFunc) error {
 			start := time.Now()
 			o := opts
@@ -516,7 +518,7 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 			if err := s.b.Build(ctx, o, log); err != nil {
 				return err
 			}
-			s.recordBuild(compute, time.Since(start).Seconds())
+			s.recordBuild(compute, time.Since(start).Seconds(), s.b.WeightsGB(model))
 			return nil
 		},
 	}
@@ -531,24 +533,72 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 // ---- build-duration stats (for the UI's ETA) ------------------------------
 
 func (s *Server) loadStats() {
-	s.buildSecs = map[string]float64{}
-	if data, err := os.ReadFile(s.statsPath); err == nil {
-		_ = json.Unmarshal(data, &s.buildSecs)
+	s.buildSecs = map[string][]buildSample{}
+	data, err := os.ReadFile(s.statsPath)
+	if err != nil {
+		return
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) != nil {
+		return
+	}
+	for compute, v := range raw {
+		var list []buildSample
+		if json.Unmarshal(v, &list) == nil {
+			s.buildSecs[compute] = list
+			continue
+		}
+		// The older file: one duration per compute, no size.
+		var secs float64
+		if json.Unmarshal(v, &secs) == nil && secs > 0 {
+			s.buildSecs[compute] = []buildSample{{Secs: secs}}
+		}
 	}
 }
 
-// etaFor returns the last measured whole-build duration (seconds) for a compute
-// type, or 0 if none is recorded yet. The UI supplies a default estimate when
-// this is 0, so default-tuning stays a UI-only concern (no backend restart).
-func (s *Server) etaFor(compute string) float64 {
-	s.statsMu.Lock()
-	defer s.statsMu.Unlock()
-	return s.buildSecs[compute]
+// buildSample is one successful build: how long it took and its weights' size.
+type buildSample struct {
+	Secs float64 `json:"secs"`
+	GB   float64 `json:"gb,omitempty"`
 }
 
-func (s *Server) recordBuild(compute string, secs float64) {
+const buildSamples = 8 // builds kept per compute
+
+// etaFor estimates a build (seconds) for a compute type and a model whose
+// weights take gb: the median of the recent builds there, each scaled to
+// this model's size (copying and exporting the weights is most of a build
+// once the engine is compiled, so a 12B model takes longer than a 4B one).
+// 0 when none is recorded yet; the UI then has its own default.
+func (s *Server) etaFor(compute string, gb float64) float64 {
 	s.statsMu.Lock()
-	s.buildSecs[compute] = secs
+	defer s.statsMu.Unlock()
+	list := s.buildSecs[compute]
+	if len(list) == 0 {
+		return 0
+	}
+	est := make([]float64, 0, len(list))
+	for _, b := range list {
+		f := 1.0
+		if gb > 0 && b.GB > 0 {
+			f = math.Min(3, math.Max(1.0/3, gb/b.GB))
+		}
+		est = append(est, b.Secs*f)
+	}
+	sort.Float64s(est)
+	n := len(est)
+	if n%2 == 1 {
+		return est[n/2]
+	}
+	return (est[n/2-1] + est[n/2]) / 2
+}
+
+func (s *Server) recordBuild(compute string, secs, gb float64) {
+	s.statsMu.Lock()
+	list := append(s.buildSecs[compute], buildSample{Secs: secs, GB: math.Round(gb*100) / 100})
+	if len(list) > buildSamples {
+		list = list[len(list)-buildSamples:]
+	}
+	s.buildSecs[compute] = list
 	data, _ := json.Marshal(s.buildSecs)
 	s.statsMu.Unlock()
 	_ = os.MkdirAll(filepath.Dir(s.statsPath), 0o755)

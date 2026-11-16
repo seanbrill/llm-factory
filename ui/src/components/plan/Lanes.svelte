@@ -2,7 +2,7 @@
   // "How it will run" (sheet frame f9): the plan laid out in the server's build
   // queue. One lane per engine the images are for; each lane builds one image at
   // a time, after whatever is already waiting in it, and the lanes run side by
-  // side. Widths are the server's last build time for each compute; when one is
+  // side. Widths are the server's estimate from recent builds on each compute; when one is
   // unknown the bars only show the order and no finish time is claimed.
   import { dur, engineName, plural } from "../../lib/format";
   import type { Schedule } from "../../lib/catalog";
