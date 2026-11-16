@@ -9,7 +9,7 @@
   import { toast } from "../../lib/stores";
   import { startRecording, toWav, audioError, elapsed, STT_RATE, type Recording } from "../../lib/audio";
   import { MODE, send, sendVoice, stopTab, streaming, visiblePanes, save, type Tab, type Target } from "../../lib/chat.svelte";
-  import type { SavedPrompt } from "../../lib/prompts.svelte";
+  import { createPrompt, refreshPrompts, type SavedPrompt } from "../../lib/prompts.svelte";
 
   let {
     tab,
@@ -20,6 +20,35 @@
 
   // The box still holds the saved prompt it was filled with (unchanged).
   const saved = $derived(fromPrompt && draft.trim() === fromPrompt.text.trim() ? fromPrompt : null);
+
+  // ---- save the box as a reusable prompt ----------------------------------------------
+  let naming = $state(false);
+  let pname = $state("");
+  let withSystem = $state(true);
+  let savingP = $state(false);
+  let nameEl: HTMLInputElement | undefined = $state();
+  function startSave() {
+    if (!draft.trim()) return;
+    naming = true;
+    pname = "";
+    requestAnimationFrame(() => nameEl?.focus());
+  }
+  async function savePrompt() {
+    const text = draft.trim();
+    if (!text || savingP) return;
+    savingP = true;
+    try {
+      const p = await createPrompt({ name: pname.trim(), text, system: withSystem && tab.system.trim() ? tab.system : undefined });
+      fromPrompt = p;
+      naming = false;
+      refreshPrompts();
+      toast(`Saved “${p.name}”. It's in the Prompts menu; sent as the first message of a chat, its answers are kept.`, 5000);
+    } catch (e) {
+      toast(`Couldn't save the prompt: ${(e as Error).message}`, 6000);
+    } finally {
+      savingP = false;
+    }
+  }
 
   let image = $state<string | null>(null);
   let file = $state<File | null>(null);
@@ -172,6 +201,27 @@
   {:else if converting}
     <div class="recbar" role="status"><span class="spin" aria-hidden="true"></span><span>Preparing your question…</span></div>
   {/if}
+  {#if naming}
+    <div class="recbar nm">
+      <Icon name="bookmark" size={14} />
+      <label class="vh" for="pg-pname">Name for the saved prompt</label>
+      <input
+        id="pg-pname"
+        bind:this={nameEl}
+        bind:value={pname}
+        maxlength="120"
+        placeholder={"Name (default: " + (draft.trim().split("\n")[0].slice(0, 40) || "its first line") + ")"}
+        onkeydown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            savePrompt();
+          } else if (e.key === "Escape") naming = false;
+        }} />
+      {#if tab.system.trim()}<label class="ck"><input type="checkbox" bind:checked={withSystem} /> with the system prompt</label>{/if}
+      <button class="small primary" type="button" disabled={savingP || !draft.trim()} onclick={savePrompt}>Save prompt</button>
+      <button class="small ghost" type="button" onclick={() => (naming = false)}>Cancel</button>
+    </div>
+  {/if}
   {#if saved}
     <div class="att sp">
       <Icon name="bookmark" size={14} />
@@ -199,6 +249,14 @@
       onkeydown={onKey}
       onpaste={onPaste}></textarea>
     <div class="tools">
+      <button
+        class="icon"
+        class:on={!!saved}
+        type="button"
+        aria-label={saved ? `Saved as “${saved.name}”` : "Save as a reusable prompt"}
+        title={saved ? `Saved as “${saved.name}”` : draft.trim() ? "Save this as a reusable prompt" : "Write a prompt, then save it here for reuse"}
+        disabled={!draft.trim() || !!saved}
+        onclick={startSave}><Icon name="bookmark" size={16} /></button>
       {#if accept}
         <input type="file" hidden {accept} bind:this={fileEl} onchange={onFile} />
         <button class="icon" type="button" aria-label={attachLabel} title={attachLabel} disabled={off} onclick={() => fileEl?.click()}><Icon name="attach" size={16} /></button>
@@ -295,6 +353,9 @@
   .recbar small { color: var(--fa); font-size: 12px; }
   .recbar .spin { width: 13px; height: 13px; }
   .recbar button { margin-left: auto; }
+  .nm input:not([type="checkbox"]) { flex: 1; min-width: 160px; height: 32px; }
+  .nm button { margin-left: 0; }
+  .nm .ck { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--mu); }
   @keyframes pulse { 50% { opacity: 0.3; } }
   @media (prefers-reduced-motion: reduce) { .recbar > i { animation: none; } }
   .att span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -97,8 +97,8 @@
   {/if}
 
   <div class="sv">
-    <label for="pm-name">Save the message box as a prompt</label>
-    <div class="r">
+    <label for="pm-name">{draft.trim() ? "Save the message box as a prompt" : "To save a prompt, type it in the message box, then click the bookmark beside Send (or reopen this menu)."}</label>
+    <div class="r" hidden={!draft.trim()}>
       <input id="pm-name" placeholder={draft.trim() ? draft.trim().split("\n")[0].slice(0, 60) : "Write a prompt first"} bind:value={name} disabled={!draft.trim()} onkeydown={(e) => e.key === "Enter" && saveDraft()} />
       <button class="small" type="button" disabled={!draft.trim() || saving} onclick={saveDraft}>Save</button>
     </div>
@@ -107,6 +107,7 @@
     {/if}
   </div>
   <p class="hint">
+    You can also write prompts on the <a href={href("prompts", "new")} onclick={() => (open = false)}>Prompts page</a>.
     When a saved prompt starts a conversation (a new or cleared chat), each model's answer and speed is kept.
     <a href={href("prompts")} onclick={() => (open = false)}>Compare models on the Prompts page</a>
   </p>
