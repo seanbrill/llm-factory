@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -42,6 +44,21 @@ func TestHarnessContextWithSharedCache(t *testing.T) {
 	}{{32768, 1, false, 32768}, {65536, 2, false, 32768}, {65536, 2, true, 65536}, {8192, 0, false, 8192}} {
 		if got := harnessContext(c.ctx, c.parallel, c.unified); got != c.want {
 			t.Errorf("harnessContext(%d, %d, %v) = %d, want %d", c.ctx, c.parallel, c.unified, got, c.want)
+		}
+	}
+}
+
+func TestCheckModel(t *testing.T) {
+	dir := t.TempDir()
+	empty, model := filepath.Join(dir, "empty.gguf"), filepath.Join(dir, "m.gguf")
+	os.WriteFile(empty, nil, 0o644)
+	os.WriteFile(model, []byte("GGUF"), 0o644)
+	if err := checkModel(model); err != nil {
+		t.Errorf("a model file: %v", err)
+	}
+	for _, p := range []string{filepath.Join(dir, "missing.gguf"), dir, empty} {
+		if checkModel(p) == nil {
+			t.Errorf("%s should fail", p)
 		}
 	}
 }

@@ -11,6 +11,6 @@
     "test": "node --test test/lib.test.mjs"
   },
   "dependencies": {
-    "@filefreak.io/sdk": "0.20.0"
+    "@filefreak.io/sdk": "0.21.0"
   }
 }

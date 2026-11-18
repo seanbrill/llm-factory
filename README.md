@@ -354,6 +354,7 @@ scripts/             everything you run, by platform (scripts/README.md):
                      whisper (STT), tts (Piper), audiocpp (TTS and Moonshine STT
                      via audio.cpp), and ensemble (Conductor)
 docs/CONTAINER.md    image spec + how other apps interact with the container
+docs/RUNTIME.md      the model-less runtime (weights mounted) + building for amd64
 deploy/              OPTIONAL ECS/Fargate task definition for later cloud deploy
 ```
 
@@ -476,8 +477,9 @@ or Hugging Face is down.
   Protection. Builds never wait for an upload, and a failed one never fails a build.
 - **License rule:** a file is uploaded only if its repository isn't gated and its
   license is `apache-2.0`, `mit`, `bsd-2-clause`, `bsd-3-clause`, `cc-by-4.0`,
-  `cc-by-sa-4.0`, `cc0-1.0` or OpenRAIL. Llama, Gemma and other custom licenses are
-  never uploaded, and the System page says why. Reading isn't limited by license.
+  `cc-by-sa-4.0`, `cc0-1.0` or OpenRAIL, as the repository itself declares it.
+  The Llama licenses, the Gemma Terms (Gemma 3) and other custom licenses are never
+  uploaded, and the System page says why; Gemma 4 is Apache-2.0, so it is. Reading isn't limited by license.
 - **What FileFreak sees:** which model repositories, revisions and files this install
   looks up (from the folders it lists and the files it downloads). With a key it
   also gets the files themselves, their LICENSE and README files, and a provenance
@@ -499,3 +501,10 @@ Push your image to ECR, fill in the placeholder account/region/role ARNs, then:
 ```bash
 aws ecs register-task-definition --cli-input-json file://deploy/ecs-task-definition.json
 ```
+
+## License
+
+llm-factory is licensed under the [Apache License 2.0](LICENSE); see
+[NOTICE](NOTICE). The models it downloads and builds into images keep their own
+licenses: each catalog entry's `license` field names it, and the FileFreak
+archive keeps each repository's license files beside its weights.

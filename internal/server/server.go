@@ -141,6 +141,7 @@ func New(b *builder.Builder, cat *catalog.Catalog, modelHost, webDir string) (*S
 	s.mux.HandleFunc("/api/models", s.handleModels)
 	s.mux.HandleFunc("/api/model/delete", s.handleModelDelete)
 	s.mux.HandleFunc("/api/build", s.handleBuild)
+	s.mux.HandleFunc("/api/runtimes/build", s.handleRuntimeBuild)
 	s.mux.HandleFunc("/api/build/state", s.handleBuildState)
 	s.mux.HandleFunc("/api/builds", s.handleBuilds)
 	s.mux.HandleFunc("/api/builds/state", s.handleBuildsState)
@@ -433,6 +434,7 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		Tag          string  `json:"tag"`
 		Engine       string  `json:"engine"`
 		Compute      string  `json:"compute"`
+		Platform     string  `json:"platform"` // "", "linux/amd64" or "linux/arm64"
 		SystemPrompt string  `json:"system_prompt"`
 		InjectMode   string  `json:"inject_mode"`
 		CtxSize      int     `json:"ctx_size"`
@@ -473,6 +475,10 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if _, err := builder.PlatformArch(req.Platform); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	engine := normalizeEngine(req.Engine)
 	compute := normalizeCompute(req.Compute)
 	route := sanitizeRoute(req.Route)
@@ -488,6 +494,7 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		Tag:          req.Tag,
 		Engine:       engine,
 		Compute:      compute,
+		Platform:     req.Platform,
 		ExportTar:    true, // per project config: always export a .tar to ./images
 		SystemPrompt: req.SystemPrompt,
 		InjectMode:   req.InjectMode,
@@ -502,7 +509,7 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 
 	cfg := buildConfig{
 		ModelID: req.ModelID, ImageName: req.ImageName, Tag: req.Tag,
-		Engine: engine, Compute: compute, SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode,
+		Engine: engine, Compute: compute, Platform: req.Platform, SystemPrompt: req.SystemPrompt, InjectMode: req.InjectMode,
 		CtxSize: req.CtxSize, MemoryGB: req.MemoryGB, Route: route, Autostart: req.Autostart,
 		Harness: harnessCfg, Tuning: tune,
 	}

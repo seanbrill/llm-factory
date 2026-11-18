@@ -80,9 +80,9 @@ COPY gate/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /llmgate ./cmd/llmgate
 
 # ----------------------------------------------------------------------------
-# Stage 3: slim runtime with weights + prompt baked in
+# Stage 3 (runtime-base): slim runtime, no model in it
 # ----------------------------------------------------------------------------
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim AS runtime-base
 ARG INJECT_MODE=missing
 ARG MODALITY=text
 ARG CTX_SIZE=4096
@@ -98,13 +98,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /src/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 COPY --from=gate    /llmgate                              /usr/local/bin/llmgate
-COPY model.gguf         /models/model.gguf
-# Always-present vision projector (empty placeholder for text; real for VLMs).
-COPY mmproj.gguf        /models/mmproj.gguf
-COPY system_prompt.txt  /etc/llmgate/system_prompt.txt
-# Agent harness: harness.json (empty = no harness) and skills/, root-owned so
-# the model can read but not change them.
-COPY harness/           /etc/llmgate/
 
 # Tunables (override per `docker run -e ...`). THREADS defaults to the container's
 # CPU count (set by llmgate); set it explicitly to cap or leave cores free.
@@ -128,3 +121,17 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=5 \
     CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
 
 ENTRYPOINT ["/usr/local/bin/llmgate"]
+
+# ----------------------------------------------------------------------------
+# Stage 4: the model, baked in. Build with --target runtime-base for the same
+# runtime without it: llmgate then reads MODEL_PATH from a mounted volume, and
+# the system prompt, harness and mmproj are optional (a missing one is skipped).
+# ----------------------------------------------------------------------------
+FROM runtime-base AS runtime
+COPY model.gguf         /models/model.gguf
+# Always-present vision projector (empty placeholder for text; real for VLMs).
+COPY mmproj.gguf        /models/mmproj.gguf
+COPY system_prompt.txt  /etc/llmgate/system_prompt.txt
+# Agent harness: harness.json (empty = no harness) and skills/, root-owned so
+# the model can read but not change them.
+COPY harness/           /etc/llmgate/

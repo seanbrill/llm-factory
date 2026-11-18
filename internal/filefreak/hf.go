@@ -323,6 +323,7 @@ func LicenseVerdict(info ModelInfo) (ok bool, license, reason string) {
 
 // NoticeFiles are the license and notice files at the top of a repository,
 // which are archived beside its files: LICENSE*, LICENCE*, NOTICE*, COPYING*
+// USE_POLICY* and the like (a use policy some licenses require passed on),
 // and README.md (the model card, which states the license).
 func NoticeFiles(siblings []string) []string {
 	var out []string
@@ -332,7 +333,10 @@ func NoticeFiles(siblings []string) []string {
 		}
 		l := strings.ToLower(s)
 		if l == "readme.md" || strings.HasPrefix(l, "license") || strings.HasPrefix(l, "licence") ||
-			strings.HasPrefix(l, "notice") || strings.HasPrefix(l, "copying") {
+			strings.HasPrefix(l, "notice") || strings.HasPrefix(l, "copying") ||
+			strings.HasPrefix(l, "use_policy") || strings.HasPrefix(l, "use-policy") ||
+			strings.HasPrefix(l, "acceptable_use") || strings.HasPrefix(l, "acceptable-use") ||
+			strings.HasPrefix(l, "responsible_use") || strings.HasPrefix(l, "responsible-use") {
 			out = append(out, s)
 		}
 	}

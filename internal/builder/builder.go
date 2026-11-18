@@ -613,6 +613,7 @@ type BuildOptions struct {
 	Tag          string // defaults to "latest"
 	Engine       string // "docker" (default) | "podman"
 	Compute      string // "cpu" | "cuda" | "vulkan"
+	Platform     string // "" (the engine's own), "linux/amd64" or "linux/arm64"
 	ExportTar    bool   // also `<engine> save` into ./images
 	SystemPrompt string // optional baked-in initialization prompt
 	InjectMode   string // "missing" (default) | "always"
@@ -666,6 +667,10 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 		return fmt.Errorf("unknown compute %q (want cpu, cuda, or vulkan)", compute)
 	}
 	engine := resolveEngine(o.Engine)
+	arch, err := PlatformArch(o.Platform)
+	if err != nil {
+		return err
+	}
 
 	// Select the runtime family, and the compute variant it actually ships (a
 	// GPU request for a CPU-only runtime such as Piper TTS builds the CPU image).
@@ -934,6 +939,11 @@ func (b *Builder) Build(ctx context.Context, o BuildOptions, log LogFunc) error 
 	// A baked harness is labeled so the factory can tell the model runs its own
 	// tool loop (and clone the build with the same harness).
 	buildArgs = append(buildArgs, harnessLabels(harnessCfg)...)
+	// Another architecture (an amd64 image from an arm64 Mac) is emulated.
+	buildArgs = append(buildArgs, "--label", "local-llm.arch="+arch)
+	if o.Platform != "" {
+		buildArgs = append(buildArgs, "--platform", o.Platform)
+	}
 	// Podman remote (macOS GPU path): the client forwards its default seccomp
 	// profile *path* (/etc/containers/seccomp.json on Alpine) to the machine VM,
 	// which ships the profile at /usr/share/containers/seccomp.json instead, so

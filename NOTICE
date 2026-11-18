@@ -1,0 +1,8 @@
+llm-factory
+Copyright 2026 FileFreak LLC
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The images it builds also contain third-party software under its own license,
+including llama.cpp (MIT), and model weights, each under its own license; those
+licenses are not changed by this one.

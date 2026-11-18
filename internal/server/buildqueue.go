@@ -51,6 +51,7 @@ type buildConfig struct {
 	Tag          string  `json:"tag"`
 	Engine       string  `json:"engine"`
 	Compute      string  `json:"compute"`
+	Platform     string  `json:"platform,omitempty"`
 	SystemPrompt string  `json:"system_prompt"`
 	InjectMode   string  `json:"inject_mode"`
 	CtxSize      int     `json:"ctx_size"`
@@ -66,7 +67,7 @@ type buildConfig struct {
 // buildJob is one queued, running or finished image build.
 type buildJob struct {
 	id   string
-	kind string // "model" | "ensemble"
+	kind string // "model" | "ensemble" | "native" | "runtime"
 	lane string // engine whose worker runs it: the engine the image is for
 	ref  string
 	name string // model / ensemble display name

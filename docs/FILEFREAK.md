@@ -106,10 +106,15 @@ that revision:
   `cc0-1.0`, and the OpenRAIL family (`openrail`, `openrail++`,
   `creativeml-openrail-m`, `bigscience-openrail-m`, `bigcode-openrail-m`).
 
-Custom licenses are never uploaded: Llama, Gemma, `other`, a repository with no
-license, or anything else not on the list. The license is read from the
-repository's model card on Hugging Face (its `license:` field). It goes into the
-provenance record, next to the LICENSE and README files.
+Custom licenses are never uploaded: the Llama licenses, the Gemma Terms of Use
+(`gemma`), `other`, a repository with no license, or anything else not on the
+list. The rule follows each repository's own license, not the model family:
+Gemma 3 is under the Gemma Terms and stays out, while Gemma 4 and EmbeddingGemma
+2 are `apache-2.0` and are uploaded. The license is read from the repository's
+model card on Hugging Face (its `license:` field). It goes into the provenance
+record. The repository's LICENSE, NOTICE, COPYING and use-policy files and its
+README (the model card) are uploaded beside the files, so the license travels
+with them.
 
 The list is `Redistributable` in `internal/filefreak/hf.go`. Reading from the
 archive isn't limited by it.

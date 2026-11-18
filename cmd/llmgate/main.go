@@ -23,6 +23,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -59,6 +60,12 @@ func main() {
 		log.Fatalf("harness: %v", err)
 	}
 	h.SetContextSize(harnessContext(cfg.ctxSize, cfg.parallel, cfg.tune.KVUnified))
+
+	// The model-less runtime (Dockerfile target runtime-base) reads the model
+	// from a mounted volume: say so plainly when nothing is there.
+	if err := checkModel(cfg.modelPath); err != nil {
+		log.Fatalf("%v", err)
+	}
 
 	// 1. Start llama-server as a child bound to the internal upstream port.
 	child := exec.Command(cfg.llamaBin, cfg.llamaArgs()...)
@@ -239,4 +246,20 @@ func defaultThreads() int {
 		return n
 	}
 	return 4
+}
+
+// checkModel fails when MODEL_PATH names no model file: an image built
+// without one (the runtime-base target) needs the weights mounted, as in
+// -v <dir>:/models:ro -e MODEL_PATH=/models/<file>.gguf.
+func checkModel(path string) error {
+	fi, err := os.Stat(path)
+	switch {
+	case err != nil:
+		return fmt.Errorf("no model at MODEL_PATH=%s: mount the weights (-v <dir>:/models:ro) and set MODEL_PATH to the .gguf file", path)
+	case fi.IsDir():
+		return fmt.Errorf("MODEL_PATH=%s is a folder: set it to the .gguf file inside", path)
+	case fi.Size() == 0:
+		return fmt.Errorf("the model at MODEL_PATH=%s is empty", path)
+	}
+	return nil
 }

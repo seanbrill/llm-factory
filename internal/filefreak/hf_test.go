@@ -209,8 +209,8 @@ func TestInfoAndTheLicenseRule(t *testing.T) {
 }
 
 func TestNoticeFiles(t *testing.T) {
-	got := NoticeFiles([]string{"model.gguf", "LICENSE.txt", "licence", "NOTICE", "COPYING", "readme.md", "README.txt", "docs/LICENSE", "USE_POLICY.md"})
-	want := []string{"COPYING", "LICENSE.txt", "NOTICE", "licence", "readme.md"}
+	got := NoticeFiles([]string{"model.gguf", "LICENSE.txt", "licence", "NOTICE", "COPYING", "readme.md", "README.txt", "docs/LICENSE", "USE_POLICY.md", "Acceptable-Use-Policy.md", "usage.md"})
+	want := []string{"Acceptable-Use-Policy.md", "COPYING", "LICENSE.txt", "NOTICE", "USE_POLICY.md", "licence", "readme.md"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
