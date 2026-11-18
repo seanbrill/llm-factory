@@ -92,6 +92,22 @@ func main() {
 	eng := cliEngine{bin: env("ENGINE", "docker")}
 	g := newGate(mani, eng, harness, log.Printf)
 	g.mg.weightsDir = strings.TrimSpace(os.Getenv("WEIGHTS_DIR"))
+	// MEMBERS: the no-socket mode (addresses.go). The app has started the
+	// members; this Conductor reaches them there and starts nothing.
+	if v := strings.TrimSpace(os.Getenv("MEMBERS")); v != "" {
+		addrs, err := parseMembers(v)
+		if err != nil {
+			log.Fatalf("%v", err)
+		}
+		missing, err := g.mg.useAddresses(addrs)
+		if err != nil {
+			log.Fatalf("%v", err)
+		}
+		log.Printf("no-socket mode: starting no containers; members at %s", memberAddresses(addrs))
+		if len(missing) > 0 {
+			log.Printf("MEMBERS gives no address for %s: those members can't be used", strings.Join(missing, ", "))
+		}
+	}
 	g.persona.envPrompt = strings.TrimSpace(os.Getenv("SYSTEM_PROMPT"))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)

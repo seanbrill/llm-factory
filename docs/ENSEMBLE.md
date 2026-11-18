@@ -46,7 +46,8 @@ step-by-step check of a whole ensemble, see [ENSEMBLE-TEST.md](ENSEMBLE-TEST.md)
 | Embedded packaging (every runtime in one image) | ⬜ not built: `package_mode: "embedded"` runs orchestrated | — |
 | Podman as well as Docker | ✅ built, run once on a Mac (Podman, libkrun, Vulkan) | §11 |
 | Members with mounted weights (model-less runtime) | ✅ built, run once | §11, [RUNTIME.md](RUNTIME.md) |
-| The caller's own tools handed back (`finish_reason: "tool_calls"`) | ✅ built | §11 |
+| The caller's own tools handed back (`finish_reason: "tool_calls"`) | ✅ built, run once | §11 |
+| No-socket mode: the app starts the members, `MEMBERS` names them | ◑ built, not yet run | §11 |
 | Members named by registry address | ◑ built, not yet run: the engine pulls a missing image | §11 |
 
 Nothing above has been run against real models from this branch's tests:
@@ -453,6 +454,44 @@ podman run -d -p 127.0.0.1:8200:8080 \
   -e MODEL_HOST=host.containers.internal -e WEIGHTS_DIR=/Users/me/fred-weights \
   local-llm/ens-fred:latest
 ```
+
+### A Conductor without the engine socket (`MEMBERS`)
+
+Holding the engine socket, the Conductor can start any container with any
+folder mounted, with no one asked. On a computer where an app (FileFreak's
+CLI) already starts containers itself, under its own rules, use the no-socket
+mode instead:
+
+1. The app starts each member from the manifest: its image, its weights
+   mounted read only, `MODEL_PATH`, `MMPROJ_PATH`, `CTX_SIZE` and the GPU device,
+   as "Members with mounted weights" above describes. It waits for each
+   member's `/health`.
+2. It starts the Conductor **without** the socket, with `MEMBERS` naming each
+   member's address as the Conductor reaches it:
+
+```
+podman run -d -p 127.0.0.1:8200:8080 \
+  -e MEMBERS=chat=http://host.containers.internal:41001,see_image=http://host.containers.internal:41002 \
+  local-llm/ens-fred:latest
+```
+
+The Conductor then starts and stops nothing. It routes, runs the member tools
+(`look_at_image`, …), hands the caller's tool calls back, and checks the
+members' health. A fault in it can reach those members' HTTP ports and
+nothing else on the computer.
+
+- **Starting and memory are the app's job.** There's no memory budget and no
+  eviction. Stopping a member on the factory's Ensembles page only marks it
+  stopped; the next request checks it again.
+- **A member that stops answering** is marked failed by the health monitor.
+  The next request waits up to 3 minutes for it to answer again (the app may
+  be restarting it), then fails with its address.
+- **A member `MEMBERS` doesn't name** can't be used, and a request that needs
+  it says so. A tool that isn't one of the ensemble's members stops the
+  Conductor at startup.
+
+The socket mode stays the default, and it's how the factory runs ensembles
+on this computer.
 
 ### Registry addresses
 

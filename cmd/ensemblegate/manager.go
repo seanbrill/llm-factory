@@ -28,9 +28,12 @@ type Manager struct {
 	// weightsDir is the folder (as the engine sees it) holding the weights
 	// of members that mount them (WEIGHTS_DIR).
 	weightsDir string
-	eng        Engine
-	members    map[string]*member
-	order      []string // manifest order
+	// external: the no-socket mode (addresses.go). The app starts and stops
+	// the members; this Conductor only reaches them.
+	external bool
+	eng      Engine
+	members  map[string]*member
+	order    []string // manifest order
 
 	probe        *http.Client
 	startTimeout time.Duration // a start that isn't healthy by then fails
@@ -42,6 +45,7 @@ type Manager struct {
 type member struct {
 	m       ensemble.Member
 	name    string // container name
+	addr    string // the member's base URL in the no-socket mode ("" otherwise)
 	state   string
 	err     string
 	since   time.Time
@@ -161,7 +165,7 @@ func (mg *Manager) Acquire(ctx context.Context, tool string, progress func(strin
 		if st.state == ensemble.StateReady {
 			st.busy++
 			st.lastUse = mg.now()
-			l := &Lease{Member: st.m, base: fmt.Sprintf("http://%s:%d", mg.host, st.port), mg: mg, st: st}
+			l := &Lease{Member: st.m, base: mg.baseOf(st, st.port), mg: mg, st: st}
 			mg.mu.Unlock()
 			return l, nil
 		}
@@ -371,10 +375,14 @@ func (mg *Manager) startContainer(ctx context.Context, st *member) (int, error) 
 		Name: st.name, Image: st.m.Image, Port: st.m.Port, GPU: mg.gpuFor(st.m),
 		Labels: map[string]string{ensemble.LabelMember: mg.ensID, ensemble.LabelTool: st.m.Tool},
 	}
-	if err := mg.mountWeights(st.m, &spec); err != nil {
-		return 0, err
+	if mg.external {
+		mg.logf("waiting for %s at %s (started by the app)", toolText(st.m.Tool), st.addr)
+	} else {
+		if err := mg.mountWeights(st.m, &spec); err != nil {
+			return 0, err
+		}
+		mg.logf("starting %s: %s", toolText(st.m.Tool), st.m.Image)
 	}
-	mg.logf("starting %s: %s", toolText(st.m.Tool), st.m.Image)
 	if err := mg.eng.Run(ctx, spec); err != nil {
 		return 0, fmt.Errorf("the engine couldn't start %s: %v", st.m.Image, err)
 	}
@@ -427,7 +435,7 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 
 // waitHealthy polls the member until it answers, its container dies, or ctx ends.
 func (mg *Manager) waitHealthy(ctx context.Context, st *member, port int) error {
-	base := fmt.Sprintf("http://%s:%d", mg.host, port)
+	base := mg.baseOf(st, port)
 	last := "no answer yet"
 	for n := 1; ; n++ {
 		ok, why := mg.probeOnce(ctx, base)
@@ -654,7 +662,7 @@ func (mg *Manager) checkOnce(ctx context.Context) {
 	for _, tool := range mg.order {
 		st := mg.members[tool]
 		if st.state == ensemble.StateReady && st.busy == 0 {
-			ps = append(ps, probe{st, fmt.Sprintf("http://%s:%d", mg.host, st.port)})
+			ps = append(ps, probe{st, mg.baseOf(st, st.port)})
 		}
 	}
 	mg.mu.Unlock()
@@ -667,7 +675,9 @@ func (mg *Manager) checkOnce(ctx context.Context) {
 			continue // the engine didn't answer, or it's alive but busy
 		}
 		why := "its container is gone"
-		if state != "" {
+		if mg.external {
+			why = state
+		} else if state != "" {
 			why = "its container " + state
 		}
 		if logs := mg.eng.Logs(ctx, p.st.name, 6); logs != "" {
@@ -724,4 +734,13 @@ func (mg *Manager) mountWeights(m ensemble.Member, spec *RunSpec) error {
 		spec.Env = append(spec.Env, fmt.Sprintf("CTX_SIZE=%d", m.CtxSize))
 	}
 	return nil
+}
+
+// baseOf is where a member answers: its address in the no-socket mode, else
+// the port it's published on, on the model host.
+func (mg *Manager) baseOf(st *member, port int) string {
+	if st.addr != "" {
+		return st.addr
+	}
+	return "http://" + hostPort(mg.host, port)
 }
