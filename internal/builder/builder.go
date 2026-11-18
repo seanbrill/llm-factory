@@ -53,6 +53,12 @@ type Builder struct {
 	// containers (the Caddy proxy) that run on the host daemon.
 	HostDir string
 
+	// PinWeights, when set, asks Hugging Face which commit a weights URL's
+	// ref is at and the file's SHA-256 there, so an ensemble manifest can pin
+	// the weights it names (MountMembers). ok is false for a URL that isn't
+	// a Hugging Face file.
+	PinWeights func(ctx context.Context, url string) (pin WeightsPin, ok bool, err error)
+
 	// Archive, when set, is asked before every weight download: it may fill the
 	// file from the FileFreak archive, and queues what came from Hugging Face
 	// for it (internal/filefreak).
@@ -76,6 +82,11 @@ type Builder struct {
 // build: a problem is a line in log and a download from url as before.
 type WeightArchive interface {
 	Fetch(ctx context.Context, url, dest, label string, log func(string)) (done bool, wantSHA256 string, downloaded func(sha256 string, size int64))
+}
+
+// WeightsPin is a weights file pinned on Hugging Face (see Builder.PinWeights).
+type WeightsPin struct {
+	Repo, Revision, SHA256, URL string
 }
 
 // LogFunc receives one human-readable progress line at a time.

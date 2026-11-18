@@ -44,8 +44,8 @@ step-by-step check of a whole ensemble, see [ENSEMBLE-TEST.md](ENSEMBLE-TEST.md)
 | Real-time voice, live avatar | ⬜ not built (left room for: streaming speech, the Moonshine live endpoint) | — |
 | Video understanding (frame sampling) | ⬜ not built: a video sent to an ensemble isn't watched | §9 |
 | Embedded packaging (every runtime in one image) | ⬜ not built: `package_mode: "embedded"` runs orchestrated | — |
-| Podman as well as Docker | ◑ built, not yet run: the Conductor gets Podman's socket | §11 |
-| Members with mounted weights (model-less runtime) | ◑ built, not yet run | §11, [RUNTIME.md](RUNTIME.md) |
+| Podman as well as Docker | ✅ built, run once on a Mac (Podman, libkrun, Vulkan) | §11 |
+| Members with mounted weights (model-less runtime) | ✅ built, run once | §11, [RUNTIME.md](RUNTIME.md) |
 | The caller's own tools handed back (`finish_reason: "tool_calls"`) | ✅ built | §11 |
 | Members named by registry address | ◑ built, not yet run: the engine pulls a missing image | §11 |
 
@@ -410,9 +410,17 @@ member is rewritten to run from the model-less runtime for its compute
 
 ```json
 {"tool": "chat", "image": "local-llm/runtime:vulkan-v0.9.0-arm64", "compute": "vulkan",
- "weights": {"file": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf", "sha256": "…", "size": 18556682240, "url": "https://huggingface.co/…"},
+ "weights": {"file": "Qwen3.5-9B-Q4_K_M.gguf", "sha256": "…", "size": 5680522464,
+             "repo": "unsloth/Qwen3.5-9B-GGUF", "revision": "<40-hex commit>",
+             "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/<commit>/Qwen3.5-9B-Q4_K_M.gguf"},
  "mmproj": null, "ctx_size": 0}
 ```
+
+`repo` and `revision` pin the file: the commit whose file has this SHA-256,
+and `url` resolves that commit. The factory asks Hugging Face which commit the
+catalog's URL is at now. If the file there has changed since it was
+downloaded, the manifest leaves the revision out, keeps the catalog's URL and
+the build log says so. Download it again to pin it.
 
 The weights are downloaded first if they aren't yet, to be hashed, and the
 hashes are kept in `config/weights-sha256.json`. Speech, image and video members
@@ -454,11 +462,29 @@ finds its members. The engine pulls a member image it doesn't have when the
 member first starts, which makes that first start slower. The factory doesn't
 push: tag and push the member and runtime images to that address yourself.
 
-### Not yet run
+### The first real run (2026-11-18)
 
-None of §11 has run against real models or a real Podman machine yet; the
-tests use fakes. Before an ensemble is published for an app, run that app's
-own checks: a pasted screenshot is described correctly, and a coding task with
-tool calls succeeds. A first ensemble to try: Qwen3 Coder 30B A3B as the brain,
-MiniCPM-V or Gemma 4's vision model as the eyes.
+Run on a Mac (Podman 5, libkrun machine with 18 GB, Vulkan), from the factory's
+API: the ensemble saved with `"weights": "mounted"`, `"engine": "podman"`,
+built, and run with `weights_dir` set to the factory's `models/` folder.
+Brain: Qwen3.5 9B. Eyes: MiniCPM-V 4.7 1B. (Qwen3 Coder 30B A3B, at about
+18.6 GB of weights, doesn't fit that machine beside a vision member.)
 
+- **Podman.** The Conductor got the machine's rootless socket
+  (`/run/user/501/podman/podman.sock`), started both members from
+  `local-llm/runtime:vulkan-v0.9.0-arm64` and reached them through
+  `host.containers.internal`.
+- **Mounted weights.** Each member had the folder mounted read only and
+  `MODEL_PATH` set; each was ready in about 28 s.
+- **A pasted screenshot** of a Go panic (`index out of range [3] with length
+  3`, `main.parsePort`, `main.go:42`) went to the vision member through
+  `look_at_image`. It read the error correctly, and the brain named the
+  function and the line.
+- **The caller's tools.** `read_file` came back as `finish_reason:
+  "tool_calls"`. Given the file, the brain explained the bug and called the
+  caller's `edit_file` with a correct fix (14 s).
+- **Slow eyes.** The first `look_at_image` took 1 min 43 s, the vision member's
+  start included. The projector runs on the CPU under Vulkan
+  (`MMPROJ_NO_OFFLOAD=1`), so a large image is slow to encode. A smaller
+  screenshot, or a GPU-offloaded projector where the driver allows it, would
+  help.

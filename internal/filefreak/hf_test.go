@@ -222,3 +222,66 @@ func TestFileURL(t *testing.T) {
 		t.Errorf("got %s", got)
 	}
 }
+
+func TestPin(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/org/repo/resolve/main/m.gguf" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("X-Repo-Commit", testCommit)
+		w.Header().Set("X-Linked-Etag", `"`+testSHA+`"`)
+		w.Header().Set("X-Linked-Size", "10")
+		w.Header().Set("Location", "https://cdn.example.invalid/blob")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+	hf := &HF{Base: srv.URL, Client: NewHF().Client}
+	p, ok, err := hf.Pin(context.Background(), srv.URL+"/org/repo/resolve/main/m.gguf?download=true")
+	if !ok || err != nil || p.Repo != "org/repo" || p.Revision != testCommit || p.SHA256 != testSHA ||
+		p.URL != srv.URL+"/org/repo/resolve/"+testCommit+"/m.gguf" {
+		t.Fatalf("Pin = %+v %v %v", p, ok, err)
+	}
+	if _, ok, _ := hf.Pin(context.Background(), "https://example.com/m.gguf"); ok {
+		t.Error("a URL that isn't Hugging Face's can't be pinned")
+	}
+}
+
+// A re-upload's license is only as good as its maker's: the base model's
+// declaration must be on the list too.
+func TestMakerVerdict(t *testing.T) {
+	cards := map[string]string{
+		"/api/models/quant/good-GGUF/revision/" + testCommit: `{"cardData":{"license":"apache-2.0","base_model":"maker/good"},"tags":["license:apache-2.0"]}`,
+		"/api/models/quant/bad-GGUF/revision/" + testCommit:  `{"cardData":{"license":"apache-2.0","base_model":["maker/custom"]}}`,
+		"/api/models/maker/good/revision/main":               `{"cardData":{"license":"apache-2.0"}}`,
+		"/api/models/maker/custom/revision/main":             `{"cardData":{"license":"other"}}`,
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, ok := cards[r.URL.Path]
+		if !ok {
+			w.Header().Set("X-Error-Code", "RepoNotFound")
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	hf := &HF{Base: srv.URL, Client: NewHF().Client}
+	ctx := context.Background()
+
+	good, err := hf.Info(ctx, "quant/good-GGUF", testCommit)
+	if err != nil || !reflect.DeepEqual(good.BaseModels, []string{"maker/good"}) {
+		t.Fatalf("base models: %v %v", good.BaseModels, err)
+	}
+	if ok, why, err := hf.MakerVerdict(ctx, good); !ok || err != nil {
+		t.Errorf("an Apache maker: %v %q %v", ok, why, err)
+	}
+	bad, _ := hf.Info(ctx, "quant/bad-GGUF", testCommit)
+	if ok, why, _ := hf.MakerVerdict(ctx, bad); ok || !strings.Contains(why, "maker/custom") || !strings.Contains(why, "other") {
+		t.Errorf("a custom-licensed maker: %v %q", ok, why)
+	}
+	gone := ModelInfo{BaseModels: []string{"maker/missing"}}
+	if ok, why, _ := hf.MakerVerdict(ctx, gone); ok || !strings.Contains(why, "isn't public") {
+		t.Errorf("a missing maker: %v %q", ok, why)
+	}
+}

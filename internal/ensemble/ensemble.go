@@ -118,7 +118,11 @@ type WeightsFile struct {
 	File   string `json:"file"`             // the file's name in WEIGHTS_DIR
 	SHA256 string `json:"sha256,omitempty"` // of the whole file, hex
 	Size   int64  `json:"size,omitempty"`   // bytes
-	URL    string `json:"url,omitempty"`    // where it downloads from (Hugging Face)
+	URL    string `json:"url,omitempty"`    // where it downloads from (Hugging Face, at Revision)
+	// Repo and Revision pin the file on Hugging Face: the repository and the
+	// 40-hex commit whose file has this SHA256 ("" when it couldn't be pinned).
+	Repo     string `json:"repo,omitempty"`
+	Revision string `json:"revision,omitempty"`
 }
 
 var (

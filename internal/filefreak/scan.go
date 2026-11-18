@@ -220,6 +220,15 @@ func (a *Archive) scanLicense(ctx context.Context, repo, commit string) (license
 		return v, fmt.Errorf("read the license: %w", err)
 	} else {
 		v.ok, v.license, v.reason = LicenseVerdict(info)
+		if v.ok {
+			mctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+			ok, why, err := a.hf.MakerVerdict(mctx, info)
+			cancel()
+			if err != nil {
+				return licenseVerdict{}, err
+			}
+			v.ok, v.reason = ok, why
+		}
 	}
 	c.mu.Lock()
 	c.licenses[repo+"@"+commit] = v

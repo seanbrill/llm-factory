@@ -72,7 +72,28 @@ func (b *Builder) weightsFile(ctx context.Context, file, url string, ensure func
 	if err != nil {
 		return nil, err
 	}
-	return &ensemble.WeightsFile{File: path.Base(filepath.ToSlash(file)), SHA256: sum, Size: size, URL: url}, nil
+	w := &ensemble.WeightsFile{File: path.Base(filepath.ToSlash(file)), SHA256: sum, Size: size, URL: url}
+	b.pin(ctx, w, log)
+	return w, nil
+}
+
+// pin names the Hugging Face commit w was downloaded from, when the file
+// there now has w's SHA-256; otherwise it leaves w unpinned and says why.
+func (b *Builder) pin(ctx context.Context, w *ensemble.WeightsFile, log LogFunc) {
+	if b.PinWeights == nil || w.URL == "" {
+		return
+	}
+	p, ok, err := b.PinWeights(ctx, w.URL)
+	switch {
+	case !ok:
+		return
+	case err != nil:
+		log(fmt.Sprintf("Couldn't pin %s on Hugging Face (%v): the manifest names its URL without a revision.", w.File, err))
+	case p.SHA256 != w.SHA256:
+		log(fmt.Sprintf("%s on Hugging Face has changed since it was downloaded (now %.12s…, here %.12s…): the manifest names it without a revision. Download it again to pin it.", w.File, p.SHA256, w.SHA256))
+	default:
+		w.Repo, w.Revision, w.URL = p.Repo, p.Revision, p.URL
+	}
 }
 
 var shaCacheMu sync.Mutex

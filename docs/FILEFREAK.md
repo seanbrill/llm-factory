@@ -111,8 +111,10 @@ Custom licenses are never uploaded: the Llama licenses, the Gemma Terms of Use
 list. The rule follows each repository's own license, not the model family:
 Gemma 3 is under the Gemma Terms and stays out, while Gemma 4 and EmbeddingGemma
 2 are `apache-2.0` and are uploaded. The license is read from the repository's
-model card on Hugging Face (its `license:` field). It goes into the provenance
-record. The repository's LICENSE, NOTICE, COPYING and use-policy files and its
+model card on Hugging Face (its `license:` field). The repositories the model
+card names as its `base_model` (the maker's, for a GGUF) must declare a license
+on the list too, so a re-upload can't declare a license its maker never gave.
+The license goes into the provenance record. The repository's LICENSE, NOTICE, COPYING and use-policy files and its
 README (the model card) are uploaded beside the files, so the license travels
 with them.
 

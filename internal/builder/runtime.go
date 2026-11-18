@@ -88,6 +88,12 @@ func runtimeBuildArgs(ref, compute, llamaRef, arch, platform, engine, work strin
 		"--label", "local-llm.llama_cpp_ref=" + llamaRef,
 		"--label", "local-llm.arch=" + arch,
 		"--label", "local-llm.engine=" + engine,
+		// The base image's OCI labels would otherwise say this is Fedora (MIT).
+		"--label", "org.opencontainers.image.title=llm-factory llama.cpp runtime (" + compute + ")",
+		"--label", "org.opencontainers.image.version=" + llamaRef,
+		"--label", "org.opencontainers.image.licenses=Apache-2.0 AND MIT",
+		"--label", "org.opencontainers.image.vendor=FileFreak LLC",
+		"--label", "org.opencontainers.image.url=",
 	}
 	if platform != "" {
 		args = append(args, "--platform", platform)

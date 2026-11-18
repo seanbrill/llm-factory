@@ -57,7 +57,7 @@ func TestRuntimeBaseStage(t *testing.T) {
 func TestRuntimeBuildArgs(t *testing.T) {
 	got := strings.Join(runtimeBuildArgs("r:t", "cuda", "v0.9.0", "amd64", "linux/amd64", enginePodman, "/w"), " ")
 	for _, want := range []string{"build -t r:t --target runtime-base", "local-llm.arch=amd64", "local-llm.llama_cpp_ref=v0.9.0",
-		"local-llm.compute=cuda", "--platform linux/amd64", "seccomp=unconfined", " /w"} {
+		"local-llm.compute=cuda", "org.opencontainers.image.licenses=Apache-2.0 AND MIT", "--platform linux/amd64", "seccomp=unconfined", " /w"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in %s", want, got)
 		}

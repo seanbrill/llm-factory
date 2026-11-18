@@ -202,6 +202,9 @@ type ModelInfo struct {
 	LicenseName string   `json:"license_name,omitempty"`
 	LicenseLink string   `json:"license_link,omitempty"`
 	Siblings    []string `json:"siblings"`
+	// BaseModels are the repositories the model card says this one is made
+	// from (cardData.base_model): for a GGUF, usually the maker's.
+	BaseModels []string `json:"base_models,omitempty"`
 }
 
 // Info reads a repository's model info at a commit.
@@ -230,6 +233,7 @@ func (h *HF) Info(ctx context.Context, repo, commit string) (ModelInfo, error) {
 			License     json.RawMessage `json:"license"`
 			LicenseName string          `json:"license_name"`
 			LicenseLink string          `json:"license_link"`
+			BaseModel   json.RawMessage `json:"base_model"`
 		} `json:"cardData"`
 		Siblings []struct {
 			Name string `json:"rfilename"`
@@ -273,7 +277,56 @@ func (h *HF) Info(ctx context.Context, repo, commit string) (ModelInfo, error) {
 	for _, s := range raw.Siblings {
 		info.Siblings = append(info.Siblings, s.Name)
 	}
+	var bases []string
+	if json.Unmarshal(raw.CardData.BaseModel, &one) == nil {
+		bases = []string{one}
+	} else {
+		_ = json.Unmarshal(raw.CardData.BaseModel, &bases)
+	}
+	for _, b := range bases {
+		b = strings.TrimSpace(b)
+		org, name, ok := strings.Cut(b, "/")
+		if ok && repoPart.MatchString(org) && repoPart.MatchString(name) && !strings.EqualFold(b, repo) && len(info.BaseModels) < maxBaseModels {
+			info.BaseModels = append(info.BaseModels, b)
+		}
+	}
 	return info, nil
+}
+
+// maxBaseModels caps the makers' repositories read for one model.
+const maxBaseModels = 4
+
+// MakerVerdict applies the license rule to the repositories a model is made
+// from (info.BaseModels), so a re-upload can't declare a license its maker
+// never gave: each must be public and declare only licenses on
+// Redistributable. Gating isn't checked there; only the license. err means
+// Hugging Face couldn't be asked, so try again later.
+func (h *HF) MakerVerdict(ctx context.Context, info ModelInfo) (ok bool, reason string, err error) {
+	allowed := map[string]bool{}
+	for _, l := range Redistributable {
+		allowed[l] = true
+	}
+	for _, base := range info.BaseModels {
+		bi, err := h.Info(ctx, base, "main")
+		if errors.Is(err, ErrGone) {
+			return false, fmt.Sprintf("the model it's made from (%s) isn't public on Hugging Face, so its license can't be checked", base), nil
+		}
+		if err != nil {
+			return false, "", fmt.Errorf("read the license of %s: %w", base, err)
+		}
+		if bi.Private {
+			return false, fmt.Sprintf("the model it's made from (%s) is private", base), nil
+		}
+		if len(bi.Licenses) == 0 {
+			return false, fmt.Sprintf("the model it's made from (%s) declares no license", base), nil
+		}
+		for _, l := range bi.Licenses {
+			if !allowed[l] {
+				return false, fmt.Sprintf("the model it's made from (%s) is under %s, which the archive doesn't redistribute yet", base, l), nil
+			}
+		}
+	}
+	return true, "", nil
 }
 
 // Redistributable are the licenses the archive copies files under: each lets
@@ -389,4 +442,32 @@ func (h *HF) Fetch(ctx context.Context, target string, w io.Writer, max int64) e
 		return nil
 	}
 	return errors.New("Hugging Face redirected too many times")
+}
+
+// Pinned is a Hugging Face file at the commit its ref points to now.
+type Pinned struct {
+	Repo     string // "org/name"
+	Revision string // the 40-hex commit
+	Path     string // the file's path in the repository
+	SHA256   string // "" when Hugging Face publishes none
+	URL      string // the file at that commit (/resolve/<revision>/...)
+}
+
+var commitRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// Pin asks Hugging Face which commit rawURL's ref is at, and the file's
+// SHA-256 there. ok is false for a URL that isn't a Hugging Face model file.
+func (h *HF) Pin(ctx context.Context, rawURL string) (p Pinned, ok bool, err error) {
+	f, ok := ParseHFURL(rawURL, h.Base)
+	if !ok {
+		return Pinned{}, false, nil
+	}
+	off, err := h.Head(ctx, h.FileURL(f.Repo, f.Ref, f.Path))
+	if err != nil {
+		return Pinned{}, true, err
+	}
+	if !commitRe.MatchString(off.Commit) {
+		return Pinned{}, true, fmt.Errorf("Hugging Face gave no commit for %s", f.Path)
+	}
+	return Pinned{Repo: f.Repo, Revision: off.Commit, Path: f.Path, SHA256: off.SHA256, URL: h.FileURL(f.Repo, off.Commit, f.Path)}, true, nil
 }

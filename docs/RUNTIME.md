@@ -66,6 +66,13 @@ use neither.
 - **Every other setting.** `CTX_SIZE`, `NGL`, `PARALLEL`, `THREADS` and the
   tuning variables (docs/TUNING.md) work as they do on a baked image.
 
+First run (2026-11-18, Podman on a Mac, Vulkan): `local-llm/runtime:vulkan-v0.9.0-arm64`
+(625 MB) served Qwen3.5 9B from a mounted folder, ready in about 24 s, at 32
+tokens/s. A request with `"harness": false` answered, and a request with
+`tools` came back with `finish_reason: "tool_calls"`. The `MESA: error:
+Opening /dev/dri/card0 failed` line in its log is harmless: Venus uses the
+render node.
+
 ## Building for another architecture (amd64)
 
 An engine builds for its own architecture: arm64 on an Apple-silicon Mac,

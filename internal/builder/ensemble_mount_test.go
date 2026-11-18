@@ -17,6 +17,16 @@ import (
 func TestMountMembers(t *testing.T) {
 	dir := t.TempDir()
 	b := &Builder{BaseDir: filepath.Join("..", ".."), ModelsDir: dir, ConfigDir: dir}
+	qwenSum := sha256.Sum256([]byte("GGUF weights"))
+	b.PinWeights = func(_ context.Context, url string) (WeightsPin, bool, error) {
+		switch url {
+		case "https://hf/qwen.gguf": // unchanged since the download
+			return WeightsPin{Repo: "org/qwen", Revision: strings.Repeat("a", 40), SHA256: hex.EncodeToString(qwenSum[:]), URL: "https://hf/pinned/qwen.gguf"}, true, nil
+		case "https://hf/mmproj": // moved on since
+			return WeightsPin{Repo: "org/gemma", Revision: strings.Repeat("b", 40), SHA256: "other"}, true, nil
+		}
+		return WeightsPin{}, false, nil
+	}
 	weights := []byte("GGUF weights")
 	os.WriteFile(filepath.Join(dir, "qwen.gguf"), weights, 0o644)
 	os.WriteFile(filepath.Join(dir, "gemma.gguf"), []byte("GGUF gemma"), 0o644)
@@ -38,7 +48,8 @@ func TestMountMembers(t *testing.T) {
 	sum := sha256.Sum256(weights)
 	chat, vision, stt := e.Members[0], e.Members[1], e.Members[2]
 	if chat.Weights == nil || chat.Weights.File != "qwen.gguf" || chat.Weights.SHA256 != hex.EncodeToString(sum[:]) ||
-		chat.Weights.Size != int64(len(weights)) || chat.Weights.URL != "https://hf/qwen.gguf" || chat.MMProj != nil {
+		chat.Weights.Size != int64(len(weights)) || chat.Weights.URL != "https://hf/pinned/qwen.gguf" || chat.MMProj != nil ||
+		chat.Weights.Repo != "org/qwen" || chat.Weights.Revision != strings.Repeat("a", 40) {
 		t.Errorf("chat weights = %+v %+v", chat.Weights, chat.MMProj)
 	}
 	if !strings.HasPrefix(chat.Image, "local-llm/runtime:vulkan-") || !strings.HasSuffix(chat.Image, "-"+goruntime.GOARCH) || chat.Compute != "vulkan" {
@@ -46,6 +57,9 @@ func TestMountMembers(t *testing.T) {
 	}
 	if !strings.HasPrefix(vision.Image, "local-llm/runtime:cpu-") || vision.MMProj == nil || vision.MMProj.File != "mmproj-gemma.gguf" || vision.MMProj.SHA256 == "" {
 		t.Errorf("vision = %s %+v", vision.Image, vision.MMProj)
+	}
+	if vision.MMProj != nil && (vision.MMProj.Revision != "" || vision.MMProj.URL != "https://hf/mmproj") {
+		t.Errorf("a file that changed on Hugging Face stays unpinned: %+v", vision.MMProj)
 	}
 	if stt.Weights != nil || stt.Image != "local-llm/whisper:latest" {
 		t.Errorf("a whisper member keeps its image: %+v", stt)

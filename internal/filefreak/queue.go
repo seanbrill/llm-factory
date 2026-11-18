@@ -371,6 +371,11 @@ func (a *Archive) archive(ctx context.Context, key string, j Job) outcome {
 	if !ok {
 		return outcome{state: StateSkipped, reason: "Not archived: " + why + "."}
 	}
+	if ok, why, err := a.hf.MakerVerdict(ctx, info); err != nil {
+		return outcome{reason: "couldn't read the license from Hugging Face: " + err.Error(), retry: true}
+	} else if !ok {
+		return outcome{state: StateSkipped, license: license, reason: "Not archived: " + why + "."}
+	}
 
 	folder, err := a.keyFolder(ctx, key)
 	if err != nil {

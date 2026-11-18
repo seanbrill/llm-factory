@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/seanbrill/local-llm/internal/builder"
 	"github.com/seanbrill/local-llm/internal/filefreak"
 	"github.com/seanbrill/local-llm/internal/version"
 )
@@ -23,6 +24,12 @@ import (
 // before every weight download. A config that can't be read leaves the
 // archive off (downloads go to Hugging Face as before) and the routes say why.
 func (s *Server) openArchive() {
+	// Ensemble manifests pin their mounted weights to a commit, archive or not.
+	hf := filefreak.NewHF()
+	s.b.PinWeights = func(ctx context.Context, url string) (builder.WeightsPin, bool, error) {
+		p, ok, err := hf.Pin(ctx, url)
+		return builder.WeightsPin{Repo: p.Repo, Revision: p.Revision, SHA256: p.SHA256, URL: p.URL}, ok, err
+	}
 	arc, err := filefreak.Open(filefreak.Options{
 		ConfigDir:  s.b.ConfigDir,
 		StagingDir: filepath.Join(s.b.ModelsDir, ".filefreak"),
