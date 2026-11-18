@@ -91,6 +91,7 @@ func main() {
 	}
 	eng := cliEngine{bin: env("ENGINE", "docker")}
 	g := newGate(mani, eng, harness, log.Printf)
+	g.mg.weightsDir = strings.TrimSpace(os.Getenv("WEIGHTS_DIR"))
 	g.persona.envPrompt = strings.TrimSpace(os.Getenv("SYSTEM_PROMPT"))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)

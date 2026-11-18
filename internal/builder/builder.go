@@ -1019,8 +1019,10 @@ type RunOptions struct {
 	Route     string  // local URL alias (stored as a label for the proxy)
 	Autostart bool    // adds --restart unless-stopped (starts with Docker Desktop)
 	// Orchestrator mounts the host docker socket + host.docker.internal so an
-	// Ensemble's Conductor can start/stop sibling specialist containers.
+	// Ensemble's Conductor can start/stop sibling specialist containers (with
+	// Podman: its socket and host.containers.internal; see orchestratorArgs).
 	Orchestrator bool
+	engineSocket string // Podman's API socket for the Conductor, found by Run
 	// Optional init-prompt override applied at run time (no rebuild). llmgate
 	// prefers the SYSTEM_PROMPT env over the baked file, so setting these swaps a
 	// model's behavior for a ~10s container restart instead of a recompile.
@@ -1064,6 +1066,9 @@ func (b *Builder) Run(ctx context.Context, o RunOptions) (string, error) {
 	group := -1
 	if o.Compute == "vulkan" {
 		group = vulkanGroup(b.savedGPUCheck(engine))
+	}
+	if o.Orchestrator && engine == enginePodman {
+		o.engineSocket = podmanSocket(ctx)
 	}
 	out, err := engineCmd(ctx, engine, runArgs(engine, name, o, group)...).CombinedOutput()
 	if err != nil {
@@ -1134,8 +1139,7 @@ func runArgs(engine, name string, o RunOptions, group int) []string {
 	if o.Orchestrator {
 		// An Ensemble's Conductor manages sibling specialist containers via the host
 		// engine and reaches them on the host, so mount the socket + host gateway.
-		args = append(args, "-v", "/var/run/docker.sock:/var/run/docker.sock",
-			"--add-host", "host.docker.internal:host-gateway")
+		args = append(args, orchestratorArgs(engine, o.engineSocket)...)
 	}
 	if o.Autostart {
 		args = append(args, "--restart", "unless-stopped")

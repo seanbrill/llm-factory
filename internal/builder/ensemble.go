@@ -43,6 +43,11 @@ func EnsembleManifest(e ensemble.Ensemble) (ensemble.Manifest, error) {
 		mani.Members = append(mani.Members, ensemble.Member{Tool: ensemble.ToolConductor, Modality: "text",
 			Image: e.Conductor, Runtime: "cpp", VRAMGB: 4})
 	}
+	// Published by registry address, so the ensemble finds its members on
+	// another computer (the engine pulls an image it doesn't have).
+	for i := range mani.Members {
+		mani.Members[i].Image = ensemble.AtRegistry(e.Registry, mani.Members[i].Image)
+	}
 	return mani, nil
 }
 
@@ -160,4 +165,40 @@ func (b *Builder) EnsembleOfContainer(ctx context.Context, engine, id string) st
 		return ""
 	}
 	return v
+}
+
+// orchestratorArgs are the run flags an Ensemble's Conductor needs to start
+// its members through the engine and reach their published ports. Docker:
+// its socket and host.docker.internal. Podman: its own Docker-compatible
+// socket inside the machine (socket, from `podman info`), SELinux labelling
+// off so the Conductor may use it, and the members reached on
+// host.containers.internal, the name Podman gives the host.
+func orchestratorArgs(engine, socket string) []string {
+	if engine != enginePodman {
+		return []string{"-v", "/var/run/docker.sock:/var/run/docker.sock", "--add-host", "host.docker.internal:host-gateway"}
+	}
+	if socket == "" {
+		socket = defaultPodmanSocket
+	}
+	return []string{"-v", socket + ":/var/run/docker.sock", "--security-opt", "label=disable",
+		"-e", "MODEL_HOST=host.containers.internal"}
+}
+
+// defaultPodmanSocket is a rootful Podman machine's API socket.
+const defaultPodmanSocket = "/run/podman/podman.sock"
+
+// podmanSocket is the Podman API socket's path where containers run (inside
+// the machine on a Mac or Windows), or "" when Podman can't say.
+func podmanSocket(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := engineCmd(ctx, enginePodman, "info", "--format", "{{.Host.RemoteSocket.Path}}").Output()
+	if err != nil {
+		return ""
+	}
+	p := strings.TrimPrefix(strings.TrimSpace(string(out)), "unix://")
+	if !strings.HasPrefix(p, "/") {
+		return ""
+	}
+	return p
 }

@@ -64,3 +64,4 @@
 /config/prompt-results.json
 /config/.prompts.json-*
 /config/.prompt-results.json-*
+/config/weights-sha256.json

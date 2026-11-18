@@ -619,3 +619,44 @@ func TestGetOnPostEndpoints(t *testing.T) {
 		}
 	}
 }
+
+// A coding agent (FileFreak's Fred) sends its own tools with a pasted image:
+// the Conductor runs look_at_image itself and hands the caller's tool calls
+// back, as finish_reason "tool_calls", for the caller to run.
+func TestCallerToolsComeBackWithImage(t *testing.T) {
+	te := newTestEns(t)
+	te.brain.turns = []turn{
+		{calls: [][2]string{{"look_at_image", `{"question":"What error is shown?","image":"1"}`}}},
+		{calls: [][2]string{{"read_file", `{"path":"main.go"}`}}},
+	}
+	img := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("PNG"))
+	readFile := map[string]any{"type": "function", "function": map[string]any{"name": "read_file",
+		"parameters": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}}}}
+	code, out := te.chat(map[string]any{"tools": []any{readFile}, "messages": []any{map[string]any{"role": "user", "content": []any{
+		map[string]any{"type": "text", "text": "fix the error in this screenshot"},
+		map[string]any{"type": "image_url", "image_url": map[string]any{"url": img}},
+	}}}})
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	choice := out["choices"].([]any)[0].(map[string]any)
+	calls, _ := json.Marshal(message(t, out)["tool_calls"])
+	if choice["finish_reason"] != "tool_calls" || !strings.Contains(string(calls), `"read_file"`) || strings.Contains(string(calls), "look_at_image") {
+		t.Fatalf("the caller's call should come back alone: %v %s", choice["finish_reason"], calls)
+	}
+	if n := len(te.vision.bodies(t)); n != 1 {
+		t.Errorf("the vision member was asked %d times, want 1", n)
+	}
+	var names []string
+	for _, tl := range te.brain.bodies(t)[0]["tools"].([]any) {
+		names = append(names, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
+	}
+	if got := strings.Join(names, ","); !strings.Contains(got, "read_file") || !strings.Contains(got, "look_at_image") {
+		t.Errorf("the brain should be offered both: %s", got)
+	}
+	for _, n := range names {
+		if n == "write_file" || n == "run_command" || n == "fetch_url" {
+			t.Errorf("a built-in tool is on: %s", n)
+		}
+	}
+}

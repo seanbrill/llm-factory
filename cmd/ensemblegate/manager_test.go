@@ -361,3 +361,37 @@ func TestMissingMember(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A member with mounted weights runs its runtime image with WEIGHTS_DIR
+// mounted read only and MODEL_PATH set to its file; without WEIGHTS_DIR it
+// says what's missing.
+func TestMountedWeightsMember(t *testing.T) {
+	mounted := func(m *ensemble.Manifest, _ *testEns) {
+		m.Members[1].Weights = &ensemble.WeightsFile{File: "gemma-vision.gguf", SHA256: "ab"}
+		m.Members[1].MMProj = &ensemble.WeightsFile{File: "mmproj-gemma.gguf"}
+		m.Members[1].CtxSize = 16384
+	}
+	te := newTestEns(t, mounted)
+	if _, err := te.g.mg.Acquire(context.Background(), ensemble.ToolSeeImage, nil); err == nil || !strings.Contains(err.Error(), "WEIGHTS_DIR") {
+		t.Fatalf("without WEIGHTS_DIR: %v", err)
+	}
+
+	te = newTestEns(t, mounted)
+	te.g.mg.weightsDir = "/Users/me/models"
+	l, err := te.g.mg.Acquire(context.Background(), ensemble.ToolSeeImage, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Release()
+	spec := te.eng.runs[len(te.eng.runs)-1]
+	args := strings.Join(runArgs(spec), " ")
+	for _, want := range []string{"-v /Users/me/models:/models:ro", "-e MODEL_PATH=/models/gemma-vision.gguf",
+		"-e MMPROJ_PATH=/models/mmproj-gemma.gguf", "-e CTX_SIZE=16384", "local-llm/vision"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("missing %q in %s", want, args)
+		}
+	}
+	if !strings.HasSuffix(args, " local-llm/vision") {
+		t.Errorf("the image should come last: %s", args)
+	}
+}

@@ -25,9 +25,12 @@ type Manager struct {
 	budget  float64
 	host    string // where members' published ports are reached
 	compute string // fallback compute for members without their own
-	eng     Engine
-	members map[string]*member
-	order   []string // manifest order
+	// weightsDir is the folder (as the engine sees it) holding the weights
+	// of members that mount them (WEIGHTS_DIR).
+	weightsDir string
+	eng        Engine
+	members    map[string]*member
+	order      []string // manifest order
 
 	probe        *http.Client
 	startTimeout time.Duration // a start that isn't healthy by then fails
@@ -368,6 +371,9 @@ func (mg *Manager) startContainer(ctx context.Context, st *member) (int, error) 
 		Name: st.name, Image: st.m.Image, Port: st.m.Port, GPU: mg.gpuFor(st.m),
 		Labels: map[string]string{ensemble.LabelMember: mg.ensID, ensemble.LabelTool: st.m.Tool},
 	}
+	if err := mg.mountWeights(st.m, &spec); err != nil {
+		return 0, err
+	}
 	mg.logf("starting %s: %s", toolText(st.m.Tool), st.m.Image)
 	if err := mg.eng.Run(ctx, spec); err != nil {
 		return 0, fmt.Errorf("the engine couldn't start %s: %v", st.m.Image, err)
@@ -695,4 +701,27 @@ func (mg *Manager) Status() ([]ensemble.MemberStatus, float64) {
 		out = append(out, ms)
 	}
 	return out, mg.usedLocked(nil)
+}
+
+// mountWeights adds a member's mounted weights to its run: WEIGHTS_DIR read
+// only at /models, MODEL_PATH (and MMPROJ_PATH, CTX_SIZE) pointing in it.
+// The member's image is a model-less runtime (docs/RUNTIME.md).
+func (mg *Manager) mountWeights(m ensemble.Member, spec *RunSpec) error {
+	if m.Weights == nil {
+		return nil
+	}
+	if mg.weightsDir == "" {
+		return fmt.Errorf("the %s member mounts its weights (%s): start the ensemble with WEIGHTS_DIR set to the folder that holds them", toolText(m.Tool), m.Weights.File)
+	}
+	spec.Mounts = append(spec.Mounts, mg.weightsDir+":/models:ro")
+	spec.Env = append(spec.Env, "MODEL_PATH=/models/"+m.Weights.File)
+	if m.MMProj != nil {
+		spec.Env = append(spec.Env, "MMPROJ_PATH=/models/"+m.MMProj.File)
+	} else {
+		spec.Env = append(spec.Env, "MMPROJ_PATH=")
+	}
+	if m.CtxSize > 0 {
+		spec.Env = append(spec.Env, fmt.Sprintf("CTX_SIZE=%d", m.CtxSize))
+	}
+	return nil
 }

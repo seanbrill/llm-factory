@@ -101,7 +101,49 @@ type Member struct {
 	CloneOnly            bool `json:"clone_only,omitempty"`
 	// Family is the audio.cpp model family, for speech members (informational).
 	Family string `json:"family,omitempty"`
+
+	// Weights, when set, are mounted rather than baked: Image is a model-less
+	// runtime (docs/RUNTIME.md) and the Conductor mounts the folder WEIGHTS_DIR
+	// names read only at /models, with MODEL_PATH set to this file. MMProj is
+	// the vision projector beside it, CtxSize the member's context (0: the
+	// runtime's default). An app that downloads the weights checks them by
+	// SHA256 first.
+	Weights *WeightsFile `json:"weights,omitempty"`
+	MMProj  *WeightsFile `json:"mmproj,omitempty"`
+	CtxSize int          `json:"ctx_size,omitempty"`
 }
+
+// WeightsFile is one mounted weights file of a member.
+type WeightsFile struct {
+	File   string `json:"file"`             // the file's name in WEIGHTS_DIR
+	SHA256 string `json:"sha256,omitempty"` // of the whole file, hex
+	Size   int64  `json:"size,omitempty"`   // bytes
+	URL    string `json:"url,omitempty"`    // where it downloads from (Hugging Face)
+}
+
+var (
+	weightsNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+	registryRe    = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?(/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*$`)
+)
+
+// AtRegistry is the address of a local image ref in registry: the ref's last
+// path part, under registry ("local-llm/runtime:cuda" in "ghcr.io/org" is
+// "ghcr.io/org/runtime:cuda"). An empty registry leaves the ref as it is.
+func AtRegistry(registry, ref string) string {
+	if registry == "" || ref == "" {
+		return ref
+	}
+	if i := strings.LastIndexByte(ref, '/'); i >= 0 {
+		ref = ref[i+1:]
+	}
+	return registry + "/" + ref
+}
+
+// Weights modes of an Ensemble.
+const (
+	WeightsBaked   = "baked"   // members run from images with the model inside (the default)
+	WeightsMounted = "mounted" // llama.cpp members run from a model-less runtime with the weights mounted
+)
 
 // Routing modes.
 const (
@@ -160,10 +202,21 @@ type Ensemble struct {
 	Routing      string   `json:"routing"`           // agent | heuristic | tool-calling
 	Conductor    string   `json:"conductor"`         // image ref of the small router model (tool-calling only)
 	VRAMBudgetGB float64  `json:"vram_budget_gb"`    // memory budget the members stay under together
-	Engine       string   `json:"engine"`            // docker (members are started with Docker)
+	Engine       string   `json:"engine"`            // docker | podman: the engine the Conductor starts members with
 	Compute      string   `json:"compute"`           // fallback compute for members without their own
 	Persona      string   `json:"persona,omitempty"` // persona id: its prompt and voice apply
 	Members      []Member `json:"members"`
+	// Weights is "mounted" for llama.cpp members that run from a model-less
+	// runtime with their weights mounted, "" or "baked" for images with the
+	// model inside. Members of other runtimes (speech, image) stay baked.
+	Weights string `json:"weights,omitempty"`
+	// Registry, when set, is where members' images are pulled from on another
+	// computer (e.g. "ghcr.io/org"): the manifest names each member image
+	// <registry>/<name>:<tag>, and the engine pulls one that isn't there.
+	Registry string `json:"registry,omitempty"`
+	// Platform is the architecture mounted members' runtimes are built for
+	// ("" this computer's, "linux/amd64", "linux/arm64").
+	Platform string `json:"platform,omitempty"`
 	// Harness turns on built-in agent tools for the brain (agent routing):
 	// web_search, fetch_url, files, skills. nil: member tools only.
 	Harness *agent.Config `json:"harness,omitempty"`
@@ -210,6 +263,11 @@ func (e *Ensemble) Normalize() {
 	if e.Engine == "" {
 		e.Engine = "docker"
 	}
+	if e.Weights != WeightsMounted {
+		e.Weights = ""
+	}
+	e.Registry = strings.TrimRight(strings.TrimSpace(e.Registry), "/")
+	e.Platform = strings.TrimSpace(e.Platform)
 	e.Persona = strings.TrimSpace(e.Persona)
 	if e.Members == nil {
 		e.Members = []Member{}
@@ -256,6 +314,17 @@ func (e Ensemble) Validate() error {
 			return fmt.Errorf("two members are set for %s: pick one", m.Tool)
 		}
 		seen[m.Tool] = true
+		for _, w := range []*WeightsFile{m.Weights, m.MMProj} {
+			if w != nil && !weightsNameRe.MatchString(w.File) {
+				return fmt.Errorf("the %s member's weights %q: use a plain file name (WEIGHTS_DIR holds it)", m.Tool, w.File)
+			}
+		}
+		if m.MMProj != nil && m.Weights == nil {
+			return fmt.Errorf("the %s member mounts a projector without its model", m.Tool)
+		}
+	}
+	if e.Registry != "" && !registryRe.MatchString(e.Registry) {
+		return fmt.Errorf("the registry %q isn't an image address like ghcr.io/org", e.Registry)
 	}
 	if len(e.Members) == 0 {
 		return errors.New("pick at least one member")

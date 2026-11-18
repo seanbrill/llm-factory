@@ -36,6 +36,10 @@ type RunSpec struct {
 	Labels map[string]string
 	Port   int    // host port to publish 8080 on; 0 = any free one
 	GPU    string // "cuda" (--gpus all) | "vulkan" (--device /dev/dri) | ""
+	// Mounts are -v host:container[:ro] binds (a member's mounted weights),
+	// Env KEY=VALUE variables.
+	Mounts []string
+	Env    []string
 }
 
 // Container is a row from List.
@@ -85,6 +89,12 @@ func runArgs(spec RunSpec) []string {
 		args = append(args, "--gpus", "all")
 	case "vulkan":
 		args = append(args, "--device", "/dev/dri")
+	}
+	for _, m := range spec.Mounts {
+		args = append(args, "-v", m)
+	}
+	for _, e := range spec.Env {
+		args = append(args, "-e", e)
 	}
 	return append(args, spec.Image)
 }

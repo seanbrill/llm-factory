@@ -165,3 +165,32 @@ func TestStdlibOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestMountedAndRegistry(t *testing.T) {
+	if got := AtRegistry("ghcr.io/org", "local-llm/runtime:cuda-v1-amd64"); got != "ghcr.io/org/runtime:cuda-v1-amd64" {
+		t.Errorf("AtRegistry = %s", got)
+	}
+	if got := AtRegistry("", "local-llm/x:1"); got != "local-llm/x:1" {
+		t.Errorf("no registry = %s", got)
+	}
+	base := func() Ensemble {
+		return Ensemble{Name: "E", Members: []Member{{Tool: ToolChat, Image: "r:1", Weights: &WeightsFile{File: "m.gguf"}}}}
+	}
+	e := base()
+	e.Normalize()
+	if err := e.Validate(); err != nil {
+		t.Errorf("valid: %v", err)
+	}
+	for name, change := range map[string]func(*Ensemble){
+		"a path as the file":    func(e *Ensemble) { e.Members[0].Weights.File = "../etc/passwd" },
+		"a projector, no model": func(e *Ensemble) { e.Members[0].Weights = nil; e.Members[0].MMProj = &WeightsFile{File: "p.gguf"} },
+		"a bad registry":        func(e *Ensemble) { e.Registry = "Not A Registry" },
+	} {
+		e := base()
+		change(&e)
+		e.Normalize()
+		if e.Validate() == nil {
+			t.Errorf("%s should be refused", name)
+		}
+	}
+}

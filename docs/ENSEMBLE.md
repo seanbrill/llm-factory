@@ -44,6 +44,10 @@ step-by-step check of a whole ensemble, see [ENSEMBLE-TEST.md](ENSEMBLE-TEST.md)
 | Real-time voice, live avatar | ⬜ not built (left room for: streaming speech, the Moonshine live endpoint) | — |
 | Video understanding (frame sampling) | ⬜ not built: a video sent to an ensemble isn't watched | §9 |
 | Embedded packaging (every runtime in one image) | ⬜ not built: `package_mode: "embedded"` runs orchestrated | — |
+| Podman as well as Docker | ◑ built, not yet run: the Conductor gets Podman's socket | §11 |
+| Members with mounted weights (model-less runtime) | ◑ built, not yet run | §11, [RUNTIME.md](RUNTIME.md) |
+| The caller's own tools handed back (`finish_reason: "tool_calls"`) | ✅ built | §11 |
+| Members named by registry address | ◑ built, not yet run: the engine pulls a missing image | §11 |
 
 Nothing above has been run against real models from this branch's tests:
 every member type is faked with an HTTP test server, and the member lifecycle
@@ -374,3 +378,87 @@ curl -s localhost:8799/v1/audio/transcriptions -H "Authorization: Bearer $KEY" \
 | `internal/server/ensembles.go`, `voices.go`, `personas.go` | the factory API |
 | `ui/src/pages/Ensembles.svelte`, `ui/src/components/ensembles/` | the Ensembles page |
 | `ui/src/components/personas/VoiceEditor.svelte` | voice picking and clip recording |
+
+---
+
+## 11. Ensembles for an app's own agent
+
+An app that runs its own coding agent (FileFreak's Fred) can use an ensemble
+as its model: a coding model as the brain, and a vision model it asks through
+`look_at_image`, so people can paste screenshots.
+
+### The caller's tools
+
+Send `/v1/chat/completions` with the app's own `tools` (read, edit, shell,
+MCP), and **without** `"harness": false`: that turns off the brain's loop, and
+`look_at_image` with it. The Conductor runs only its member tools
+(`look_at_image`, `generate_image`, `speak`, …). It hands every call to one of
+the caller's tools back, as `finish_reason: "tool_calls"`, for the app to run
+and send back as a `tool` message. Build the ensemble without a `harness`, so
+no built-in file or web tools are on (the shell is never on in an ensemble).
+Images arrive as `image_url` content parts with a `data:` URI. The brain sees
+"[image 1 attached: call look_at_image to see it]" and the vision member gets
+the image. `TestCallerToolsComeBackWithImage` covers this.
+
+### Members with mounted weights
+
+Save the ensemble with `"weights": "mounted"` (and `"platform"`, such as
+`"linux/amd64"`, for another architecture). When it's built, each llama.cpp
+member is rewritten to run from the model-less runtime for its compute
+(`local-llm/runtime:<compute>-<llama.cpp ref>-<arch>`, see
+[RUNTIME.md](RUNTIME.md)), and the manifest names its weights:
+
+```json
+{"tool": "chat", "image": "local-llm/runtime:vulkan-v0.9.0-arm64", "compute": "vulkan",
+ "weights": {"file": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf", "sha256": "…", "size": 18556682240, "url": "https://huggingface.co/…"},
+ "mmproj": null, "ctx_size": 0}
+```
+
+The weights are downloaded first if they aren't yet, to be hashed, and the
+hashes are kept in `config/weights-sha256.json`. Speech, image and video members
+keep their baked images. Build the runtimes too (`POST /api/runtimes/build`).
+
+To run it, put every member's weights in one folder and start the Conductor
+with `WEIGHTS_DIR` naming that folder as the engine sees it. That's
+`"weights_dir"` on `POST /api/ensembles/run`, or `-e WEIGHTS_DIR=…` on a
+`docker run` of your own. The Conductor starts each such member with the folder
+mounted read only at `/models`, `MODEL_PATH=/models/<file>`, `MMPROJ_PATH` for
+a projector and `CTX_SIZE` when the member sets one. A member whose weights
+are mounted refuses to start without `WEIGHTS_DIR`, and says so.
+
+### Podman
+
+With `"engine": "podman"`, the factory runs the Conductor with Podman's API
+socket from inside the machine (`podman info`, `Host.RemoteSocket.Path`)
+mounted at `/var/run/docker.sock`. It also passes `--security-opt
+label=disable`, so SELinux lets the Conductor use the socket, and sets
+`MODEL_HOST=host.containers.internal`. The Conductor's docker CLI drives
+Podman's Docker-compatible API. Vulkan members get `--device /dev/dri`, CUDA
+members `--gpus all`. Under Podman, CUDA needs the NVIDIA Container Toolkit's
+CDI setup, which Podman maps `--gpus` to.
+
+To run the Conductor yourself under Podman:
+
+```
+podman run -d -p 127.0.0.1:8200:8080 \
+  -v /run/podman/podman.sock:/var/run/docker.sock --security-opt label=disable \
+  -e MODEL_HOST=host.containers.internal -e WEIGHTS_DIR=/Users/me/fred-weights \
+  local-llm/ens-fred:latest
+```
+
+### Registry addresses
+
+Set `"registry"` (such as `"ghcr.io/org"`) and the manifest names each member
+`<registry>/<image name>:<tag>`, so an ensemble pulled on another computer
+finds its members. The engine pulls a member image it doesn't have when the
+member first starts, which makes that first start slower. The factory doesn't
+push: tag and push the member and runtime images to that address yourself.
+
+### Not yet run
+
+None of §11 has run against real models or a real Podman machine yet; the
+tests use fakes. Before an ensemble is published for an app, run that app's
+own checks: a pasted screenshot is described correctly, and a coding task with
+tool calls succeeds. A first ensemble to try: Qwen3 Coder 30B A3B as the brain,
+MiniCPM-V or Gemma 4's vision model as the eyes.
+

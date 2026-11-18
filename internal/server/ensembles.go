@@ -17,6 +17,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -241,6 +242,11 @@ func (s *Server) handleEnsembleBuild(w http.ResponseWriter, r *http.Request) {
 		kind: "ensemble", lane: engine, ref: imageName + ":" + tag, name: e.Name, eta: 90,
 		cfg: buildConfig{ImageName: imageName, Tag: tag, Engine: engine, Compute: e.Compute},
 		run: func(ctx context.Context, log builder.LogFunc) error {
+			e := e
+			e.Members = append([]ensemble.Member(nil), e.Members...)
+			if err := s.b.MountMembers(ctx, &e, s.cat.Get, log); err != nil {
+				return err
+			}
 			_, err := s.b.BuildEnsemble(ctx, e, imageName, tag, engine, true, log)
 			return err
 		},
@@ -559,6 +565,9 @@ func (s *Server) handleEnsembleRun(w http.ResponseWriter, r *http.Request) {
 		Port int    `json:"port"`
 		// MCP names registered MCP servers the brain gets (see mcp.go).
 		MCP []string `json:"mcp"`
+		// WeightsDir is the folder holding the weights of members that mount
+		// them (an ensemble built with weights "mounted"), as the engine sees it.
+		WeightsDir string `json:"weights_dir"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		errorJSON(w, http.StatusBadRequest, err.Error())
@@ -593,7 +602,15 @@ func (s *Server) handleEnsembleRun(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	id, err := s.b.Run(r.Context(), builder.RunOptions{Ref: ref, HostPort: port, Engine: engine, Compute: compute, Orchestrator: true, Harness: runHarness})
+	var env []string
+	if wd := strings.TrimSpace(req.WeightsDir); wd != "" {
+		if !filepath.IsAbs(wd) || strings.ContainsAny(wd, ":\n") {
+			errorJSON(w, http.StatusBadRequest, "weights_dir must be an absolute folder path")
+			return
+		}
+		env = append(env, "WEIGHTS_DIR="+wd)
+	}
+	id, err := s.b.Run(r.Context(), builder.RunOptions{Ref: ref, HostPort: port, Engine: engine, Compute: compute, Orchestrator: true, Harness: runHarness, Env: env})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, engineErrPayload(err))
 		return
