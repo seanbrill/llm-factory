@@ -113,6 +113,16 @@ func (b *Builder) BuildEnsemble(ctx context.Context, e ensemble.Ensemble, imageN
 		"--label", "local-llm.compute=" + mani.Compute,
 		"--label", "local-llm.engine=" + eng,
 	}
+	// The Conductor's architecture: an amd64 ensemble built on an arm64 Mac
+	// compiles under emulation (docs/RUNTIME.md).
+	arch, err := PlatformArch(mani.Platform)
+	if err != nil {
+		return "", err
+	}
+	args = append(args, "--label", "local-llm.arch="+arch)
+	if mani.Platform != "" {
+		args = append(args, "--platform", mani.Platform)
+	}
 	if eng == enginePodman {
 		args = append(args, "--security-opt", "seccomp=unconfined")
 	}
